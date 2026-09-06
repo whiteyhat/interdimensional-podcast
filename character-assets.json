@@ -1,0 +1,11 @@
+{
+  "method": "built-in image_gen",
+  "sources": {
+    "satan-cartoon": "https://v3b.fal.media/files/b/0aa9566d/af-RPcSXlTgsnlc7uJTrE_satan-cartoon.png",
+    "santa-cartoon": "https://v3b.fal.media/files/b/0aa9566d/D7-21mPU8XXQiFJ1Iikqj_santa-cartoon.png"
+  },
+  "prompts": {
+    "santa": "16:9 fixed podcast frame, Rick and Morty-like bold outlines, flat muted colors and simple cel shading. Original enormous Santa, white beard compressed under headphones, red hat and coat, white undershirt. Right facing left, black mic, walnut desk, dark teal basement acoustic panels and amber lamp. No existing character depiction, text or logos.",
+    "satan": "16:9 matching reverse podcast frame in same 2D adult animation look. Original red lean male devil, cream curved horns, black slick hair, pointed goatee, charcoal shirt, headphones, gold watch. Left facing right. Black mic, walnut desk, dark teal acoustic panels, amber lamp. No existing character depiction, text or logos."
+  }
+}
