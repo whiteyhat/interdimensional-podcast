@@ -40,7 +40,7 @@ export const cast: Record<Speaker, Character> = {
     tag: 'Down bad, still posting.',
     image: '/pepe-cartoon.png',
     source:
-      'https://v3b.fal.media/files/b/0aa99e22/bivMOsj1SAZQSkDSnW8AO_lsgrtOSN.png',
+      'https://v3b.fal.media/files/b/0aa99e7e/ViWtBAcKK0DXjM7kBLIvD_eid12yRD.png',
     seed: 78193,
     describe: 'Pepe, the green cartoon frog host with big eyes and wide red lips in the image',
     keep: 'green frog face, large eyes and wide red lips, never a human face or a realistic amphibian',
@@ -53,7 +53,7 @@ export const cast: Record<Speaker, Character> = {
     tag: 'Has never sold.',
     image: '/gigachad-cartoon.png',
     source:
-      'https://v3b.fal.media/files/b/0aa99e3d/ywhKteDIyF5zF_24hGr6G_pKIEc6WI.png',
+      'https://v3b.fal.media/files/b/0aa99e9a/UUct9hv94FEzgs2dz2H26_JZaGMdjK.png',
     seed: 49187,
     describe: 'GigaChad, the heavily bearded male co-host with the enormous square jaw in the image',
     keep: 'enormous square jaw, thick beard and slicked hair, never photorealistic',

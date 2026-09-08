@@ -98,7 +98,7 @@ export function createServices(): Services {
     },
     async render(line) {
       const start = Date.now();
-      const key = JSON.stringify([`${show.slug}-shot-v2`, line.speaker, line.text, shotDuration(line.text)]);
+      const key = JSON.stringify([`${show.slug}-shot-v3`, line.speaker, line.text, shotDuration(line.text)]);
       const result = await job(key, { action: 'shot', line });
       if (!result.url) throw Error('No video returned');
       const response = await fetch(

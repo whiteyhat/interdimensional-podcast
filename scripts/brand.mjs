@@ -11,16 +11,25 @@ const OUT = 'work/brand';
 const MANIFEST = `${OUT}/manifest.json`;
 const ASSETS = 'character-assets.json';
 const CEL =
-  'flat 2D adult-animation cel style, bold clean dark outlines, flat muted colors, simple shading, like a Rick and Morty title card';
+  'flat 2D adult-animation cel style with soft painterly cel-shading gradients, bold but slightly worn dark outlines, like a Rick and Morty title card that has hung on a wall for years';
+// Sampled from the actual studio stills, not a generic brand palette: the acoustic panels'
+// dark teal, the walnut desk, the amber lamp glow (never a saturated poster-orange), and an
+// aged cream close to old paper rather than stark white.
+const PALETTE =
+  'dark teal-olive (#2f3b30), warm walnut brown, muted burnt amber like lamplight (#b8703a), aged parchment cream (#e8dfc8), sage green';
 
-const LOGO_PROMPT = `Podcast logo for "PEPE & CHAD LIVE", drawn in ${CEL}. A round broadcast badge on a dark olive background. Inside the badge, two profiles face each other across a black studio microphone: on the left a green cartoon frog with big round eyes and wide red lips wearing black headphones, on the right a heavily bearded man with an enormous square jaw wearing black headphones. Bold condensed sans-serif wordmark "PEPE & CHAD" arched across the top of the badge in cream, and the word "LIVE" in a small amber on-air box at the bottom. Underneath the badge, small monospace text "$FROGCLENCH" in sage green. Palette: dark olive, amber orange, sage green, cream. Clean, centred, vector-like, high contrast. No other text, no photo, no gradients, no watermark.`;
+const LOGO_PROMPT = `Design for a vintage enamel pin or screen-printed patch for the podcast "PEPE & CHAD LIVE", drawn in ${CEL}. Palette strictly limited to: ${PALETTE} — muted and slightly desaturated throughout, nothing bright, glossy or neon. A round badge with a worn, slightly uneven outline, like it has faded a little. Inside, two profiles face each other across a black studio microphone: on the left a green cartoon frog with big round eyes and wide red lips wearing black headphones, on the right a heavily bearded man with an enormous square jaw wearing black headphones, both rendered with the same soft cel-shading gradients as the rest of the palette, not flat vector color. A condensed hand-lettered-style wordmark "PEPE & CHAD" arched across the top in aged cream, and the word "LIVE" in a small muted-amber box at the bottom, not glowing. Underneath the badge, small monospace text "$FROGCLENCH" in sage green. Subtle fabric or enamel texture and grain, soft matte shading, no gloss, no gradients that look digital, no drop shadow, no watermark. The background behind the badge is transparent or a plain dark teal-olive flat color, not a separate colored square.`;
 
 const signPrompt = (side) =>
-  `Edit this 2D animated podcast frame. Add ONE illuminated wall sign showing EXACTLY the logo in the second image, reproduced faithfully with the same badge, the same frog and bearded man profiles, the same "PEPE & CHAD" wordmark, the same amber "LIVE" box and the same "$FROGCLENCH" text. Mount it flat on the dark teal acoustic panel wall in the upper ${side} of the background, above head height and behind the microphone boom, sized to about one fifth of the frame width, with a soft warm glow. It must not cover any part of the character, the headphones, the microphone or the lamp. Change nothing else: keep the character, pose, expression, clothes, desk, lamp, shelves, panels, lighting, palette, line weight, camera angle and 16:9 framing identical to the first image. No other text, no watermark.`;
+  `Edit this 2D animated podcast frame. Add ONE small framed print or fabric patch pinned to the acoustic panel wall, showing EXACTLY the badge in the second image: the same worn circular badge, the same frog and bearded man profiles facing off across a mic, the same "PEPE & CHAD" wordmark, the same muted "LIVE" box and the same "$FROGCLENCH" text, in the same muted teal, walnut, amber and cream palette as the badge and the rest of this scene. Mount it flat on the dark teal acoustic panel wall in the upper ${side} of the background, above head height and behind the microphone boom, sized to about one eighth of the frame width — small, like a backstage keepsake, not a marquee. It is lit ONLY by the existing room light: the same dim, warm-cool lighting, the same brightness and the same slight haze as the shelf items behind it. It must NOT glow, NOT be brighter than its surroundings, and must cast only a soft, ordinary shadow like a framed print would. It must not cover any part of the character, the headphones, the microphone or the lamp. Change nothing else: keep the character, pose, expression, clothes, desk, lamp, shelves, panels, lighting, palette, line weight, camera angle and 16:9 framing identical to the first image. No other text, no watermark.`;
+
+// A branded mug reads as a real prop in the room, which is why it is used for the co-host
+// instead of a second wall sign — a studio would not hang two of the same badge.
+const mugPrompt = `Edit this 2D animated podcast frame. On the black coffee mug already sitting on the desk, print a small circular badge logo matching EXACTLY the badge in the second image — the same frog and bearded man profiles, the same "PEPE & CHAD" wordmark, the same "LIVE" box — shrunk down and simplified to fit the curve of the mug the way a real printed mug logo would: fewer fine details, same muted teal, walnut, amber and cream palette, following the mug's existing shading and highlight so it looks printed on ceramic, not pasted flat. It is lit by the same room light as the mug already is, no glow, no extra highlight. It must be small, roughly a fifth of the mug's visible height, and must not change the mug's size, shape, position or color. Do not add any sign, print or patch anywhere else in the frame. Change nothing else: keep the character, pose, expression, clothes, desk, lamp, shelves, panels, wall, lighting, palette, line weight, camera angle and 16:9 framing identical to the first image. No other text, no watermark.`;
 
 const ROLES = {
-  host: { key: 'pepe', file: 'pepe-cartoon.png', side: 'right' },
-  guest: { key: 'gigachad', file: 'gigachad-cartoon.png', side: 'left' },
+  host: { key: 'pepe', file: 'pepe-cartoon.png', prompt: (side) => signPrompt(side), side: 'right' },
+  guest: { key: 'gigachad', file: 'gigachad-cartoon.png', prompt: () => mugPrompt },
 };
 
 const { positionals, values: opt } = parseArgs({
@@ -67,11 +76,14 @@ async function stills(key) {
   const assets = JSON.parse(await readFile(ASSETS, 'utf8'));
   data.stills = {};
   for (const [role, spec] of Object.entries(ROLES)) {
-    const parent = assets.sources[spec.file.replace(/\.png$/, '')];
-    if (!parent) throw Error(`No current still for ${role} in ${ASSETS}`);
+    const name = spec.file.replace(/\.png$/, '');
+    // Always brand the unbranded original. Editing an already-branded still compounds
+    // the edits and leaves the previous logo behind next to the new one.
+    const parent = assets.parents[name] ?? assets.sources[name];
+    if (!parent) throw Error(`No original still for ${role} in ${ASSETS}`);
     process.stdout.write(`${role}: submitting `);
     const { images, requestId } = await generate('fal-ai/nano-banana-pro/edit', key, {
-      prompt: signPrompt(spec.side),
+      prompt: spec.prompt(spec.side),
       image_urls: [parent, chosen.url],
       num_images: Number(opt.variants),
       aspect_ratio: '16:9',
@@ -105,7 +117,7 @@ async function pick() {
     const name = spec.file.replace(/\.png$/, '');
     assets.parents[name] = candidate.parent;
     assets.sources[name] = candidate.url;
-    assets.prompts[spec.key] = signPrompt(spec.side);
+    assets.prompts[spec.key] = spec.prompt(spec.side);
     assets.requestIds[spec.key] = candidate.requestId;
   }
   assets.method = 'fal-ai/nano-banana-pro/edit, branding the previous stills listed under parents';

@@ -1,17 +1,17 @@
 {
   "method": "fal-ai/nano-banana-pro/edit, branding the previous stills listed under parents",
-  "generatedAt": "2026-09-08T15:46:19.824Z",
+  "generatedAt": "2026-09-08T16:01:40.316Z",
   "sources": {
-    "pepe-cartoon": "https://v3b.fal.media/files/b/0aa99e22/bivMOsj1SAZQSkDSnW8AO_lsgrtOSN.png",
-    "gigachad-cartoon": "https://v3b.fal.media/files/b/0aa99e3d/ywhKteDIyF5zF_24hGr6G_pKIEc6WI.png"
+    "pepe-cartoon": "https://v3b.fal.media/files/b/0aa99e7e/ViWtBAcKK0DXjM7kBLIvD_eid12yRD.png",
+    "gigachad-cartoon": "https://v3b.fal.media/files/b/0aa99e9a/UUct9hv94FEzgs2dz2H26_JZaGMdjK.png"
   },
   "parents": {
     "pepe-cartoon": "https://v3b.fal.media/files/b/0aa99756/GewkJpA7Ow2kXc2ul_av2_seuEG2JB.png",
     "gigachad-cartoon": "https://v3b.fal.media/files/b/0aa9975a/z4WfXzKN2ADHGOl_Vk60J_ifRTwuae.png"
   },
   "prompts": {
-    "pepe": "Edit this 2D animated podcast frame. Add ONE illuminated wall sign showing EXACTLY the logo in the second image, reproduced faithfully with the same badge, the same frog and bearded man profiles, the same \"PEPE & CHAD\" wordmark, the same amber \"LIVE\" box and the same \"$FROGCLENCH\" text. Mount it flat on the dark teal acoustic panel wall in the upper right of the background, above head height and behind the microphone boom, sized to about one fifth of the frame width, with a soft warm glow. It must not cover any part of the character, the headphones, the microphone or the lamp. Change nothing else: keep the character, pose, expression, clothes, desk, lamp, shelves, panels, lighting, palette, line weight, camera angle and 16:9 framing identical to the first image. No other text, no watermark.",
-    "gigachad": "Edit this 2D animated podcast frame. Add ONE illuminated wall sign showing EXACTLY the logo in the second image, reproduced faithfully with the same badge, the same frog and bearded man profiles, the same \"PEPE & CHAD\" wordmark, the same amber \"LIVE\" box and the same \"$FROGCLENCH\" text. Mount it flat on the dark teal acoustic panel wall in the upper left of the background, above head height and behind the microphone boom, sized to about one fifth of the frame width, with a soft warm glow. It must not cover any part of the character, the headphones, the microphone or the lamp. Change nothing else: keep the character, pose, expression, clothes, desk, lamp, shelves, panels, lighting, palette, line weight, camera angle and 16:9 framing identical to the first image. No other text, no watermark."
+    "pepe": "Edit this 2D animated podcast frame. Add ONE small framed print or fabric patch pinned to the acoustic panel wall, showing EXACTLY the badge in the second image: the same worn circular badge, the same frog and bearded man profiles facing off across a mic, the same \"PEPE & CHAD\" wordmark, the same muted \"LIVE\" box and the same \"$FROGCLENCH\" text, in the same muted teal, walnut, amber and cream palette as the badge and the rest of this scene. Mount it flat on the dark teal acoustic panel wall in the upper right of the background, above head height and behind the microphone boom, sized to about one eighth of the frame width — small, like a backstage keepsake, not a marquee. It is lit ONLY by the existing room light: the same dim, warm-cool lighting, the same brightness and the same slight haze as the shelf items behind it. It must NOT glow, NOT be brighter than its surroundings, and must cast only a soft, ordinary shadow like a framed print would. It must not cover any part of the character, the headphones, the microphone or the lamp. Change nothing else: keep the character, pose, expression, clothes, desk, lamp, shelves, panels, lighting, palette, line weight, camera angle and 16:9 framing identical to the first image. No other text, no watermark.",
+    "gigachad": "Edit this 2D animated podcast frame. On the black coffee mug already sitting on the desk, print a small circular badge logo matching EXACTLY the badge in the second image — the same frog and bearded man profiles, the same \"PEPE & CHAD\" wordmark, the same \"LIVE\" box — shrunk down and simplified to fit the curve of the mug the way a real printed mug logo would: fewer fine details, same muted teal, walnut, amber and cream palette, following the mug's existing shading and highlight so it looks printed on ceramic, not pasted flat. It is lit by the same room light as the mug already is, no glow, no extra highlight. It must be small, roughly a fifth of the mug's visible height, and must not change the mug's size, shape, position or color. Do not add any sign, print or patch anywhere else in the frame. Change nothing else: keep the character, pose, expression, clothes, desk, lamp, shelves, panels, wall, lighting, palette, line weight, camera angle and 16:9 framing identical to the first image. No other text, no watermark."
   },
   "params": {
     "pepe": {
@@ -30,12 +30,12 @@
     }
   },
   "requestIds": {
-    "pepe": "01a081b1-1036-7bf1-8daf-1c7d4a066a92",
-    "gigachad": "01a081b1-aabf-7930-9bf0-def400572706"
+    "pepe": "01a081bf-3d95-7e03-906c-f4ba2607527c",
+    "gigachad": "01a081bf-bd8c-7850-a9eb-bdcbff53e1d0"
   },
   "logo": {
-    "url": "https://v3b.fal.media/files/b/0aa99e1a/UTbZx6JKlxBswirGo68FK_PD3XbYqD.png",
-    "prompt": "Podcast logo for \"PEPE & CHAD LIVE\", drawn in flat 2D adult-animation cel style, bold clean dark outlines, flat muted colors, simple shading, like a Rick and Morty title card. A round broadcast badge on a dark olive background. Inside the badge, two profiles face each other across a black studio microphone: on the left a green cartoon frog with big round eyes and wide red lips wearing black headphones, on the right a heavily bearded man with an enormous square jaw wearing black headphones. Bold condensed sans-serif wordmark \"PEPE & CHAD\" arched across the top of the badge in cream, and the word \"LIVE\" in a small amber on-air box at the bottom. Underneath the badge, small monospace text \"$FROGCLENCH\" in sage green. Palette: dark olive, amber orange, sage green, cream. Clean, centred, vector-like, high contrast. No other text, no photo, no gradients, no watermark.",
-    "requestId": "01a081af-f5ae-7e12-9e5d-9ecd651d1172"
+    "url": "https://v3b.fal.media/files/b/0aa99e57/s7IFZBKHdg9o4KmsOgZjG_bwyLjDCT.png",
+    "prompt": "Design for a vintage enamel pin or screen-printed patch for the podcast \"PEPE & CHAD LIVE\", drawn in flat 2D adult-animation cel style with soft painterly cel-shading gradients, bold but slightly worn dark outlines, like a Rick and Morty title card that has hung on a wall for years. Palette strictly limited to: dark teal-olive (#2f3b30), warm walnut brown, muted burnt amber like lamplight (#b8703a), aged parchment cream (#e8dfc8), sage green — muted and slightly desaturated throughout, nothing bright, glossy or neon. A round badge with a worn, slightly uneven outline, like it has faded a little. Inside, two profiles face each other across a black studio microphone: on the left a green cartoon frog with big round eyes and wide red lips wearing black headphones, on the right a heavily bearded man with an enormous square jaw wearing black headphones, both rendered with the same soft cel-shading gradients as the rest of the palette, not flat vector color. A condensed hand-lettered-style wordmark \"PEPE & CHAD\" arched across the top in aged cream, and the word \"LIVE\" in a small muted-amber box at the bottom, not glowing. Underneath the badge, small monospace text \"$FROGCLENCH\" in sage green. Subtle fabric or enamel texture and grain, soft matte shading, no gloss, no gradients that look digital, no drop shadow, no watermark. The background behind the badge is transparent or a plain dark teal-olive flat color, not a separate colored square.",
+    "requestId": "01a081b9-268c-7443-a648-41fc36074641"
   }
 }
