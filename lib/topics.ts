@@ -471,11 +471,6 @@ export function laneDepth(state: TopicQueueState, source: TopicSource) {
     (t) => t.status === 'queued' && t.source === source,
   ).length;
 }
-export function unusedFeedCount(state: TopicQueueState) {
-  return state.topics.filter(
-    (t) => t.status === 'queued' && FEED_SOURCES.includes(t.source),
-  ).length;
-}
 export function avoidTitles(
   state: TopicQueueState,
   cfg: TopicConfig = topicConfig,
@@ -687,30 +682,6 @@ export function readTopicList(raw: string): unknown[] {
   if (Array.isArray(parsed)) return parsed;
   const list = (parsed as { topics?: unknown })?.topics;
   return Array.isArray(list) ? list : [];
-}
-const PRICES: Record<string, [number, number]> = {
-  'grok-4.6': [2, 6],
-  'grok-4.5': [2, 6],
-  'grok-4.3': [1.25, 2.5],
-};
-export function estimateCost(
-  usage: { input_tokens?: number; output_tokens?: number },
-  model: string,
-  toolCalls: number,
-): CostEstimate {
-  const [input, output] = PRICES[model] ?? [2, 6];
-  const inputTokens = usage.input_tokens ?? 0;
-  const outputTokens = usage.output_tokens ?? 0;
-  return {
-    usd:
-      (inputTokens / 1e6) * input +
-      (outputTokens / 1e6) * output +
-      toolCalls * 0.005,
-    inputTokens,
-    outputTokens,
-    toolCalls,
-    model,
-  };
 }
 
 /** The memecoin and Solana voices the show watches. Override with NEWSDESK_X_HANDLES. */

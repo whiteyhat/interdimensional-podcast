@@ -151,9 +151,6 @@ export function createServices(): Services {
     async research(input) {
       return topics({ action: 'research', ...input });
     },
-    async rank(input) {
-      return topics({ action: 'rank', ...input }, 'chat');
-    },
     release(url) {
       URL.revokeObjectURL(url);
     },

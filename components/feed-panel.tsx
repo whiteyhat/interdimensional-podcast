@@ -13,13 +13,11 @@ function ago(at: number) {
 export function FeedPanel({
   feed,
   topics,
-  ranking,
   onToggleFeed,
   onChat,
 }: {
   feed: FeedState;
   topics: Topic[];
-  ranking: boolean;
   onToggleFeed: (enabled: boolean) => void;
   onChat: (text: string) => void;
 }) {
@@ -73,13 +71,13 @@ export function FeedPanel({
         />
         <button
           className="quiet"
-          disabled={ranking || !chat.trim()}
+          disabled={!chat.trim()}
           onClick={() => {
             onChat(chat);
             setChat('');
           }}
         >
-          {ranking ? 'Ranking…' : 'Rank and queue'}
+          Rank and queue
         </button>
       </div>
     </div>

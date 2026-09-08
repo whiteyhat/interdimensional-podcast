@@ -1,18 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import ts from 'typescript';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-await mkdir('work/tests', { recursive: true });
-for (const name of ['topics', 'show', 'chat']) {
-  const source = await readFile(`lib/${name}.ts`, 'utf8');
-  const js = ts.transpileModule(source, {
-    compilerOptions: {
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.ES2022,
-    },
-  }).outputText.replace(/from '\.\/(\w+)'/g, "from './$1.js'");
-  await writeFile(`work/tests/${name}.js`, js);
-}
+import { readFile } from 'node:fs/promises';
+import { build } from './build.mjs';
+await build(['topics','show','chat']);
 const T = await import('../work/tests/topics.js');
 const { lintVoices, parseLines } = await import('../work/tests/show.js');
 const { parseChatLines } = await import('../work/tests/chat.js');
@@ -209,12 +199,6 @@ test('source labels name the provenance shown on stage', () => {
     'from reuters.com',
   );
   assert.equal(T.sourceLabel({ title: 't', source: 'chat', handle: 'deb' }), 'from live chat: deb');
-});
-
-test('cost adds tool invocations to token spend', () => {
-  const cost = T.estimateCost({ input_tokens: 1e6, output_tokens: 1e6 }, 'grok-4.6', 4);
-  assert.equal(Number(cost.usd.toFixed(2)), 8.02);
-  assert.equal(T.estimateCost({}, 'unknown-model', 0).usd, 0);
 });
 
 test('a live topic is stamped on the first line only', () => {

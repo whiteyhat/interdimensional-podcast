@@ -1,18 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import ts from 'typescript';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-await mkdir('work/tests', { recursive: true });
-for (const name of ['topics', 'gnews']) {
-  const source = await readFile(`lib/${name}.ts`, 'utf8');
-  const js = ts.transpileModule(source, {
-    compilerOptions: {
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.ES2022,
-    },
-  }).outputText.replace(/from '\.\/(\w+)'/g, "from './$1.js'");
-  await writeFile(`work/tests/${name}.js`, js);
-}
+import { readFile } from 'node:fs/promises';
+import { build } from './build.mjs';
+await build(['topics','gnews']);
 const G = await import('../work/tests/gnews.js');
 const tech = await readFile('tests/fixtures/gnews-technology.xml', 'utf8');
 const business = await readFile('tests/fixtures/gnews-business.xml', 'utf8');

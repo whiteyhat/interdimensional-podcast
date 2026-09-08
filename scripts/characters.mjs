@@ -7,6 +7,7 @@
 //   node scripts/characters.mjs --only host --descriptive regenerate one role without character names
 import { readFile, writeFile, mkdir, copyFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
+import { download, fal, falKey, waitFor } from './fal.mjs';
 
 const ENDPOINT = 'fal-ai/nano-banana-pro/edit';
 const OUT = 'work/characters';
@@ -56,46 +57,6 @@ const { values: opt } = parseArgs({
   },
 });
 
-async function falKey() {
-  if (process.env.FAL_KEY) return process.env.FAL_KEY;
-  const vars = await readFile('.dev.vars', 'utf8').catch(() => '');
-  const found = /^\s*FAL_KEY\s*=\s*"?([^"\r\n]+)"?/m.exec(vars);
-  if (!found)
-    throw Error('FAL_KEY is missing. Set it in the environment or .dev.vars.');
-  return found[1].trim();
-}
-
-async function fal(url, key, body) {
-  const response = await fetch(url, {
-    method: body ? 'POST' : 'GET',
-    headers: { Authorization: `Key ${key}`, 'Content-Type': 'application/json' },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
-  const data = await response.json();
-  if (!response.ok)
-    throw Error(
-      `fal returned ${response.status}: ${JSON.stringify(data.detail || data.error || data).slice(0, 400)}`,
-    );
-  return data;
-}
-
-async function waitFor(job, key) {
-  const deadline = Date.now() + 600000;
-  while (Date.now() < deadline) {
-    const state = await fal(job.status_url, key);
-    if (state.status === 'COMPLETED') return fal(job.response_url, key);
-    if (state.status === 'FAILED') throw Error('The image job failed.');
-    process.stdout.write('.');
-    await new Promise((r) => setTimeout(r, 2000));
-  }
-  throw Error('The image job is taking too long.');
-}
-
-async function download(url, path) {
-  const response = await fetch(url);
-  if (!response.ok) throw Error(`Download failed with ${response.status}`);
-  await writeFile(path, Buffer.from(await response.arrayBuffer()));
-}
 
 async function generate(role, key) {
   const spec = ROLES[role];

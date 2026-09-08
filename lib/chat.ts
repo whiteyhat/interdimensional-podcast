@@ -41,31 +41,3 @@ export class ManualCommentSource implements CommentSource {
     if (batch.length) this.deliver?.(batch);
   }
 }
-/** Real chat is chatty; collect deliveries and hand them over in windows. */
-export function batching(
-  source: CommentSource,
-  windowMs: number,
-): CommentSource {
-  let pending: Comment[] = [];
-  let timer: ReturnType<typeof setInterval> | undefined;
-  return {
-    name: source.name,
-    start(deliver) {
-      source.start((batch) => {
-        pending.push(...batch);
-      });
-      timer = setInterval(() => {
-        if (!pending.length) return;
-        const batch = pending;
-        pending = [];
-        deliver(batch);
-      }, windowMs);
-    },
-    stop() {
-      source.stop();
-      if (timer) clearInterval(timer);
-      timer = undefined;
-      pending = [];
-    },
-  };
-}

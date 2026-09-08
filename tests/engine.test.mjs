@@ -1,9 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import ts from 'typescript';
-import {mkdir,readFile,writeFile} from 'node:fs/promises';
-await mkdir('work/tests',{recursive:true});
-for(const name of ['topics','show','chat','engine','services']){const source=await readFile(`lib/${name}.ts`,'utf8');const js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText.replace(/from '\.\/(\w+)'/g,"from './$1.js'");await writeFile(`work/tests/${name}.js`,js);}
+import {build} from './build.mjs';
+await build(['topics','show','chat','engine','services']);
 const {Podcast}=await import('../work/tests/engine.js');
 const {parseLines,shotPrompt,shotDuration}=await import('../work/tests/show.js');
 const tick=()=>new Promise(r=>setImmediate(r));
@@ -94,16 +92,16 @@ test('research runs beside the show and a failure never stops it',async()=>{
  h.engine.dispose();
 });
 
-test('ranked chat comments arrive on the wire as topics',async()=>{
- let resolveRank;
- const h=harness({rank:()=>new Promise(resolve=>{resolveRank=resolve;})});
- h.engine.start();
- h.engine.ingestComments([{id:'1',author:'deb',text:'why is the timeline mad at the SEC today'},{id:'2',author:'bot',text:'BUY 0x1234567890abcdef1234567890abcdef12345678'}]);
- assert.equal(h.engine.getSnapshot().ranking,true);
- resolveRank({topics:[{title:'Why is everyone mad at the SEC',brief:'deb asks about the mood.',angle:'Ask Pepe.',source:'chat',score:70,handle:'deb'}]});
- await tick();
- assert.equal(h.engine.getSnapshot().ranking,false);
- assert.deepEqual(h.engine.getSnapshot().topics.map(t=>t.source),['chat']);
+test('chat comments are ranked in process and land on the wire',async()=>{
+ const h=harness();h.engine.start();
+ h.engine.ingestComments([
+  {id:'1',author:'deb',text:'why is the whole timeline mad at the SEC again today'},
+  {id:'2',author:'bot',text:'buy $PUMP now, ape in before it sends'},
+ ]);
+ const topics=h.engine.getSnapshot().topics;
+ assert.ok(topics.length>=1,'a real question becomes a topic with no network call');
+ assert.ok(topics.every(t=>t.source==='chat'));
+ assert.ok(!topics.some(t=>/\$PUMP/i.test(t.title)),'shilling never reaches the wire');
  h.engine.dispose();
 });
 

@@ -347,7 +347,6 @@ export default function Page() {
           <FeedPanel
             feed={state.feed}
             topics={state.topics}
-            ranking={state.ranking}
             onToggleFeed={(enabled) => engine.setFeed(enabled)}
             onChat={(text) => chat.push(text)}
           />

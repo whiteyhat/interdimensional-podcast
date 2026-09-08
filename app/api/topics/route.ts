@@ -2,14 +2,10 @@ import { env } from 'cloudflare:workers';
 import { clusterItems, feedUrl, feeds, parseRss, toDrafts } from '@/lib/gnews';
 import { deskUser, researchUser } from '@/lib/newsdesk';
 import {
-  estimateCost,
-  prefilterComments,
-  rankComments,
   readTopicList,
   rotate,
   sanitizeDraft,
   topicConfig,
-  type Comment,
   type TopicDraft,
 } from '@/lib/topics';
 type Vars = {
@@ -138,19 +134,6 @@ export async function POST(request: Request) {
       return reply({ topics: fresh, model: 'google-news-rss', ms: Date.now() - started });
     }
 
-    if (body.action === 'rank') {
-      // Ranking is a local heuristic now: no model call, no cost, no latency.
-      if (!Array.isArray(body.comments))
-        return reply({ error: 'Invalid comments' }, 400);
-      const comments = prefilterComments(body.comments as Comment[]);
-      const k = Number(body.k);
-      const topics = rankComments(
-        comments,
-        strings(body.recentTitles, limits.avoid, limits.title),
-        Number.isFinite(k) ? Math.max(1, Math.min(5, k)) : 3,
-      );
-      return reply({ topics, model: 'local', ms: Date.now() - started });
-    }
 
     if (body.action !== 'research') return reply({ error: 'Unknown action' }, 400);
 
@@ -169,9 +152,13 @@ export async function POST(request: Request) {
     const topics = readTopicList(envelope.text ?? '')
       .map((entry) => sanitizeDraft(entry, 'x'))
       .filter((draft): draft is TopicDraft => !!draft);
+    const usage = envelope.usage ?? {};
     const cost = {
-      ...estimateCost(envelope.usage ?? {}, 'grok-cli', 0),
       usd: envelope.totalCostUsd ?? 0,
+      inputTokens: usage.input_tokens ?? 0,
+      outputTokens: usage.output_tokens ?? 0,
+      toolCalls: 0,
+      model: 'grok-cli',
     };
     const ms = Date.now() - started;
     console.log(

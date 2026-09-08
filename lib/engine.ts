@@ -13,6 +13,7 @@ import {
   pickTopic,
   prefilterComments,
   promote,
+  rankComments,
   researchSettled,
   researchStarted,
   resetRuntime,
@@ -20,8 +21,6 @@ import {
   shouldResearch,
   type Comment,
   type FeedState,
-  type RankInput,
-  type RankResult,
   type ResearchInput,
   type ResearchResult,
   type Topic,
@@ -57,7 +56,6 @@ export type Services = {
   release: (url: string) => void;
   research?: (input: ResearchInput) => Promise<ResearchResult>;
   news?: (input: ResearchInput) => Promise<ResearchResult>;
-  rank?: (input: RankInput) => Promise<RankResult>;
 };
 export type Snapshot = {
   phase: 'idle' | 'buffering' | 'playing' | 'paused' | 'waiting' | 'stopped';
@@ -69,7 +67,6 @@ export type Snapshot = {
   topics: Topic[];
   feed: FeedState;
   batches: number;
-  ranking: boolean;
   writing: boolean;
   error: string;
   initialMs: number | null;
@@ -86,7 +83,6 @@ const initial = (): Snapshot => ({
   topics: [],
   feed: createQueue().feed,
   batches: 0,
-  ranking: false,
   writing: false,
   error: '',
   initialMs: null,
@@ -255,39 +251,15 @@ export class Podcast {
     this.queue = dismiss(this.queue, id);
     this.set({ topics: this.queue.topics });
   }
-  clearTopics() {
-    for (const topic of this.queue.topics.filter((t) => t.status === 'queued'))
-      this.queue = dismiss(this.queue, topic.id);
-    this.set({ topics: this.queue.topics });
-  }
+  /** Chat ranking is a pure heuristic, so it runs here rather than over the network. */
   ingestComments(batch: Comment[]) {
-    const rank = this.services.rank;
     const comments = prefilterComments(batch);
-    if (!rank || !comments.length || this.state.ranking) return;
-    this.set({ ranking: true });
-    void rank({
-      comments,
-      recentTitles: avoidTitles(this.queue),
-      onAir: this.onAirTitle(),
-    })
-      .then(
-        (result) => {
-          this.queue = enqueue(this.queue, result.topics, Date.now());
-        },
-        (e) => {
-          this.queue = {
-            ...this.queue,
-            feed: {
-              ...this.queue.feed,
-              error: e instanceof Error ? e.message : 'Ranking failed.',
-            },
-          };
-        },
-      )
-      .finally(() => {
-        this.set({ ranking: false, ...this.queuePatch() });
-        this.pump();
-      });
+    if (!comments.length) return;
+    const picked = rankComments(comments, avoidTitles(this.queue));
+    if (!picked.length) return;
+    this.queue = enqueue(this.queue, picked, Date.now());
+    this.set(this.queuePatch());
+    this.pump();
   }
   private queuePatch(): Partial<Snapshot> {
     return {
