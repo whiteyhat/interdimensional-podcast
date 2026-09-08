@@ -1,8 +1,9 @@
 import type { Metadata } from 'next';
+import { cast, show } from '@/lib/show';
 import './globals.css';
 export const metadata: Metadata = {
-  title: 'Naughty & Nice | Santa and Satan',
-  description: 'Everyone has a story. An audience-steered AI podcast.',
+  title: `${show.name} | ${cast.host.name} and ${cast.guest.name}`,
+  description: show.description,
 };
 export default function RootLayout({
   children,

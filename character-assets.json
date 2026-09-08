@@ -1,11 +1,36 @@
 {
-  "method": "built-in image_gen",
+  "method": "fal-ai/nano-banana-pro/edit, editing the previous stills listed under parents",
+  "generatedAt": "2026-09-08T10:56:31.224Z",
   "sources": {
-    "satan-cartoon": "https://v3b.fal.media/files/b/0aa9566d/af-RPcSXlTgsnlc7uJTrE_satan-cartoon.png",
-    "santa-cartoon": "https://v3b.fal.media/files/b/0aa9566d/D7-21mPU8XXQiFJ1Iikqj_santa-cartoon.png"
+    "pepe-cartoon": "https://v3b.fal.media/files/b/0aa99756/GewkJpA7Ow2kXc2ul_av2_seuEG2JB.png",
+    "gigachad-cartoon": "https://v3b.fal.media/files/b/0aa9975a/z4WfXzKN2ADHGOl_Vk60J_ifRTwuae.png"
+  },
+  "parents": {
+    "pepe-cartoon": "https://v3b.fal.media/files/b/0aa9566d/af-RPcSXlTgsnlc7uJTrE_satan-cartoon.png",
+    "gigachad-cartoon": "https://v3b.fal.media/files/b/0aa9566d/D7-21mPU8XXQiFJ1Iikqj_santa-cartoon.png"
   },
   "prompts": {
-    "santa": "16:9 fixed podcast frame, Rick and Morty-like bold outlines, flat muted colors and simple cel shading. Original enormous Santa, white beard compressed under headphones, red hat and coat, white undershirt. Right facing left, black mic, walnut desk, dark teal basement acoustic panels and amber lamp. No existing character depiction, text or logos.",
-    "satan": "16:9 matching reverse podcast frame in same 2D adult animation look. Original red lean male devil, cream curved horns, black slick hair, pointed goatee, charcoal shirt, headphones, gold watch. Left facing right. Black mic, walnut desk, dark teal acoustic panels, amber lamp. No existing character depiction, text or logos."
+    "pepe": "Edit this 2D animated podcast frame. Replace the red devil character with Pepe the Frog, an adult male cartoon frog drawn in exactly the same flat 2D adult-animation cel style as the rest of the image: bold clean dark outlines, flat muted colors, simple cel shading, not photorealistic and not grayscale. Pepe has smooth green skin, a wide flat head, large round white eyes with small black pupils under heavy half-lowered lids, no nose, a small chin, and thick wide red lips, mouth closed, in a relaxed slightly amused expression. No horns, no goatee, no pointed ears, no red skin. Four-fingered green hands. Keep the identical pose and framing: he sits on the left side of the frame behind the walnut desk, body angled to the right, looking toward the microphone on the right, hands resting on the desk. He wears the same black over-ear headphones, a plain blue crew-neck t-shirt, and the same gold wristwatch. Keep the potted plant, vintage radio and shelf of records exactly where they are. Change nothing else: keep the identical dark basement podcast studio, dark teal slatted acoustic panels, amber table lamp, shelves, black boom arm and microphone, walnut desk, lighting, palette, line weight, camera angle and 16:9 framing. Full color. No text, no captions, no logos, no watermark, no signature.",
+    "gigachad": "Edit this 2D animated podcast frame. Replace Santa Claus with GigaChad, an adult man with a natural warm skin tone drawn in exactly the same flat 2D adult-animation cel style as the rest of the image: bold clean dark outlines, flat muted colors, simple cel shading, not photorealistic and not grayscale. GigaChad has an absurdly oversized square chiseled jawline, sharp cheekbones, a heavy brow over narrow calm eyes, a thick neatly trimmed dark beard, dark slicked-back hair, a thick neck, broad shoulders and hugely muscular arms and chest. Calm, faintly smug expression, mouth closed. Remove the Santa hat, red coat, white beard and belly entirely. Keep the identical pose and framing: he sits on the right side of the frame behind the walnut desk, body angled to the left, looking toward the microphone on the left, one forearm resting on the desk, wearing the same black over-ear headphones and a fitted plain black t-shirt. Replace the wrapped gift box on the top shelf with a small potted plant. Keep the black mug on the desk. Change nothing else: keep the identical dark basement podcast studio, dark teal slatted acoustic panels, amber table lamp, shelves, black boom arm and microphone, walnut desk, lighting, palette, line weight, camera angle and 16:9 framing. Full color. No text, no captions, no logos, no watermark, no signature."
+  },
+  "params": {
+    "pepe": {
+      "aspect_ratio": "16:9",
+      "resolution": "1K",
+      "output_format": "png",
+      "seed": 4242,
+      "descriptive": false
+    },
+    "gigachad": {
+      "aspect_ratio": "16:9",
+      "resolution": "1K",
+      "output_format": "png",
+      "seed": 4242,
+      "descriptive": false
+    }
+  },
+  "requestIds": {
+    "pepe": "01a080a7-ac83-7923-88d5-5e23ffd903b4",
+    "gigachad": "01a080a8-3436-7b53-a954-7529b8134d7b"
   }
 }

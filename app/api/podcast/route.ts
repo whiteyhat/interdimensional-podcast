@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import {
   cast,
+  lintVoices,
   parseLines,
   shotPrompt,
   shotDuration,
@@ -8,6 +9,12 @@ import {
   type Line,
   type Speaker,
 } from '@/lib/show';
+import {
+  sanitizeBrief,
+  sourceLabel,
+  tagOf,
+  type TopicBrief,
+} from '@/lib/topics';
 const encoder = new TextEncoder();
 function key() {
   return (env as unknown as { FAL_KEY?: string }).FAL_KEY;
@@ -77,6 +84,12 @@ async function provider(url: string, secret: string, body?: unknown) {
     );
   return data;
 }
+function writerRequest(cue?: string, topic?: TopicBrief) {
+  if (cue) return `Audience request: ${cue}`;
+  if (topic)
+    return `LIVE TOPIC: ${topic.title}\nWHAT'S HAPPENING: ${topic.brief}\nANGLE: ${topic.angle}\nSOURCE: ${sourceLabel(topic)}`;
+  return 'Audience request: None. Keep riffing on the current subject with a fresh concrete angle.';
+}
 export async function GET() {
   return reply({ configured: !!key() });
 }
@@ -95,6 +108,7 @@ export async function POST(request: Request) {
       recent?: Line[];
       start?: number;
       cue?: string;
+      topic?: unknown;
     };
     if (body.action === 'poll') {
       const job = await unpack(body.token, secret);
@@ -104,7 +118,14 @@ export async function POST(request: Request) {
       if (job.action === 'write') {
         try {
           if (typeof result.output !== 'string') throw Error('Missing dialogue');
-          return reply({ status: 'COMPLETED', lines: parseLines(result.output, job.start, job.cue) });
+          const lines = parseLines(result.output, job.start, job.cue, job.topic);
+          const slips = lintVoices(lines);
+          if (slips.length) {
+            console.warn('[writer] voice lint', slips);
+            if ((env as unknown as { WRITER_STRICT_VOICE?: string }).WRITER_STRICT_VOICE === '1')
+              throw Error('Out-of-character dialogue');
+          }
+          return reply({ status: 'COMPLETED', lines });
         } catch {
           return reply({ code: 'INVALID_DIALOGUE', error: 'The writer returned an unusable exchange. Please retry the dialogue.' }, 422);
         }
@@ -118,6 +139,7 @@ export async function POST(request: Request) {
       return reply({ status: 'COMPLETED', url });
     }
     let endpoint: string, input: Record<string, unknown>;
+    let topic: TopicBrief | undefined;
     if (body.action === 'shot') {
       if (!body.line || !['host', 'guest'].includes(body.line.speaker))
         return reply({ error: 'Invalid speaker' }, 400);
@@ -128,7 +150,7 @@ export async function POST(request: Request) {
         duration: shotDuration(body.line.text),
         resolution: '480P',
         prompt_expansion_mode: 'disabled',
-        seed: speaker === 'host' ? 78193 : 49187,
+        seed: cast[speaker].seed,
       };
       endpoint = 'minimax/h3-max-turbo/image-to-video';
     } else if (body.action === 'write') {
@@ -140,6 +162,9 @@ export async function POST(request: Request) {
         (body.cue && body.cue.length > 240)
       )
         return reply({ error: 'Invalid writer context' }, 400);
+      if (body.topic !== undefined && !sanitizeBrief(body.topic))
+        return reply({ error: 'Invalid topic' }, 400);
+      topic = body.topic === undefined ? undefined : sanitizeBrief(body.topic)!;
       const recent = body.recent
         .map((l) => {
           if (
@@ -154,9 +179,9 @@ export async function POST(request: Request) {
       input = {
         model: 'google/gemini-2.5-flash',
         system_prompt: writerSystem,
-        prompt: `COMMITTED TRANSCRIPT (including buffered footage):\n${recent || 'The conversation is just beginning.'}\nFirst speaker: ${body.start! % 2 === 0 ? 'SATAN' : 'SANTA'}.\nAudience request: ${body.cue || 'None. Escalate the existing absurd conversation with a fresh concrete angle.'}\nWrite the next four turns. If there is an audience request, the first turn must connect the prior detail to its subject, and the second must already be about that subject. Keep the delivery casual and the connection understandable.`,
+        prompt: `COMMITTED TRANSCRIPT (including buffered footage):\n${recent || 'The conversation is just beginning.'}\nFirst speaker: ${cast[body.start! % 2 === 0 ? 'host' : 'guest'].name.toUpperCase()}.\n${writerRequest(body.cue, topic)}\nWrite the next four turns. If there is an audience request or live topic, the first turn must connect the prior detail to its subject, and the second must already be about that subject. For a live topic, one of the first two turns states plainly what happened using only WHAT'S HAPPENING, then the hosts react in their own kinds of lines; use ANGLE as the comedic direction, not as a line to read. Keep the delivery casual and the connection understandable.`,
         max_tokens: 700,
-        temperature: 0.95,
+        temperature: 0.9,
       };
       endpoint = 'openrouter/router';
     } else return reply({ error: 'Unknown action' }, 400);
@@ -171,6 +196,7 @@ export async function POST(request: Request) {
           action: body.action,
           start: body.start,
           cue: body.cue,
+          topic: topic && tagOf(topic),
           status_url: job.status_url,
           response_url: job.response_url,
           time: Date.now(),

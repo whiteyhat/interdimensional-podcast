@@ -18,9 +18,14 @@ import {
 import { Podcast } from '@/lib/engine';
 import { createServices } from '@/lib/services';
 import { Player } from '@/components/player';
-import { cast, shotDuration } from '@/lib/show';
+import { Ticker } from '@/components/ticker';
+import { Wire } from '@/components/wire';
+import { FeedPanel } from '@/components/feed-panel';
+import { ManualCommentSource } from '@/lib/chat';
+import { cast, show, shotDuration } from '@/lib/show';
 export default function Page() {
   const [engine] = useState(() => new Podcast(createServices()));
+  const [chat] = useState(() => new ManualCommentSource());
   const state = useSyncExternalStore(
     engine.subscribe,
     engine.getSnapshot,
@@ -42,8 +47,20 @@ export default function Page() {
         setConfigured((data as { configured: boolean }).configured),
       )
       .catch(() => setUiError('Cannot reach the local server.'));
-    return () => engine.dispose();
-  }, [engine]);
+    fetch('/api/topics')
+      .then((r) => r.json())
+      .then((data) =>
+        engine.setFeed(
+          !!(data as { configured?: { xai?: boolean } }).configured?.xai,
+        ),
+      )
+      .catch(() => {});
+    chat.start((batch) => engine.ingestComments(batch));
+    return () => {
+      chat.stop();
+      engine.dispose();
+    };
+  }, [engine, chat]);
   useEffect(() => {
     if (!running) return;
     const warn = (e: BeforeUnloadEvent) => e.preventDefault();
@@ -92,6 +109,14 @@ export default function Page() {
                   status: x.status,
                 })),
                 cues: s.cues,
+                topics: s.topics.map((t) => ({
+                  id: t.id,
+                  title: t.title,
+                  source: t.source,
+                  score: t.score,
+                  status: t.status,
+                })),
+                feed: { status: s.feed.status, costUsd: s.feed.costUsd },
                 stalls: s.stalls,
               };
             },
@@ -116,6 +141,7 @@ export default function Page() {
           {
             shots: state.history.map(({ url: _url, ...clip }) => clip),
             cues: state.cues,
+            topics: state.topics,
           },
           null,
           2,
@@ -126,7 +152,7 @@ export default function Page() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'naughty-and-nice-episode.json';
+    a.download = `${show.slug}-episode.json`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -135,16 +161,20 @@ export default function Page() {
       <header>
         <Link className="brand" href="/">
           <Mic />
-          NAUGHTY & NICE<span className="edition">001</span>
+          {show.name.toUpperCase()}
+          <span className="edition">{show.edition}</span>
         </Link>
-        <span className="strap">SAME LETTERS. DIFFERENT PUBLICISTS.</span>
+        <span className="strap">{show.strap}</span>
         <button className="quiet details-toggle" aria-expanded={showDetails} aria-controls="studio-details" onClick={() => setShowDetails(!showDetails)}>
           {showDetails ? 'Hide details' : 'Studio details'}
         </button>
         <span className="credit">Powered by fal</span>
       </header>
       <div className="topline">
-        <span className="eyebrow">AN INFINITE PODCAST / SATAN + SANTA</span>
+        <span className="eyebrow">
+          {show.kicker} / {cast.host.name.toUpperCase()} +{' '}
+          {cast.guest.name.toUpperCase()}
+        </span>
         <span className="pill">
           <i />
           {state.phase === 'playing'
@@ -171,7 +201,7 @@ export default function Page() {
           <div className="stage" ref={stage}>
             <img
               src={cast.host.image}
-              alt="Satan at his podcast microphone"
+              alt={`${cast.host.name} at his podcast microphone`}
             />
             <Player
               state={state}
@@ -183,11 +213,11 @@ export default function Page() {
               <div className="opening">
                 <Headphones size={30} />
                 <p className="eyebrow">OPEN MIC / NO FINAL EPISODE</p>
-                <h1>Who’s keeping score?</h1>
+                <h1>{show.headline}</h1>
                 <p>
                   {state.phase === 'buffering'
                     ? `${ready.length} of 3 opening shots ready. Loading complete videos before we roll.`
-                    : 'Santa and Satan have a few things to get off their chests.'}
+                    : `${cast.host.name} and ${cast.guest.name} react to the news as it breaks. None of it is advice.`}
                 </p>
                 <button
                   className="primary"
@@ -225,6 +255,7 @@ export default function Page() {
                 </button>
               </div>
             )}
+            {state.current && <Ticker topics={state.topics} cues={state.cues} />}
             {state.phase === 'waiting' && (
               <div className="loading">
                 The next speaking turn is still rendering. Holding the last
@@ -315,6 +346,13 @@ export default function Page() {
               Buffer underruns <b>{state.stalls}</b>
             </span>
           </div>
+          <FeedPanel
+            feed={state.feed}
+            topics={state.topics}
+            ranking={state.ranking}
+            onToggleFeed={(enabled) => engine.setFeed(enabled)}
+            onChat={(text) => chat.push(text)}
+          />
           {state.history.length > 0 && (
             <div className="download-links">
               <button className="quiet" onClick={exportEpisode}>
@@ -353,25 +391,20 @@ export default function Page() {
               value={text}
               onChange={(e) => setText(e.target.value)}
               maxLength={240}
-              placeholder="Can the elves form a union?…"
+              placeholder="Who actually reads the whitepaper?…"
               disabled={!running}
             />
             <button className="primary" disabled={!running || !text.trim()}>
               Send to the studio <ArrowUpRight size={16} />
             </button>
           </form>
-          <div className="suggestions">
-            {[
-              'Can the elves form a union?',
-              'Who sells the naughty-list data?',
-              'Ask about their worst roommate',
-            ].map((x) => (
-              <button key={x} disabled={!running} onClick={() => send(x)}>
-                {x}
-                <ArrowUpRight size={13} />
-              </button>
-            ))}
-          </div>
+          <Wire
+            topics={state.topics}
+            feed={state.feed}
+            running={running}
+            onPromote={(id) => engine.promoteTopic(id)}
+            onDismiss={(id) => engine.dismissTopic(id)}
+          />
           <output className="statusline">
             {state.writing
               ? 'Writing the next exchange…'
@@ -383,8 +416,12 @@ export default function Page() {
           </output>
           <div className="producer-note">
             <span className="eyebrow">THE ROOM</span>
-            <p>SATAN / Reads the fine print.</p>
-            <p>SANTA / Knows where you live.</p>
+            <p>
+              {cast.host.name.toUpperCase()} / {cast.host.tag}
+            </p>
+            <p>
+              {cast.guest.name.toUpperCase()} / {cast.guest.tag}
+            </p>
             <p>
               Start fills three shots. Then we maintain up to four ahead. Pause
               stops new submissions; Stop ends the run. Generated shots use fal
@@ -409,7 +446,10 @@ export default function Page() {
         </aside>
       </div>
       <footer>
-        <span>Original characters. AI-generated comedy. Powered by fal.</span>
+        <span>
+          Meme characters used as parody. AI-generated satire, not financial
+          advice. Powered by fal.
+        </span>
         <span>MiniMax H3 Max Turbo / Image to video</span>
       </footer>
     </main>

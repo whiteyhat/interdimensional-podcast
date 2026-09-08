@@ -43,7 +43,8 @@ work/
 
 # Share only the current cast, not earlier local experiments.
 /public/*
-!/public/santa-cartoon.png
-!/public/satan-cartoon.png
+!/public/pepe-cartoon.png
+!/public/gigachad-cartoon.png
 !/public/favicon.svg
 !.dev.vars.example
+.playwright-mcp/

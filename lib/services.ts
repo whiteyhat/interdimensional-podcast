@@ -1,19 +1,28 @@
 import type { Services, Clip } from './engine';
-import { shotDuration, type Line } from './show';
+import { show, shotDuration, type Line } from './show';
+import {
+  sanitizeDraft,
+  type CostEstimate,
+  type TopicDraft,
+  type TopicSource,
+} from './topics';
 type Result = {
   token?: string;
   status?: string;
   url?: string;
   lines?: Line[];
+  topics?: unknown[];
+  cost?: CostEstimate;
   error?: string;
   code?: string;
 };
 class DialogueError extends Error {}
-async function api(body: unknown) {
-  const response = await fetch('/api/podcast', {
+async function api(body: unknown, path = '/api/podcast', signal?: AbortSignal) {
+  const response = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
   });
   const data = (await response.json()) as Result;
   if (!response.ok) {
@@ -39,6 +48,13 @@ async function poll(token: string) {
     'The job is taking too long. Retry will poll the existing request.',
   );
 }
+async function topics(body: unknown, forceSource?: TopicSource) {
+  const data = await api(body, '/api/topics', AbortSignal.timeout(100000));
+  const drafts = (data.topics ?? [])
+    .map((raw) => sanitizeDraft(raw, forceSource))
+    .filter((draft): draft is TopicDraft => !!draft);
+  return { topics: drafts, cost: data.cost };
+}
 export function createServices(): Services {
   const jobs = new Map<string, string>();
   async function job(key: string, body: unknown) {
@@ -52,11 +68,23 @@ export function createServices(): Services {
     return poll(token);
   }
   return {
-    async write(recent, start, cue) {
-      const key = JSON.stringify(['naughty-nice-write-clean-v2', recent, start, cue]);
+    async write(recent, start, cue, topic) {
+      const key = JSON.stringify([
+        `${show.slug}-write-v1`,
+        recent,
+        start,
+        cue,
+        topic,
+      ]);
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const result = await job(key, { action: 'write', recent, start, cue });
+          const result = await job(key, {
+            action: 'write',
+            recent,
+            start,
+            cue,
+            topic,
+          });
           if (!result.lines) throw new DialogueError('No dialogue returned');
           return result.lines;
         } catch (e) {
@@ -70,7 +98,7 @@ export function createServices(): Services {
     },
     async render(line) {
       const start = Date.now();
-      const key = JSON.stringify(['naughty-nice-shot-v1', line.speaker, line.text, shotDuration(line.text)]);
+      const key = JSON.stringify([`${show.slug}-shot-v1`, line.speaker, line.text, shotDuration(line.text)]);
       const result = await job(key, { action: 'shot', line });
       if (!result.url) throw Error('No video returned');
       const response = await fetch(
@@ -116,6 +144,12 @@ export function createServices(): Services {
         URL.revokeObjectURL(url);
         throw e;
       }
+    },
+    async research(input) {
+      return topics({ action: 'research', ...input });
+    },
+    async rank(input) {
+      return topics({ action: 'rank', ...input }, 'chat');
     },
     release(url) {
       URL.revokeObjectURL(url);
