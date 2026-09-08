@@ -15,7 +15,7 @@ Built with [fal](https://fal.ai): MiniMax H3 Max Turbo generates each speaking s
 - Audience prompts steer the next unwritten exchange without cutting off a speaker.
 - Pause, resume, fullscreen, captions, and an optional studio details panel.
 
-![Audience controls and generated dialogue](docs/screenshots/audience.png)
+![The wire, the studio panel and the chat simulator](docs/screenshots/audience.png)
 
 ## Run locally
 
