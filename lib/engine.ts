@@ -101,6 +101,7 @@ export class Podcast {
   private active = 0;
   private ended = false;
   private writingEpoch = 0;
+  private writeFailures = 0;
   // The wire outlives a single run, so a restart keeps the topics already gathered.
   private queue: TopicQueueState = createQueue();
   constructor(private services: Services) {}
@@ -124,6 +125,7 @@ export class Podcast {
     if (this.running()) return;
     this.dispose();
     this.state = initial();
+    this.writeFailures = 0;
     this.queue = resetRuntime(this.queue);
     this.draft = opening.map((l) => ({ ...l }));
     this.started = Date.now();
@@ -215,6 +217,7 @@ export class Podcast {
     this.pump();
   }
   retry() {
+    this.writeFailures = 0;
     this.set({ error: '' });
     for (const slot of this.state.slots.filter(s=>s.status==='failed').slice(0,Math.max(0,2-this.active)))
       if (slot.status === 'failed') {
@@ -452,6 +455,7 @@ export class Podcast {
       )
         throw Error('Writer returned out-of-order dialogue');
       this.draft = lines;
+      this.writeFailures = 0;
       if (topic) this.queue = markTopic(this.queue, topic.id, 'buffered', next);
       this.queue = batchWritten(this.queue, topic);
       this.set({
@@ -463,8 +467,15 @@ export class Podcast {
     } catch (e) {
       if (run === this.run) {
         if (topic) this.queue = markTopic(this.queue, topic.id, 'queued');
+        // A rejected exchange is common enough that the show writes another one
+        // instead of stopping. Only a run of failures is worth interrupting for.
+        const giveUp = ++this.writeFailures >= 3;
         this.set({
-          error: e instanceof Error ? e.message : 'The writer failed.',
+          error: giveUp
+            ? e instanceof Error
+              ? e.message
+              : 'The writer failed.'
+            : '',
           cues: this.state.cues.map((c) =>
             c.id === cue?.id ? { ...c, status: 'queued' } : c,
           ),

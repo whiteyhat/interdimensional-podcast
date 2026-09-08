@@ -106,3 +106,36 @@ test('ranked chat comments arrive on the wire as topics',async()=>{
  assert.deepEqual(h.engine.getSnapshot().topics.map(t=>t.source),['chat']);
  h.engine.dispose();
 });
+
+test('a writer hiccup recovers on its own; a persistent one still surfaces',async()=>{
+ const h=harness();h.engine.start();
+ await h.finish(0);await h.finish(1);await h.finish(2);await h.finish(3);
+ const first=h.writes.length-1;
+ h.writes[first].resolve(Promise.reject(Error('Writer returned a missing or overlong spoken line')));
+ await tick();await tick();
+ assert.equal(h.engine.getSnapshot().error,'','one bad exchange does not stop the show');
+ assert.equal(h.writes.length,first+2,'the engine asks for a new exchange by itself');
+ const second=h.writes.length-1;
+ await h.reply(second,h.writes[second].start);
+ assert.ok(h.engine.getSnapshot().slots.length>0,'dialogue resumed');
+ h.engine.dispose();
+});
+
+test('the show gives up and asks for help after repeated writer failures',async()=>{
+ const h=harness();h.engine.start();
+ await h.finish(0);await h.finish(1);await h.finish(2);await h.finish(3);
+ for(let attempt=0;attempt<3;attempt++){
+  const index=h.writes.length-1;
+  h.writes[index].resolve(Promise.reject(Error('The writer failed.')));
+  await tick();await tick();
+ }
+ assert.notEqual(h.engine.getSnapshot().error,'','a persistent failure is surfaced');
+ const stalled=h.writes.length;
+ await tick();
+ assert.equal(h.writes.length,stalled,'and writing stops until retry');
+ h.engine.retry();
+ await tick();
+ assert.equal(h.engine.getSnapshot().error,'');
+ assert.ok(h.writes.length>stalled,'retry resumes writing');
+ h.engine.dispose();
+});

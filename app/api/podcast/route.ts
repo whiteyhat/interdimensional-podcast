@@ -126,7 +126,12 @@ export async function POST(request: Request) {
               throw Error('Out-of-character dialogue');
           }
           return reply({ status: 'COMPLETED', lines });
-        } catch {
+        } catch (e) {
+          console.warn(
+            '[writer] rejected exchange:',
+            e instanceof Error ? e.message : e,
+            JSON.stringify(String(result.output ?? '').slice(0, 400)),
+          );
           return reply({ code: 'INVALID_DIALOGUE', error: 'The writer returned an unusable exchange. Please retry the dialogue.' }, 422);
         }
       }
