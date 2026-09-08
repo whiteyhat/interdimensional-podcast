@@ -191,7 +191,16 @@ test('model output is read through code fences and stray prose', () => {
 });
 
 test('source labels name the provenance shown on stage', () => {
+  assert.equal(
+    T.sourceLabel({ title: 't', source: 'x', who: 'Ansem', handle: '@blknoiz06' }),
+    'via Ansem (@blknoiz06) on X',
+  );
   assert.equal(T.sourceLabel({ title: 't', source: 'x', handle: '@vitalik' }), 'via @vitalik on X');
+  assert.equal(
+    T.sourceLabel({ title: 't', source: 'web', handle: 'The Verge', url: 'https://news.google.com/x' }),
+    'from The Verge',
+    'the publisher is credited, never the aggregator',
+  );
   assert.equal(T.sourceLabel({ title: 't', source: 'x' }), 'trending on X');
   assert.equal(
     T.sourceLabel({ title: 't', source: 'web', url: 'https://www.reuters.com/a' }),

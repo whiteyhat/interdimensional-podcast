@@ -52,11 +52,11 @@ export function Wire({
                 <span className="wire-title">{topic.title}</span>
                 <span className="wire-meta">
                   {topic.pinned ? 'Up next' : sourceLabel(topic)}
+                  <ArrowUpRight className="wire-go" size={13} />
                 </span>
                 <span className="wire-score" aria-hidden="true">
                   <i style={{ width: `${topic.score}%` }} />
                 </span>
-                <ArrowUpRight className="wire-go" size={13} />
               </button>
               <button
                 className="wire-drop"

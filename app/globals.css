@@ -668,14 +668,18 @@ html {
   flex: 1;
   min-width: 0;
   display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 4px 9px;
-  align-items: center;
+  grid-template-columns: auto 1fr;
+  grid-template-areas:
+    'badge title'
+    'meta  meta'
+    'score score';
+  gap: 6px 9px;
+  align-items: start;
   text-align: left;
   border: 1px solid #37442e;
   border-radius: 4px;
   background: #1a2117;
-  padding: 9px 11px;
+  padding: 10px 11px;
   color: #cad9b6;
   transition:
     border-color 140ms cubic-bezier(0.2, 0, 0, 1),
@@ -697,21 +701,26 @@ html {
   background: #24201a;
 }
 .wire-title {
+  grid-area: title;
   font-size: 12.5px;
   line-height: 1.35;
   color: #e2ead6;
 }
 .wire-meta {
-  grid-column: 2;
+  grid-area: meta;
+  display: flex;
+  align-items: center;
+  gap: 5px;
   font-size: 10.5px;
   color: #8a9a78;
 }
 .wire-go {
-  grid-row: 1 / span 2;
+  flex: none;
   color: #90a971;
+  margin-left: auto;
 }
 .wire-score {
-  grid-column: 2;
+  grid-area: score;
   height: 2px;
   background: #2b3524;
   border-radius: 2px;
@@ -745,6 +754,7 @@ html {
   color: #8a9a78;
 }
 .badge {
+  grid-area: badge;
   flex: none;
   align-self: start;
   padding: 3px 6px;
