@@ -1,4 +1,6 @@
 FAL_KEY=your_fal_key_here
-XAI_API_KEY=your_xai_key_here
-XAI_MODEL=grok-4.6
-XAI_RANK_MODEL=grok-4.3
+# Optional: the crypto desk runs through your local Grok CLI login (grok login).
+NEWSDESK_URL=http://127.0.0.1:8791
+NEWSDESK_TOKEN=local
+# Comma-separated X handles to watch; defaults to the built-in memecoin/Solana roster.
+NEWSDESK_X_HANDLES=

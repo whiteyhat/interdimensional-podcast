@@ -3,11 +3,11 @@ import { ArrowUpRight, X } from 'lucide-react';
 import type { FeedState, Topic } from '@/lib/topics';
 import { orderTopics, sourceLabel } from '@/lib/topics';
 const EMPTY: Record<FeedState['status'], string> = {
-  off: 'Add XAI_API_KEY to .dev.vars to pull live topics from X.',
+  off: 'The feed is paused. Resume it to pull live topics.',
   idle: 'The news desk is standing by.',
   searching: 'Reading X and the news…',
   live: 'Nothing new on the wire yet.',
-  error: 'The news desk is unreachable. The show keeps going.',
+  error: 'The crypto desk is down. The show keeps going on news and your prompts.',
 };
 export function Wire({
   topics,

@@ -7,6 +7,7 @@ import {
   dismiss,
   enqueue,
   expire,
+  laneDepth,
   markOnAir,
   markTopic,
   pickTopic,
@@ -55,6 +56,7 @@ export type Services = {
   render: (line: Line) => Promise<Clip>;
   release: (url: string) => void;
   research?: (input: ResearchInput) => Promise<ResearchResult>;
+  news?: (input: ResearchInput) => Promise<ResearchResult>;
   rank?: (input: RankInput) => Promise<RankResult>;
 };
 export type Snapshot = {
@@ -102,6 +104,8 @@ export class Podcast {
   private ended = false;
   private writingEpoch = 0;
   private writeFailures = 0;
+  private newsAt = 0;
+  private newsInflight = false;
   // The wire outlives a single run, so a restart keeps the topics already gathered.
   private queue: TopicQueueState = createQueue();
   constructor(private services: Services) {}
@@ -298,6 +302,27 @@ export class Podcast {
       this.state.cues.find((c) => c.status === 'on-air')?.text
     );
   }
+  // The free lane. Cheap and silent: it never touches state.error or the paid lane's cost.
+  private pumpNews(run: number) {
+    const news = this.services.news;
+    if (!news || this.newsInflight) return;
+    const now = Date.now();
+    if (laneDepth(this.queue, 'web') >= 2 || now - this.newsAt < 5 * 60000) return;
+    this.newsInflight = true;
+    this.newsAt = now;
+    void news({ avoid: avoidTitles(this.queue) })
+      .then(
+        (result) => {
+          this.queue = enqueue(this.queue, result.topics, Date.now());
+        },
+        () => {}, // a quiet lane failing is not worth telling the operator about
+      )
+      .finally(() => {
+        this.newsInflight = false;
+        this.set(this.queuePatch());
+        if (run === this.run) this.pump();
+      });
+  }
   // Research runs beside the show: it never blocks a write and never sets state.error.
   private pumpFeed(run: number) {
     const research = this.services.research;
@@ -339,6 +364,7 @@ export class Podcast {
     if (!this.running() || this.state.phase === 'paused') return;
     const run = this.run;
     this.pumpFeed(run);
+    this.pumpNews(run);
     while (
       this.active < 2 &&
       this.state.slots.length < 4 &&

@@ -17,6 +17,7 @@ export type TopicDraft = {
   score: number;
   url?: string;
   handle?: string;
+  who?: string;
   category?: TopicCategory;
   commentId?: string;
 };
@@ -30,10 +31,10 @@ export type Topic = TopicDraft & {
 /** What the dialogue writer receives. */
 export type TopicBrief = Pick<
   TopicDraft,
-  'title' | 'brief' | 'angle' | 'source' | 'handle' | 'url'
+  'title' | 'brief' | 'angle' | 'source' | 'handle' | 'url' | 'who'
 >;
 /** Provenance stamped on the first line of a batch; small enough for the signed job token. */
-export type TopicTag = Pick<TopicDraft, 'title' | 'source' | 'handle' | 'url'>;
+export type TopicTag = Pick<TopicDraft, 'title' | 'source' | 'handle' | 'url' | 'who'>;
 export type Comment = {
   id: string;
   author: string;
@@ -65,6 +66,7 @@ export type CostEstimate = {
 export type TopicQueueState = {
   topics: Topic[];
   batches: number;
+  feedTurns: number;
   lastTopicBatch: number;
   lastChatBatch: number;
   feed: FeedState;
@@ -83,6 +85,8 @@ export type RankResult = { topics: TopicDraft[]; cost?: CostEstimate };
 export const topicConfig = {
   // Write batches between automatic topics. Four spoken turns per batch, roughly 22 seconds.
   cadence: { chat: 2, feed: 7 },
+  // One news topic for every two influencer takes: crypto is the show, news is filler.
+  lane: { newsEvery: 3 },
   minQueued: 2,
   staleMs: 10 * 60000,
   minGapMs: 60000,
@@ -90,7 +94,8 @@ export const topicConfig = {
   backoffBaseMs: 30000,
   backoffMaxMs: 10 * 60000,
   maxQueued: 8,
-  maxAgeMs: 20 * 60000,
+  // A crypto take goes stale fast, and a short window self-heals a deleted post.
+  maxAge: { x: 15 * 60000, web: 45 * 60000 },
   keepUsed: 12,
   recentTitles: 20,
   limits: {
@@ -98,6 +103,7 @@ export const topicConfig = {
     brief: 500,
     angle: 200,
     handle: 32,
+    who: 40,
     url: 300,
     comment: 280,
     comments: 50,
@@ -127,6 +133,7 @@ export const createFeed = (): FeedState => ({
 export const createQueue = (): TopicQueueState => ({
   topics: [],
   batches: 0,
+  feedTurns: 0,
   lastTopicBatch: -Infinity,
   lastChatBatch: -Infinity,
   feed: createFeed(),
@@ -165,6 +172,13 @@ function httpsUrl(value: unknown, max: number) {
     return undefined;
   }
 }
+const HANDLE = /^@[A-Za-z0-9_]{1,15}$/;
+// Repeating an allegation about a real person is unrecoverable; dropping a topic costs nothing.
+const ACCUSATION =
+  /\b(scam(mer|ming)?|rug(ged|pull|s)?|fraud(ulent)?|ponzi|insider|stole|stealing|launder(ing|ed)?|arrested|indicted|charged with|convicted|sued|suing|lawsuit against|exit liquidity|paid to (shill|post)|shilling for|pedo|groom(er|ing))\b/i;
+// Compromised accounts posting token pumps are routine; never read one on air.
+const PROMOTION =
+  /(\$[A-Za-z]{2,10}\b[^.]{0,60}\b(buy|ape|send|long|entry|presale|mint)\b)|0x[a-f0-9]{40}|\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/i;
 export function sanitizeDraft(
   raw: unknown,
   forceSource?: TopicSource,
@@ -190,6 +204,13 @@ export function sanitizeDraft(
     ? (item.category as TopicCategory)
     : undefined;
   const commentId = text(item.commentId, 64) || undefined;
+  const who = text(item.who, cfg.limits.who).replace(/^@/, '') || undefined;
+  if (source === 'x') {
+    // A take from a named person is the one place the show can do real damage.
+    const all = `${title} ${brief} ${angle}`;
+    if (ACCUSATION.test(all) || PROMOTION.test(all)) return null;
+    if (handle && !HANDLE.test(handle)) return null;
+  }
   return {
     title,
     brief,
@@ -198,6 +219,7 @@ export function sanitizeDraft(
     score,
     ...(httpsUrl(item.url, cfg.limits.url) ? { url: item.url as string } : {}),
     ...(handle ? { handle } : {}),
+    ...(who && who.toLowerCase() !== handle?.slice(1).toLowerCase() ? { who } : {}),
     ...(category ? { category } : {}),
     ...(commentId ? { commentId } : {}),
   };
@@ -216,6 +238,7 @@ export function briefOf(topic: TopicDraft): TopicBrief {
     angle: topic.angle,
     source: topic.source,
     ...(topic.handle ? { handle: topic.handle } : {}),
+    ...(topic.who ? { who: topic.who } : {}),
     ...(topic.url ? { url: topic.url } : {}),
   };
 }
@@ -224,13 +247,17 @@ export function tagOf(topic: TopicBrief): TopicTag {
     title: topic.title,
     source: topic.source,
     ...(topic.handle ? { handle: topic.handle } : {}),
+    ...(topic.who ? { who: topic.who } : {}),
     ...(topic.url ? { url: topic.url } : {}),
   };
 }
 export function sourceLabel(topic: TopicTag) {
-  if (topic.source === 'x')
+  if (topic.source === 'x') {
+    if (topic.who && topic.handle) return `via ${topic.who} (${topic.handle}) on X`;
     return topic.handle ? `via ${topic.handle} on X` : 'trending on X';
+  }
   if (topic.source === 'web') {
+    if (topic.handle) return `from ${topic.handle}`;
     if (!topic.url) return 'from the news';
     try {
       return `from ${new URL(topic.url).hostname.replace(/^www\./, '')}`;
@@ -259,7 +286,7 @@ export function expire(
       t.status === 'queued' &&
       !t.pinned &&
       FEED_SOURCES.includes(t.source) &&
-      now - t.at > cfg.maxAgeMs,
+      now - t.at > (t.source === 'x' ? cfg.maxAge.x : cfg.maxAge.web),
   );
   if (!stale.length) return state;
   return {
@@ -292,8 +319,14 @@ export function enqueue(
   // Keep the queue small: drop the coldest unused topics, never a pinned one.
   const queued = topics.filter((t) => t.status === 'queued' && !t.pinned);
   if (queued.length > cfg.maxQueued) {
+    // Cheap news goes first, then the coldest: an influencer take is never evicted by filler.
     const evict = [...queued]
-      .sort((a, b) => a.score - b.score || a.at - b.at)
+      .sort(
+        (a, b) =>
+          Number(b.source === 'web') - Number(a.source === 'web') ||
+          a.score - b.score ||
+          a.at - b.at,
+      )
       .slice(0, queued.length - cfg.maxQueued);
     topics = topics.map((t) =>
       evict.includes(t) ? { ...t, status: 'dropped' as TopicStatus } : t,
@@ -309,7 +342,8 @@ function trim(topics: Topic[], cfg: TopicConfig) {
   return topics.filter((t) => !drop.includes(t));
 }
 export function orderTopics(state: TopicQueueState): Topic[] {
-  const rank = (t: Topic) => (t.pinned ? 0 : t.source === 'chat' ? 1 : 2);
+  const rank = (t: Topic) =>
+    t.pinned ? 0 : t.source === 'chat' ? 1 : t.source === 'x' ? 2 : 3;
   return state.topics
     .filter((t) => t.status === 'queued')
     .sort(
@@ -326,10 +360,13 @@ export function pickTopic(
   const chat = ordered.find((t) => t.source === 'chat');
   if (chat && state.batches - state.lastChatBatch >= cfg.cadence.chat)
     return chat;
-  const feed = ordered.find((t) => FEED_SOURCES.includes(t.source));
-  if (feed && state.batches - state.lastTopicBatch >= cfg.cadence.feed)
-    return feed;
-  return undefined;
+  if (state.batches - state.lastTopicBatch < cfg.cadence.feed) return undefined;
+  const take = ordered.find((t) => t.source === 'x');
+  const news = ordered.find((t) => t.source === 'web');
+  // Every third feed slot goes to news; the rest belong to the influencer lane.
+  const wantNews =
+    state.feedTurns % cfg.lane.newsEvery === cfg.lane.newsEvery - 1;
+  return wantNews ? (news ?? take) : (take ?? news);
 }
 export function markTopic(
   state: TopicQueueState,
@@ -362,9 +399,11 @@ export function batchWritten(
   state: TopicQueueState,
   topic?: Topic,
 ): TopicQueueState {
+  const isFeed = !!topic && FEED_SOURCES.includes(topic.source);
   return {
     ...state,
     batches: state.batches + 1,
+    feedTurns: state.feedTurns + (isFeed ? 1 : 0),
     lastTopicBatch:
       topic && FEED_SOURCES.includes(topic.source)
         ? state.batches
@@ -403,6 +442,12 @@ export function promote(state: TopicQueueState, id: string): TopicQueueState {
 }
 export function dismiss(state: TopicQueueState, id: string): TopicQueueState {
   return markTopic(state, id, 'dropped');
+}
+/** Queued, unused topics in one lane. The lanes refill independently. */
+export function laneDepth(state: TopicQueueState, source: TopicSource) {
+  return state.topics.filter(
+    (t) => t.status === 'queued' && t.source === source,
+  ).length;
 }
 export function unusedFeedCount(state: TopicQueueState) {
   return state.topics.filter(
@@ -443,7 +488,7 @@ export function shouldResearch(
   if (feed.callTimes.filter((t) => now - t < 3600000).length >= cfg.maxCallsPerHour)
     return false;
   return (
-    unusedFeedCount(state) < cfg.minQueued ||
+    laneDepth(state, 'x') < cfg.minQueued ||
     now - feed.lastResearchAt > cfg.staleMs
   );
 }
@@ -504,6 +549,7 @@ export function resetRuntime(state: TopicQueueState): TopicQueueState {
   return {
     ...state,
     batches: 0,
+    feedTurns: 0,
     lastTopicBatch: -Infinity,
     lastChatBatch: -Infinity,
     topics: state.topics.map((t) =>
@@ -541,15 +587,83 @@ export function prefilterComments(
   }
   return keep;
 }
+/** Every top-level {...} or [...] span, ignoring brackets inside string literals. */
+function jsonSpans(raw: string): string[] {
+  const spans: string[] = [];
+  const stack: string[] = [];
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === '\\') escaped = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    // Only quotes inside a candidate open a string; stray quotes in prose are ignored.
+    if (c === '"') {
+      if (stack.length) inString = true;
+      continue;
+    }
+    if (c === '{' || c === '[') {
+      if (!stack.length) start = i;
+      stack.push(c);
+    } else if (c === '}' || c === ']') {
+      if (!stack.length) continue;
+      const open = stack.pop();
+      if ((c === '}') !== (open === '{')) {
+        stack.length = 0;
+        start = -1;
+        continue;
+      }
+      if (!stack.length && start >= 0) {
+        spans.push(raw.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  return spans;
+}
+const isTopicPayload = (value: unknown) =>
+  Array.isArray(value) ||
+  (!!value &&
+    typeof value === 'object' &&
+    Array.isArray((value as { topics?: unknown }).topics));
+/**
+ * The Grok CLI narrates before it answers and sometimes emits placeholder objects
+ * first, so the payload is the LAST well-shaped span, not the first thing that parses.
+ */
 export function parseTopicJson(raw: string): unknown {
-  let clean = raw
+  const clean = raw
     .trim()
     .replace(/^```(?:json)?\s*\n?/, '')
     .replace(/\n?```$/, '')
     .trim();
-  const start = clean.search(/[[{]/);
-  if (start > 0) clean = clean.slice(start);
-  return JSON.parse(clean);
+  let shaped: unknown;
+  let lastParsed: unknown;
+  let found = false;
+  for (const span of jsonSpans(clean)) {
+    let value: unknown;
+    try {
+      value = JSON.parse(span);
+    } catch {
+      continue; // prose braces, a truncated tail
+    }
+    found = true;
+    lastParsed = value;
+    if (isTopicPayload(value)) shaped = value;
+  }
+  if (shaped !== undefined) return shaped;
+  if (found) return lastParsed; // an odd shape, e.g. {"error":"..."}
+  return JSON.parse(clean); // nothing parsed: throw a real SyntaxError
+}
+export function readTopicList(raw: string): unknown[] {
+  const parsed = parseTopicJson(raw);
+  if (Array.isArray(parsed)) return parsed;
+  const list = (parsed as { topics?: unknown })?.topics;
+  return Array.isArray(list) ? list : [];
 }
 const PRICES: Record<string, [number, number]> = {
   'grok-4.6': [2, 6],
@@ -574,4 +688,93 @@ export function estimateCost(
     toolCalls,
     model,
   };
+}
+
+/** The memecoin and Solana voices the show watches. Override with NEWSDESK_X_HANDLES. */
+export const watchlist = [
+  '@blknoiz06',
+  '@notthreadguy',
+  '@0xMert_',
+  '@aeyakovenko',
+  '@rajgokal',
+  '@frankdegods',
+  '@inversebrah',
+  '@CryptoKaleo',
+  '@0xngmi',
+  '@weremeow',
+  '@theunipcs',
+  '@Cbb0fe',
+  '@0xSharples',
+  '@shawmakesmagic',
+  '@zerobeta',
+  '@SolanaLegend',
+  '@0xdefiwarrior',
+  '@iamkadense',
+];
+/**
+ * A stable slice of the roster so calls stay cheap and no one account dominates.
+ * `step` is a plain counter: consecutive steps watch different accounts.
+ */
+export function rotate(pool: string[] | undefined, take: number, step: number) {
+  const list = pool?.length ? pool : watchlist;
+  const size = Math.min(take, list.length);
+  const start = (Math.abs(Math.trunc(step)) * size) % list.length;
+  return Array.from({ length: size }, (_, i) => list[(start + i) % list.length]);
+}
+
+const CHATTY = /\b(gm|gn|lol|lmao|wen|ser|fren|based|nice|first|hi|hey)\b/gi;
+/**
+ * Pick the live-chat comments worth airing. A heuristic rather than a model call:
+ * it is free, instant, and a comment only needs to be specific and clean to qualify.
+ */
+export function rankComments(
+  comments: Comment[],
+  recentTitles: string[],
+  k = 3,
+  cfg: TopicConfig = topicConfig,
+): TopicDraft[] {
+  const scored = comments
+    .map((comment) => {
+      const words = comment.text.trim().split(/\s+/);
+      const filler = (comment.text.match(CHATTY) || []).length;
+      const score = Math.max(
+        0,
+        Math.min(
+          100,
+          30 +
+            Math.min(words.length, 25) * 2 +
+            Math.min(comment.likes ?? 0, 20) -
+            filler * 15 +
+            (comment.text.trim().endsWith('?') ? 10 : 0),
+        ),
+      );
+      return { comment, score };
+    })
+    .filter(({ comment, score }) => {
+      if (score < 40) return false;
+      const all = comment.text;
+      if (ACCUSATION.test(all) || PROMOTION.test(all)) return false;
+      return !recentTitles.some((title) => similar(title, all));
+    })
+    .sort((a, b) => b.score - a.score);
+  const picked: TopicDraft[] = [];
+  for (const { comment, score } of scored) {
+    if (picked.length >= k) break;
+    if (picked.some((t) => similar(t.title, comment.text))) continue;
+    const draft = sanitizeDraft(
+      {
+        title: comment.text.replace(/\s+/g, ' ').trim(),
+        brief: `${comment.author} asked in the live chat: "${comment.text.trim()}". Nothing else is known about it.`,
+        angle: 'Answer the viewer directly, in character.',
+        score,
+        handle: comment.author,
+        category: 'chat',
+        commentId: comment.id,
+      },
+      'chat',
+      cfg,
+    );
+    if (draft) picked.push(draft);
+  }
+  return picked;
 }

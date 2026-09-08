@@ -149,7 +149,7 @@ test('airing a shot retires the previous topic and remembers its title', () => {
 test('queued feed topics expire but pinned ones stay', () => {
   let q = T.enqueue(T.createQueue(), [draft('Aging story'), draft('Kept story')], 0, T.topicConfig, id);
   q = T.promote(q, q.topics[1].id);
-  q = T.expire(q, T.topicConfig.maxAgeMs + 1);
+  q = T.expire(q, T.topicConfig.maxAge.web + 1);
   assert.equal(q.topics[0].status, 'dropped');
   assert.equal(q.topics[1].status, 'queued');
 });
@@ -252,4 +252,65 @@ test('a speaker label from the writer never reaches the microphone', () => {
   );
   assert.equal(lines[0].text, 'One perfectly ordinary spoken line here.');
   assert.equal(lines[1].text, 'Two ordinary spoken lines here now.');
+});
+
+test('topic JSON survives the CLI habit of emitting placeholders before the real answer', () => {
+  // Measured shape: prose, then throwaway objects, then the payload, all concatenated.
+  const messy =
+    'I\'ll pull the latest posts and return one object.' +
+    '{"topics":[{"title":"placeholder"}]}' +
+    '{"topics":[{"title":"checking again"}]}' +
+    '{"topics":[{"title":"Memory charts look bottomed","who":"Ansem"}]}';
+  assert.equal(T.parseTopicJson(messy).topics[0].title, 'Memory charts look bottomed');
+});
+
+test('topic JSON ignores a trailing note and braces inside strings', () => {
+  const trailing =
+    '{"topics":[{"title":"The SEC said something {again}","brief":"He wrote \\"gm\\" and left."}]}' +
+    '\n\nNote: {"status":"done"}';
+  const parsed = T.parseTopicJson(trailing);
+  assert.equal(parsed.topics.length, 1);
+  assert.match(parsed.topics[0].title, /\{again\}/);
+  const truncated = '{"topics":[{"title":"good"}]} and then {"topics":[{"tit';
+  assert.equal(T.parseTopicJson(truncated).topics[0].title, 'good');
+});
+
+test('topic JSON still reads fenced payloads, arrays and rejects junk', () => {
+  assert.deepEqual(T.parseTopicJson('```json\n{"topics":[]}\n```'), { topics: [] });
+  assert.deepEqual(T.parseTopicJson('Here you go: [1,2]'), [1, 2]);
+  assert.deepEqual(T.parseTopicJson('{"error":"nope"}'), { error: 'nope' });
+  assert.throws(() => T.parseTopicJson('not json at all'));
+});
+
+test('handle rotation covers the roster without repeating inside a window', () => {
+  const pool = Array.from({ length: 12 }, (_, i) => `@acct${i}`);
+  const first = T.rotate(pool, 5, 0);
+  const second = T.rotate(pool, 5, 1);
+  assert.equal(first.length, 5);
+  assert.equal(new Set(first).size, 5, 'no duplicates within a call');
+  assert.notDeepEqual(first, second, 'consecutive calls watch different accounts');
+  assert.deepEqual(T.rotate(pool, 5, 0), first, 'the same cursor is stable');
+  assert.equal(T.rotate([], 5, 0).length > 0, true, 'falls back to the built-in roster');
+});
+
+test('chat comments are ranked locally, with spam and repeats dropped', () => {
+  const comments = [
+    { id: '1', author: 'deb', text: 'why is the whole timeline mad at the SEC again today' },
+    { id: '2', author: 'bot', text: 'buy $PUMP now, ape in before it sends' },
+    { id: '3', author: 'max', text: 'ask chad if he has ever taken profit in his life' },
+    { id: '4', author: 'rep', text: 'why is the whole timeline mad at the SEC again today' },
+  ];
+  const topics = T.rankComments(
+    comments,
+    ['ask chad if he has ever taken profit in his life'],
+    3,
+  );
+  assert.ok(topics.length >= 1 && topics.length <= 3);
+  assert.ok(topics.every((t) => t.source === 'chat'));
+  assert.ok(!topics.some((t) => /\$PUMP/i.test(t.title)), 'shilling never becomes a topic');
+  assert.ok(
+    !topics.some((t) => /taken profit/i.test(t.title)),
+    'a repeat of a recent topic is dropped',
+  );
+  assert.equal(new Set(topics.map((t) => t.title)).size, topics.length);
 });

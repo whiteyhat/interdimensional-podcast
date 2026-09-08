@@ -51,7 +51,7 @@ export default function Page() {
       .then((r) => r.json())
       .then((data) =>
         engine.setFeed(
-          !!(data as { configured?: { xai?: boolean } }).configured?.xai,
+          !!(data as { configured?: { feed?: boolean } }).configured?.feed,
         ),
       )
       .catch(() => {});

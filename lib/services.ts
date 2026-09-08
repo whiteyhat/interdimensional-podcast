@@ -145,6 +145,9 @@ export function createServices(): Services {
         throw e;
       }
     },
+    async news(input) {
+      return topics({ action: 'news', ...input }, 'web');
+    },
     async research(input) {
       return topics({ action: 'research', ...input });
     },
