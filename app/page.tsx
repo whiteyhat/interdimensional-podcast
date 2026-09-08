@@ -3,10 +3,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import {
-  Mic,
   Radio,
   ArrowUpRight,
-  Headphones,
   Square,
   Pause,
   Play,
@@ -160,7 +158,7 @@ export default function Page() {
     <main className="podcast">
       <header>
         <Link className="brand" href="/">
-          <Mic />
+          <img className="brand-mark" src="/logo.png" alt="" />
           {show.name.toUpperCase()}
           <span className="edition">{show.edition}</span>
         </Link>
@@ -211,7 +209,7 @@ export default function Page() {
             />
             {!state.current && (
               <div className="opening">
-                <Headphones size={30} />
+                <img className="opening-mark" src="/logo.png" alt={show.name} />
                 <p className="eyebrow">OPEN MIC / NO FINAL EPISODE</p>
                 <h1>{show.headline}</h1>
                 <p>

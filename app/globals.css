@@ -867,3 +867,41 @@ html {
     transform: none;
   }
 }
+
+/* Brand mark: the studio logo, reused wherever the show names itself. */
+.brand-mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px #3e4934;
+}
+.opening-mark {
+  width: 118px;
+  height: 118px;
+  border-radius: 50%;
+  object-fit: cover;
+  margin-bottom: 14px;
+  box-shadow:
+    0 0 0 2px #3e4934,
+    0 12px 40px #0009;
+  animation: mark-in 420ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+@keyframes mark-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92) translateY(8px);
+  }
+}
+.ticker-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .opening-mark {
+    animation-duration: 1ms;
+  }
+}

@@ -1,4 +1,5 @@
 'use client';
+/* oxlint-disable next/no-img-element -- Small brand mark on a live overlay; no optimizer in this runtime. */
 import type { Cue } from '@/lib/engine';
 import { sourceLabel, type Topic } from '@/lib/topics';
 /** The broadcast lower-third: what the stream audience sees about the current subject. */
@@ -14,6 +15,7 @@ export function Ticker({ topics, cues }: { topics: Topic[]; cues: Cue[] }) {
   if (!title) return null;
   return (
     <div className="ticker" key={showCue ? cue.id : topic?.id}>
+      <img className="ticker-mark" src="/logo.png" alt="" />
       <span className="ticker-live">
         <i />
         LIVE

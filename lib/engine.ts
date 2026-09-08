@@ -1,4 +1,4 @@
-import { opening, type Line, type Speaker } from './show';
+import { opening, shotDuration, type Line, type Speaker } from './show';
 import {
   avoidTitles,
   batchWritten,
@@ -307,7 +307,7 @@ export class Podcast {
     const news = this.services.news;
     if (!news || this.newsInflight) return;
     const now = Date.now();
-    if (laneDepth(this.queue, 'web') >= 2 || now - this.newsAt < 5 * 60000) return;
+    if (laneDepth(this.queue, 'web') >= 8 || now - this.newsAt < 90000) return;
     this.newsInflight = true;
     this.newsAt = now;
     void news({ avoid: avoidTitles(this.queue) })
@@ -483,7 +483,11 @@ export class Podcast {
       this.draft = lines;
       this.writeFailures = 0;
       if (topic) this.queue = markTopic(this.queue, topic.id, 'buffered', next);
-      this.queue = batchWritten(this.queue, topic);
+      this.queue = batchWritten(
+        this.queue,
+        topic,
+        lines.reduce((total, line) => total + shotDuration(line.text), 0),
+      );
       this.set({
         cues: this.state.cues.map((c) =>
           c.id === cue?.id ? { ...c, status: 'buffered', shot: next } : c,

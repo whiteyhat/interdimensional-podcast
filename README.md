@@ -9,6 +9,7 @@ Built with [fal](https://fal.ai): MiniMax H3 Max Turbo generates each speaking s
 ## How it works
 
 - Two fixed camera angles, generated speech, and short 5-7 second turns.
+- The subject changes roughly every 35 seconds: some takes get one quick exchange, some get two, so the rhythm varies.
 - The crypto desk searches X for what named memecoin and Solana accounts are posting, and the hosts riff on their takes.
 - A free news lane fills the gaps from Google News, airing a story only when three outlets carry it.
 - Pasted live-chat comments are ranked locally and queued as topics; real platform adapters plug into the same interface.
@@ -37,7 +38,7 @@ Open [localhost:3212](http://localhost:3212) and select **Tune in**. Generation 
 
 React, TypeScript, Vinext, and a local Cloudflare Workers runtime. Character images are generated once, then reused for image-to-video. Edit `lib/show.ts` to change the cast, opening, voices, and writing direction.
 
-Regenerate the character stills with `node scripts/characters.mjs` (uses fal credits, about $0.15 per image). Use `--dry-run` to see the prompts, `--variants 2` to compare candidates, and `--pick host=0 --pick guest=1` to promote them.
+Regenerate the logo and the branded studio stills with `node scripts/brand.mjs` (`logo`, then `stills --logo 0`, then `pick`). Regenerate the base character stills with `node scripts/characters.mjs` (uses fal credits, about $0.15 per image). Use `--dry-run` to see the prompts, `--variants 2` to compare candidates, and `--pick host=0 --pick guest=1` to promote them.
 
 `npm run dev` starts the app and the crypto desk together. The desk (`scripts/newsdesk.mjs`) is a loopback-only wrapper around the Grok CLI, which the Cloudflare Workers runtime cannot launch itself; it runs one call at a time and reports its spend at `127.0.0.1:8791/health`. Topic selection lives in `lib/topics.ts`, the free news lane in `lib/gnews.ts`, and the desk prompts in `lib/newsdesk.ts`. Set `NEWSDESK_X_HANDLES` to change the watchlist, or `NEWSDESK_MAX_PER_HOUR` / `NEWSDESK_MAX_SPEND_USD` to cap the desk.
 

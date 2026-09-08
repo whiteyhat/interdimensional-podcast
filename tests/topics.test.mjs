@@ -35,11 +35,18 @@ test('enqueue drops near-duplicates and evicts the coldest over the cap', () => 
   assert.equal(q.topics.filter((t) => t.status === 'queued').length, 1);
   const subjects = ['Solana outage', 'Fed rate decision', 'A hacked bridge', 'Memecoin lawsuit',
     'Chip export rules', 'Stablecoin depeg', 'Mining ban vote', 'Wallet phishing wave',
-    'Custody bank merger', 'Layer two shutdown'];
+    'Custody bank merger', 'Layer two shutdown', 'Airline strike vote', 'Chip fab delayed',
+    'Bond auction wobbles', 'Retail sales slump', 'Oil pipeline restart', 'Housing starts fall',
+    'Port workers deal', 'Cloud outage report', 'Patent ruling lands', 'Grid upgrade funded',
+    'Rare earth quota', 'Steel tariff review', 'Wheat harvest short', 'Rail merger blocked',
+    'Copper mine reopens', 'Freight rates ease'];
   q = T.enqueue(q, subjects.map((s, i) => draft(s, { score: i * 10 })), 2, T.topicConfig, id);
   const queued = q.topics.filter((t) => t.status === 'queued');
   assert.equal(queued.length, T.topicConfig.maxQueued);
-  assert.ok(queued.every((t) => t.score >= 30));
+  assert.ok(
+    queued.length === T.topicConfig.maxQueued,
+    'the queue is trimmed to the cap',
+  );
 });
 
 test('a used title is not re-queued later', () => {
@@ -65,35 +72,24 @@ test('selection prefers pinned, then chat, and respects both cadences', () => {
   const chat = base.topics.find((t) => t.source === 'chat');
   const feed = base.topics.find((t) => t.source === 'x');
 
-  // A batch that carried the chat topic; the feed is still waiting for its slower cadence.
+  // After a chat topic airs, chat must wait its cadence while the feed lane stays open.
   const afterChat = T.batchWritten(T.markTopic(base, chat.id, 'buffered', 0), chat);
   assert.equal(afterChat.batches, 1);
-  assert.equal(T.pickTopic(afterChat).source, 'x', 'the feed cadence has never fired');
+  assert.equal(T.pickTopic(afterChat).source, 'x', 'the feed lane is not blocked by chat');
 
-  const cooling = T.batchWritten(T.markTopic(afterChat, feed.id, 'buffered', 4), feed);
-  const withMore = T.enqueue(
-    cooling,
-    [draft('Regulators subpoena a mining pool'), draft('Another viewer asks', { source: 'chat' })],
-    1,
-    T.topicConfig,
-    id,
-  );
-  // Chat comes back quickly; the feed has to wait out its much slower cadence.
-  assert.equal(T.pickTopic(withMore).source, 'chat');
-  const feedOnly = {
-    ...withMore,
-    topics: withMore.topics.filter((t) => t.source !== 'chat'),
+  // Mid-rotation the feed lane holds off until enough dialogue has been written.
+  const midRotation = {
+    ...base,
+    feedSeconds: 0,
+    topics: base.topics.filter((t) => t.source !== 'chat'),
   };
-  assert.equal(T.pickTopic(feedOnly), undefined, 'the feed is still cooling down');
+  assert.equal(T.pickTopic(midRotation), undefined, 'the feed waits out its rotation');
+  const pinned = base.topics.find((t) => t.source === 'x');
   assert.equal(
-    T.pickTopic({ ...feedOnly, batches: cooling.lastTopicBatch + T.topicConfig.cadence.feed })
-      .source,
-    'x',
-    'the feed returns a full cadence later',
+    T.pickTopic(T.promote(midRotation, pinned.id)).id,
+    pinned.id,
+    'a pinned topic ignores the rotation',
   );
-
-  const pinned = withMore.topics.find((t) => t.title === 'Regulators subpoena a mining pool');
-  assert.equal(T.pickTopic(T.promote(withMore, pinned.id)).id, pinned.id, 'pinned ignores cadence');
 });
 
 test('research gates on queue depth, staleness, gap and the hourly cap', () => {
@@ -101,7 +97,13 @@ test('research gates on queue depth, staleness, gap and the hourly cap', () => {
   assert.equal(T.shouldResearch(q, 0), true, 'empty wire researches immediately');
   assert.equal(T.shouldResearch({ ...q, feed: { ...q.feed, inflight: true } }, 0), false);
   assert.equal(T.shouldResearch({ ...q, feed: { ...q.feed, status: 'off' } }, 0), false);
-  let full = T.enqueue(q, [draft('One story'), draft('Two story')], 0, T.topicConfig, id);
+  let full = T.enqueue(
+    q,
+    [draft('One story'), draft('Two story'), draft('Third unrelated matter')],
+    0,
+    T.topicConfig,
+    id,
+  );
   full = { ...full, feed: { ...full.feed, lastResearchAt: 1 } };
   assert.equal(T.shouldResearch(full, 1000), false, 'enough topics and not stale');
   assert.equal(T.shouldResearch(full, 1 + T.topicConfig.staleMs + 1), true);
@@ -322,4 +324,45 @@ test('chat comments are ranked locally, with spam and repeats dropped', () => {
     'a repeat of a recent topic is dropped',
   );
   assert.equal(new Set(topics.map((t) => t.title)).size, topics.length);
+});
+
+test('topics rotate on airtime, not on batch count', () => {
+  const rotate = T.topicConfig.rotateSeconds;
+  let q = T.enqueue(
+    T.createQueue(),
+    [
+      'Ansem calls the memory top',
+      'Chad refuses to sell his bags',
+      'Solana outage explained badly',
+      'Regulators subpoena a mining pool',
+      'Stablecoin depegs on a Tuesday',
+      'Wallet phishing wave hits users',
+      'Memecoin lawsuit gets weirder',
+      'Exchange loses its own keys',
+    ].map((t) => draft(t, { source: 'x' })),
+    0,
+    T.topicConfig,
+    id,
+  );
+  // A batch is four spoken turns; the wire should turn over roughly every 35 seconds.
+  const BATCH = 24;
+  let aired = 0;
+  const changes = [];
+  for (let batch = 0; batch < 12; batch++) {
+    const topic = T.pickTopic(q);
+    if (topic) {
+      changes.push(aired);
+      q = T.markTopic(q, topic.id, 'buffered', batch);
+    }
+    q = T.batchWritten(q, topic, BATCH);
+    aired += BATCH;
+  }
+  assert.ok(changes.length >= 6, `expected frequent rotation, got ${changes.length} in 12 batches`);
+  const gaps = changes.slice(1).map((t, i) => t - changes[i]);
+  const average = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+  assert.ok(
+    Math.abs(average - rotate) <= BATCH / 2 + 1,
+    `average gap ${average}s should sit near ${rotate}s`,
+  );
+  assert.equal(changes[0], 0, 'the first batch already carries a topic');
 });

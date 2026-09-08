@@ -67,6 +67,8 @@ export type TopicQueueState = {
   topics: Topic[];
   batches: number;
   feedTurns: number;
+  /** Seconds of dialogue written since the last topic change, carried across batches. */
+  feedSeconds: number;
   lastTopicBatch: number;
   lastChatBatch: number;
   feed: FeedState;
@@ -83,17 +85,21 @@ export type RankInput = {
 export type RankResult = { topics: TopicDraft[]; cost?: CostEstimate };
 
 export const topicConfig = {
-  // Write batches between automatic topics. Four spoken turns per batch, roughly 22 seconds.
-  cadence: { chat: 2, feed: 7 },
-  // One news topic for every two influencer takes: crypto is the show, news is filler.
-  lane: { newsEvery: 3 },
-  minQueued: 2,
-  staleMs: 10 * 60000,
+  // Write batches between chat topics. Four spoken turns per batch, roughly 24 seconds.
+  cadence: { chat: 2 },
+  // The wire turns over on airtime, not batch count: a fresh subject every ~35 seconds.
+  // A batch cannot be split, so this alternates one and two batches to average out.
+  rotateSeconds: 35,
+  // One news topic for every crypto take; the crypto lane wins whenever it has stock.
+  lane: { newsEvery: 2 },
+  minQueued: 3,
+  staleMs: 4 * 60000,
   minGapMs: 60000,
   maxCallsPerHour: 20,
   backoffBaseMs: 30000,
   backoffMaxMs: 10 * 60000,
-  maxQueued: 8,
+  // Fast rotation burns roughly a hundred topics an hour, so the wire is kept deep.
+  maxQueued: 24,
   // A crypto take goes stale fast, and a short window self-heals a deleted post.
   maxAge: { x: 15 * 60000, web: 45 * 60000 },
   keepUsed: 12,
@@ -134,6 +140,8 @@ export const createQueue = (): TopicQueueState => ({
   topics: [],
   batches: 0,
   feedTurns: 0,
+  // Seeded so the very first batch already carries a topic.
+  feedSeconds: topicConfig.rotateSeconds,
   lastTopicBatch: -Infinity,
   lastChatBatch: -Infinity,
   feed: createFeed(),
@@ -360,7 +368,7 @@ export function pickTopic(
   const chat = ordered.find((t) => t.source === 'chat');
   if (chat && state.batches - state.lastChatBatch >= cfg.cadence.chat)
     return chat;
-  if (state.batches - state.lastTopicBatch < cfg.cadence.feed) return undefined;
+  if (state.feedSeconds < cfg.rotateSeconds) return undefined;
   const take = ordered.find((t) => t.source === 'x');
   const news = ordered.find((t) => t.source === 'web');
   // Every third feed slot goes to news; the rest belong to the influencer lane.
@@ -398,11 +406,19 @@ export function markTopic(
 export function batchWritten(
   state: TopicQueueState,
   topic?: Topic,
+  seconds = 24,
+  cfg: TopicConfig = topicConfig,
 ): TopicQueueState {
   const isFeed = !!topic && FEED_SOURCES.includes(topic.source);
+  // Carry the overflow rather than resetting, so the average lands on rotateSeconds
+  // even though dialogue can only change subject on a batch boundary.
+  const feedSeconds =
+    (isFeed ? Math.max(0, state.feedSeconds - cfg.rotateSeconds) : state.feedSeconds) +
+    seconds;
   return {
     ...state,
     batches: state.batches + 1,
+    feedSeconds,
     feedTurns: state.feedTurns + (isFeed ? 1 : 0),
     lastTopicBatch:
       topic && FEED_SOURCES.includes(topic.source)
@@ -550,6 +566,7 @@ export function resetRuntime(state: TopicQueueState): TopicQueueState {
     ...state,
     batches: 0,
     feedTurns: 0,
+    feedSeconds: topicConfig.rotateSeconds,
     lastTopicBatch: -Infinity,
     lastChatBatch: -Infinity,
     topics: state.topics.map((t) =>

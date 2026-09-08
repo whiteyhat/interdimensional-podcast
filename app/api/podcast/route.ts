@@ -186,9 +186,9 @@ export async function POST(request: Request) {
       input = {
         model: 'google/gemini-2.5-flash',
         system_prompt: writerSystem,
-        prompt: `COMMITTED TRANSCRIPT (including buffered footage):\n${recent || 'The conversation is just beginning.'}\nFirst speaker: ${cast[body.start! % 2 === 0 ? 'host' : 'guest'].name.toUpperCase()}.\n${writerRequest(body.cue, topic)}\nWrite the next four turns. If there is an audience request or live topic, the first turn must connect the prior detail to its subject, and the second must already be about that subject. For a live topic, one of the first two turns states plainly what happened using only WHAT'S HAPPENING, then the hosts react in their own kinds of lines; use ANGLE as the comedic direction, not as a line to read. Keep the delivery casual and the connection understandable.`,
+        prompt: `COMMITTED TRANSCRIPT (including buffered footage):\n${recent || 'The conversation is just beginning.'}\nFirst speaker: ${cast[body.start! % 2 === 0 ? 'host' : 'guest'].name.toUpperCase()}.\n${writerRequest(body.cue, topic)}\nWrite the next four turns. Move onto the new subject immediately: mention it in the FIRST turn, in one short clause, connected to whatever was just said. Do not explain it, summarise it or give background at any point. Turns two, three and four are pure reaction, and by the fourth they should have wandered somewhere sillier and more personal than the topic itself. Use ANGLE as a direction, never as a line to read. Keep the delivery casual and the connection understandable.`,
         max_tokens: 700,
-        temperature: 0.9,
+        temperature: 0.95,
       };
       endpoint = 'openrouter/router';
     } else return reply({ error: 'Unknown action' }, 400);

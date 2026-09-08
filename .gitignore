@@ -45,6 +45,7 @@ work/
 /public/*
 !/public/pepe-cartoon.png
 !/public/gigachad-cartoon.png
+!/public/logo.png
 !/public/favicon.svg
 !.dev.vars.example
 .playwright-mcp/

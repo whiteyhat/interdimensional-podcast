@@ -19,7 +19,7 @@ export const gnewsConfig = {
   maxAgeHours: 18,
   minCluster: 3, // distinct outlets required before a story may air
   scoreCap: 55, // stays under the crypto lane so influencer takes win a tie
-  perFeed: 8,
+  perFeed: 12,
 } as const;
 export const feeds: { id: string; topic: string; category: TopicCategory }[] = [
   { id: 'tech', topic: 'TECHNOLOGY', category: 'tech' },

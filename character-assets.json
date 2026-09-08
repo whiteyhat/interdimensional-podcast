@@ -1,17 +1,17 @@
 {
-  "method": "fal-ai/nano-banana-pro/edit, editing the previous stills listed under parents",
-  "generatedAt": "2026-09-08T10:56:31.224Z",
+  "method": "fal-ai/nano-banana-pro/edit, branding the previous stills listed under parents",
+  "generatedAt": "2026-09-08T15:46:19.824Z",
   "sources": {
+    "pepe-cartoon": "https://v3b.fal.media/files/b/0aa99e22/bivMOsj1SAZQSkDSnW8AO_lsgrtOSN.png",
+    "gigachad-cartoon": "https://v3b.fal.media/files/b/0aa99e3d/ywhKteDIyF5zF_24hGr6G_pKIEc6WI.png"
+  },
+  "parents": {
     "pepe-cartoon": "https://v3b.fal.media/files/b/0aa99756/GewkJpA7Ow2kXc2ul_av2_seuEG2JB.png",
     "gigachad-cartoon": "https://v3b.fal.media/files/b/0aa9975a/z4WfXzKN2ADHGOl_Vk60J_ifRTwuae.png"
   },
-  "parents": {
-    "pepe-cartoon": "https://v3b.fal.media/files/b/0aa9566d/af-RPcSXlTgsnlc7uJTrE_satan-cartoon.png",
-    "gigachad-cartoon": "https://v3b.fal.media/files/b/0aa9566d/D7-21mPU8XXQiFJ1Iikqj_santa-cartoon.png"
-  },
   "prompts": {
-    "pepe": "Edit this 2D animated podcast frame. Replace the red devil character with Pepe the Frog, an adult male cartoon frog drawn in exactly the same flat 2D adult-animation cel style as the rest of the image: bold clean dark outlines, flat muted colors, simple cel shading, not photorealistic and not grayscale. Pepe has smooth green skin, a wide flat head, large round white eyes with small black pupils under heavy half-lowered lids, no nose, a small chin, and thick wide red lips, mouth closed, in a relaxed slightly amused expression. No horns, no goatee, no pointed ears, no red skin. Four-fingered green hands. Keep the identical pose and framing: he sits on the left side of the frame behind the walnut desk, body angled to the right, looking toward the microphone on the right, hands resting on the desk. He wears the same black over-ear headphones, a plain blue crew-neck t-shirt, and the same gold wristwatch. Keep the potted plant, vintage radio and shelf of records exactly where they are. Change nothing else: keep the identical dark basement podcast studio, dark teal slatted acoustic panels, amber table lamp, shelves, black boom arm and microphone, walnut desk, lighting, palette, line weight, camera angle and 16:9 framing. Full color. No text, no captions, no logos, no watermark, no signature.",
-    "gigachad": "Edit this 2D animated podcast frame. Replace Santa Claus with GigaChad, an adult man with a natural warm skin tone drawn in exactly the same flat 2D adult-animation cel style as the rest of the image: bold clean dark outlines, flat muted colors, simple cel shading, not photorealistic and not grayscale. GigaChad has an absurdly oversized square chiseled jawline, sharp cheekbones, a heavy brow over narrow calm eyes, a thick neatly trimmed dark beard, dark slicked-back hair, a thick neck, broad shoulders and hugely muscular arms and chest. Calm, faintly smug expression, mouth closed. Remove the Santa hat, red coat, white beard and belly entirely. Keep the identical pose and framing: he sits on the right side of the frame behind the walnut desk, body angled to the left, looking toward the microphone on the left, one forearm resting on the desk, wearing the same black over-ear headphones and a fitted plain black t-shirt. Replace the wrapped gift box on the top shelf with a small potted plant. Keep the black mug on the desk. Change nothing else: keep the identical dark basement podcast studio, dark teal slatted acoustic panels, amber table lamp, shelves, black boom arm and microphone, walnut desk, lighting, palette, line weight, camera angle and 16:9 framing. Full color. No text, no captions, no logos, no watermark, no signature."
+    "pepe": "Edit this 2D animated podcast frame. Add ONE illuminated wall sign showing EXACTLY the logo in the second image, reproduced faithfully with the same badge, the same frog and bearded man profiles, the same \"PEPE & CHAD\" wordmark, the same amber \"LIVE\" box and the same \"$FROGCLENCH\" text. Mount it flat on the dark teal acoustic panel wall in the upper right of the background, above head height and behind the microphone boom, sized to about one fifth of the frame width, with a soft warm glow. It must not cover any part of the character, the headphones, the microphone or the lamp. Change nothing else: keep the character, pose, expression, clothes, desk, lamp, shelves, panels, lighting, palette, line weight, camera angle and 16:9 framing identical to the first image. No other text, no watermark.",
+    "gigachad": "Edit this 2D animated podcast frame. Add ONE illuminated wall sign showing EXACTLY the logo in the second image, reproduced faithfully with the same badge, the same frog and bearded man profiles, the same \"PEPE & CHAD\" wordmark, the same amber \"LIVE\" box and the same \"$FROGCLENCH\" text. Mount it flat on the dark teal acoustic panel wall in the upper left of the background, above head height and behind the microphone boom, sized to about one fifth of the frame width, with a soft warm glow. It must not cover any part of the character, the headphones, the microphone or the lamp. Change nothing else: keep the character, pose, expression, clothes, desk, lamp, shelves, panels, lighting, palette, line weight, camera angle and 16:9 framing identical to the first image. No other text, no watermark."
   },
   "params": {
     "pepe": {
@@ -30,7 +30,12 @@
     }
   },
   "requestIds": {
-    "pepe": "01a080a7-ac83-7923-88d5-5e23ffd903b4",
-    "gigachad": "01a080a8-3436-7b53-a954-7529b8134d7b"
+    "pepe": "01a081b1-1036-7bf1-8daf-1c7d4a066a92",
+    "gigachad": "01a081b1-aabf-7930-9bf0-def400572706"
+  },
+  "logo": {
+    "url": "https://v3b.fal.media/files/b/0aa99e1a/UTbZx6JKlxBswirGo68FK_PD3XbYqD.png",
+    "prompt": "Podcast logo for \"PEPE & CHAD LIVE\", drawn in flat 2D adult-animation cel style, bold clean dark outlines, flat muted colors, simple shading, like a Rick and Morty title card. A round broadcast badge on a dark olive background. Inside the badge, two profiles face each other across a black studio microphone: on the left a green cartoon frog with big round eyes and wide red lips wearing black headphones, on the right a heavily bearded man with an enormous square jaw wearing black headphones. Bold condensed sans-serif wordmark \"PEPE & CHAD\" arched across the top of the badge in cream, and the word \"LIVE\" in a small amber on-air box at the bottom. Underneath the badge, small monospace text \"$FROGCLENCH\" in sage green. Palette: dark olive, amber orange, sage green, cream. Clean, centred, vector-like, high contrast. No other text, no photo, no gradients, no watermark.",
+    "requestId": "01a081af-f5ae-7e12-9e5d-9ecd651d1172"
   }
 }
