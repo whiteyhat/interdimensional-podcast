@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { feedUrl, feeds, parseRss, toDrafts } from '@/lib/gnews';
+import { clusterItems, feedUrl, feeds, parseRss, toDrafts } from '@/lib/gnews';
 import { deskUser, researchUser } from '@/lib/newsdesk';
 import {
   estimateCost,
@@ -21,6 +21,7 @@ type Vars = {
 type DeskEnvelope = {
   ok?: boolean;
   text?: string;
+  detail?: string;
   structuredOutput?: unknown;
   stopReason?: string;
   usage?: { input_tokens?: number; output_tokens?: number };
@@ -70,13 +71,19 @@ async function newsTopics(): Promise<TopicDraft[]> {
   const results = await Promise.all(
     feeds.map(async (feed) => {
       try {
-        const response = await fetch(feedUrl(feed.topic), {
+        const response = await fetch(feedUrl(feed), {
           cache: 'no-store',
           redirect: 'follow',
           headers: { 'user-agent': 'Mozilla/5.0 (compatible; PepeAndChadLive/1.0)' },
         });
         if (!response.ok) return [];
-        return toDrafts(parseRss(await response.text()), now, feed.category);
+        // Search feeds cluster less than topic sections, so they need a lower bar
+        // to produce anything at all; two outlets still means it is not one blog.
+        const parsed = parseRss(await response.text());
+        // Search feeds ship no cluster block, so rebuild it from matching headlines.
+        return feed.query
+          ? toDrafts(clusterItems(parsed), now, feed.category, 2)
+          : toDrafts(parsed, now, feed.category);
       } catch {
         return []; // one dead feed must never take the lane down
       }

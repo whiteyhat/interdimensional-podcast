@@ -18,6 +18,8 @@ export type TopicDraft = {
   url?: string;
   handle?: string;
   who?: string;
+  /** A short verbatim line from the post, so the hosts can react to real words. */
+  quote?: string;
   category?: TopicCategory;
   commentId?: string;
 };
@@ -31,7 +33,7 @@ export type Topic = TopicDraft & {
 /** What the dialogue writer receives. */
 export type TopicBrief = Pick<
   TopicDraft,
-  'title' | 'brief' | 'angle' | 'source' | 'handle' | 'url' | 'who'
+  'title' | 'brief' | 'angle' | 'source' | 'handle' | 'url' | 'who' | 'quote'
 >;
 /** Provenance stamped on the first line of a batch; small enough for the signed job token. */
 export type TopicTag = Pick<TopicDraft, 'title' | 'source' | 'handle' | 'url' | 'who'>;
@@ -90,8 +92,8 @@ export const topicConfig = {
   // The wire turns over on airtime, not batch count: a fresh subject every ~35 seconds.
   // A batch cannot be split, so this alternates one and two batches to average out.
   rotateSeconds: 35,
-  // One news topic for every crypto take; the crypto lane wins whenever it has stock.
-  lane: { newsEvery: 2 },
+  // Two influencer takes for every news topic: crypto is the show, news is filler.
+  lane: { newsEvery: 3 },
   minQueued: 3,
   staleMs: 4 * 60000,
   minGapMs: 60000,
@@ -110,6 +112,7 @@ export const topicConfig = {
     angle: 200,
     handle: 32,
     who: 40,
+    quote: 180,
     url: 300,
     comment: 280,
     comments: 50,
@@ -213,9 +216,10 @@ export function sanitizeDraft(
     : undefined;
   const commentId = text(item.commentId, 64) || undefined;
   const who = text(item.who, cfg.limits.who).replace(/^@/, '') || undefined;
+  const quote = text(item.quote, cfg.limits.quote) || undefined;
   if (source === 'x') {
     // A take from a named person is the one place the show can do real damage.
-    const all = `${title} ${brief} ${angle}`;
+    const all = `${title} ${brief} ${angle} ${quote ?? ''}`;
     if (ACCUSATION.test(all) || PROMOTION.test(all)) return null;
     if (handle && !HANDLE.test(handle)) return null;
   }
@@ -228,6 +232,7 @@ export function sanitizeDraft(
     ...(httpsUrl(item.url, cfg.limits.url) ? { url: item.url as string } : {}),
     ...(handle ? { handle } : {}),
     ...(who && who.toLowerCase() !== handle?.slice(1).toLowerCase() ? { who } : {}),
+    ...(quote ? { quote } : {}),
     ...(category ? { category } : {}),
     ...(commentId ? { commentId } : {}),
   };
@@ -247,6 +252,7 @@ export function briefOf(topic: TopicDraft): TopicBrief {
     source: topic.source,
     ...(topic.handle ? { handle: topic.handle } : {}),
     ...(topic.who ? { who: topic.who } : {}),
+    ...(topic.quote ? { quote: topic.quote } : {}),
     ...(topic.url ? { url: topic.url } : {}),
   };
 }

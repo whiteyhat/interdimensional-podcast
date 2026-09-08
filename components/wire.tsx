@@ -7,7 +7,7 @@ const EMPTY: Record<FeedState['status'], string> = {
   idle: 'The news desk is standing by.',
   searching: 'Reading X and the news…',
   live: 'Nothing new on the wire yet.',
-  error: 'The crypto desk is down. The show keeps going on news and your prompts.',
+  error: 'The crypto desk is paused. The show keeps going on news and your prompts.',
 };
 export function Wire({
   topics,

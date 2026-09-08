@@ -172,3 +172,22 @@ test('a company quoting itself is not corroboration', () => {
   };
   assert.equal(G.acceptable(item, CAPTURED), false, 'press releases and bare domains do not count');
 });
+
+test('search feeds get their corroboration rebuilt from matching headlines', async () => {
+  const search = await readFile('tests/fixtures/gnews-crypto-search.xml', 'utf8');
+  const raw = G.parseRss(search);
+  assert.ok(raw.length > 20, 'the fixture is a full search feed');
+  assert.ok(
+    raw.every((i) => i.cluster.length <= 1),
+    'search feeds ship no related-coverage block',
+  );
+  const clustered = G.clusterItems(raw);
+  const corroborated = clustered.filter((i) => G.publishers(i).size >= 2);
+  assert.ok(
+    corroborated.length > 0,
+    'stories carried by several outlets are found by headline matching',
+  );
+  const drafts = G.toDrafts(clustered, Date.parse('2026-09-08T16:00:00Z'), 'crypto', 2);
+  assert.ok(drafts.length > 0, 'the crypto lane produces topics');
+  assert.ok(drafts.every((d) => d.category === 'crypto'));
+});

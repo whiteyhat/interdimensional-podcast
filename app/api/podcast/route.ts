@@ -88,7 +88,7 @@ function writerRequest(cue?: string, topic?: TopicBrief) {
   if (cue) return `Audience request: ${cue}`;
   if (topic)
     return topic.source === 'x'
-      ? `LIVE TAKE: ${topic.who || topic.handle || 'someone on the timeline'} posted this on X.\nTHE TAKE: ${topic.title}\nWHAT'S HAPPENING: ${topic.brief}\nANGLE: ${topic.angle}\nPepe brings it up and names them; GigaChad answers the take without citing anyone.`
+      ? `LIVE TAKE: ${topic.who || topic.handle || 'someone on the timeline'} posted this on X.\nTHE TAKE: ${topic.title}${topic.quote ? `\nTHEIR EXACT WORDS: "${topic.quote}"` : ''}\nWHAT'S HAPPENING: ${topic.brief}\nANGLE: ${topic.angle}\nPepe brings it up and names them, and if THEIR EXACT WORDS is present he quotes a few of those words out loud rather than summarising; GigaChad answers the take without citing anyone.`
       : `LIVE TOPIC: ${topic.title}\nWHAT'S HAPPENING: ${topic.brief}\nANGLE: ${topic.angle}\nSOURCE: ${sourceLabel(topic)}`;
   return 'Audience request: None. Keep riffing on the current subject with a fresh concrete angle.';
 }

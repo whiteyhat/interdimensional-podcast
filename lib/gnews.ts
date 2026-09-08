@@ -6,7 +6,7 @@
 //  - A lone headline is not safe to broadcast. The same story ran as both "Bitcoin Network Says
 //    $320 Million Stolen" and "Whitehats return 3,400 BTC". Only a story several outlets carry
 //    goes on air, and the brief says who is reporting it.
-import { sanitizeDraft, type TopicCategory, type TopicDraft } from './topics';
+import { sanitizeDraft, similar, type TopicCategory, type TopicDraft } from './topics';
 export type ClusterEntry = { title: string; publisher: string };
 export type RssItem = {
   title: string;
@@ -21,13 +21,23 @@ export const gnewsConfig = {
   scoreCap: 55, // stays under the crypto lane so influencer takes win a tie
   perFeed: 12,
 } as const;
-export const feeds: { id: string; topic: string; category: TopicCategory }[] = [
+export type Feed = {
+  id: string;
+  category: TopicCategory;
+  topic?: string;
+  query?: string;
+};
+export const feeds: Feed[] = [
+  { id: 'crypto', query: 'crypto OR bitcoin OR ethereum OR solana when:1d', category: 'crypto' },
+  { id: 'memecoin', query: 'memecoin OR "meme coin" OR dogecoin OR "pump.fun" when:2d', category: 'crypto' },
   { id: 'tech', topic: 'TECHNOLOGY', category: 'tech' },
   { id: 'business', topic: 'BUSINESS', category: 'macro' },
-  { id: 'world', topic: 'WORLD', category: 'macro' },
 ];
-export const feedUrl = (topic: string) =>
-  `https://news.google.com/rss/headlines/section/topic/${topic}?hl=en-US&gl=US&ceid=US:en`;
+const BASE = 'hl=en-US&gl=US&ceid=US:en';
+export const feedUrl = (feed: Feed) =>
+  feed.query
+    ? `https://news.google.com/rss/search?q=${encodeURIComponent(feed.query)}&${BASE}`
+    : `https://news.google.com/rss/headlines/section/topic/${feed.topic}?${BASE}`;
 
 const ENTITIES: Record<string, string> = {
   amp: '&',
@@ -99,6 +109,32 @@ function parseCluster(description: string): ClusterEntry[] {
   return entries;
 }
 
+/**
+ * Search feeds carry no related-coverage block, so corroboration has to be rebuilt by
+ * matching headlines across publishers. Without this every search item looks like a
+ * single-source story and is rejected, which silently emptied the crypto lane.
+ */
+export function clusterItems(items: RssItem[]): RssItem[] {
+  const used = new Set<number>();
+  const grouped: RssItem[] = [];
+  for (let i = 0; i < items.length; i++) {
+    if (used.has(i)) continue;
+    used.add(i);
+    const group = [items[i]];
+    for (let j = i + 1; j < items.length; j++) {
+      if (used.has(j)) continue;
+      if (!similar(items[i].title, items[j].title)) continue;
+      used.add(j);
+      group.push(items[j]);
+    }
+    grouped.push({
+      ...items[i],
+      cluster: group.map((g) => ({ title: g.title, publisher: g.publisher })),
+    });
+  }
+  return grouped;
+}
+
 const JUNK = [
   /\bprice (prediction|today|analysis)\b/i,
   /\b(could|will) (hit|reach|soar|explode)\b/i,
@@ -140,7 +176,11 @@ export function publishers(item: RssItem): Set<string> {
     ),
   );
 }
-export function acceptable(item: RssItem, nowMs: number): boolean {
+export function acceptable(
+  item: RssItem,
+  nowMs: number,
+  minCluster: number = gnewsConfig.minCluster,
+): boolean {
   const ageHours = (nowMs - item.at) / 3600000;
   if (!(ageHours >= -1 && ageHours <= gnewsConfig.maxAgeHours)) return false;
   if (item.title.length < 25 || item.title.length > 160) return false;
@@ -151,7 +191,7 @@ export function acceptable(item: RssItem, nowMs: number): boolean {
   if (DENY.some((d) => item.publisher.startsWith(d))) return false;
   // Non-Latin headlines read badly on air and the writer cannot use them.
   if ((item.title.match(/[\u2001-\uffff]/g) || []).length > 4) return false;
-  return publishers(item).size >= gnewsConfig.minCluster;
+  return publishers(item).size >= minCluster;
 }
 /**
  * A brief the hosts can use without inventing anything: who reported it, what they said,
@@ -177,11 +217,12 @@ export function toDrafts(
   items: RssItem[],
   nowMs: number,
   category: TopicCategory,
+  minCluster: number = gnewsConfig.minCluster,
 ): TopicDraft[] {
   const seen = new Set<string>();
   const drafts: TopicDraft[] = [];
   for (const item of items) {
-    if (!acceptable(item, nowMs)) continue;
+    if (!acceptable(item, nowMs, minCluster)) continue;
     const key = item.title.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -191,6 +232,7 @@ export function toDrafts(
       gnewsConfig.scoreCap,
       Math.round(
         20 +
+          (category === 'crypto' ? 12 : 0) +
           Math.min(publishers(item).size, 6) * 5 +
           Math.max(0, gnewsConfig.maxAgeHours - ageHours),
       ),

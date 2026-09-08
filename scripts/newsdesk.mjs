@@ -216,6 +216,35 @@ const server = createServer(async (req, res) => {
     } catch {
       return json(res, 502, { error: 'The Grok CLI did not return JSON', stderrTail: tail, ms });
     }
+    // The CLI reports API failures as a JSON error object on stdout, so a readable
+    // envelope is not the same as a successful call. Quota and auth must be told
+    // apart from a transient blip: only the transient kind is worth retrying.
+    if (envelope.type === 'error' || envelope.error) {
+      const detail = String(envelope.message || envelope.error || 'unknown');
+      if (/402|payment required|balance exhausted|out of credit|quota/i.test(detail))
+        return json(res, 503, {
+          error:
+            'Grok Build balance is exhausted, so the crypto desk is paused. Top up your xAI plan or wait for the weekly reset.',
+          reason: 'no-credit',
+          detail: detail.slice(0, 300),
+          ms,
+        });
+      if (/401|403|unauthor|not signed in|login/i.test(detail))
+        return json(res, 503, {
+          error: 'Grok login expired. Run: grok login',
+          reason: 'not-authed',
+          detail: detail.slice(0, 300),
+          ms,
+        });
+      return json(res, 502, { error: `The Grok CLI failed: ${detail.slice(0, 200)}`, ms });
+    }
+    if (!String(envelope.text ?? '').trim())
+      return json(res, 502, {
+        error: 'The Grok CLI returned an empty answer',
+        stopReason: envelope.stopReason,
+        stderrTail: tail,
+        ms,
+      });
     const totalCostUsd = envelope.total_cost_usd ?? 0;
     const today2 = await recordSpend(totalCostUsd);
     console.log(
