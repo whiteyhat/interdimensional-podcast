@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 import { ArrowUpRight } from 'lucide-react';
 import type { CoinSnapshot } from '@/lib/coin';
 import { formatCount, formatPct, formatPrice, formatUsd, moveClass } from '@/lib/format';
@@ -103,6 +104,9 @@ export function CoinCard({
           {error && <p className="coin-note">CHART PAUSED · SHOWING THE LAST READING</p>}
         </>
       )}
+      <div className="coin-foot">
+        <Link className="quiet" href="/allocations">Project wallets &amp; allocations <ArrowUpRight size={12} /></Link>
+      </div>
     </section>
   );
 }

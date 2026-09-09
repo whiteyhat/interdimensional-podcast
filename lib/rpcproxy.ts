@@ -18,6 +18,8 @@ export const rpcProxyLimits = {
  * method in the logs rather than as "payments fail for some people".
  */
 const allowed = new Set([
+  'getGenesisHash',
+  'isBlockhashValid',
   'getLatestBlockhash',
   'getFeeForMessage',
   'sendTransaction',

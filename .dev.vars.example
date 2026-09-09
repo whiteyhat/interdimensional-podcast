@@ -12,6 +12,8 @@ COIN_MINT=
 # Name and ticker the hosts say on air and the site prints.
 COIN_NAME=Frogclench
 COIN_TICKER=FROGCLENCH
+# Operator-side only: scripts/launch.mjs uses Pinata for image and metadata uploads.
+PINATA_JWT=
 # Wallet that receives every five-dollar payment. It must already hold a token account
 # for the coin (buy a dust amount once) or quotes answer 409 TREASURY.
 TREASURY_WALLET=

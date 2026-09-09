@@ -74,6 +74,10 @@ Test the flow on devnet first: point `SOLANA_RPC_URL` and `CLIENT_RPC_URL` at de
 
 ## Going live
 
+For a scripted pump.fun launch with wallet approval and public allocation snapshots, follow
+[the launch-tool runbook](docs/PUMP_LAUNCH.md). Start with `npm run launch -- init`; it leaves
+addresses and spending amounts blank for you to configure.
+
 The studio runs on your machine, so it can use the Grok desk and OBS. The public site runs on Cloudflare.
 
 1. **Coin.** Launch on pump.fun, then put the mint address in `COIN_MINT` and the wallet that should receive payments in `TREASURY_WALLET`, locally and on the deployed site. Buy a dust amount of the coin from the treasury wallet once so it has a token account; the card stays closed until it does.

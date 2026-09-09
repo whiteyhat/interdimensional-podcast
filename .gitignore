@@ -50,6 +50,9 @@ work/
 !/public/logo.png
 !/public/share-card.png
 !/public/favicon.svg
+!/public/launch/
+/public/launch/*
+!/public/launch/report.json
 !.dev.vars.example
 .playwright-mcp/
 

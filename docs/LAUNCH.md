@@ -145,6 +145,11 @@ any quote while the studio heartbeat is more than 60s old.
 
 ## Launch day
 
+The optional [launch tool](PUMP_LAUNCH.md) prepares metadata and a wallet-approved mint
+transaction, publishes declared project wallets, and verifies the site handoff. It can create
+the treasury token account directly, so the dust purchase in the manual flow below is unnecessary
+when using `prepare-treasury`.
+
 1. Create the coin on pump.fun.
 2. Buy a dust amount into the treasury wallet — it needs a token account for the mint or every
    quote answers 409 `TREASURY`.
