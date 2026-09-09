@@ -41,7 +41,10 @@ Secrets, once each (`npx wrangler secret put NAME --config dist/server/wrangler.
 - `STUDIO_TOKEN` — 32 random bytes, the same value in the studio's `.dev.vars`
 - `STREAM_EMBED_URL` — printed by `node scripts/stream.mjs create`
 - `X_LIVE_URL` — the public link to the X broadcast
-- `SOLANA_RPC_URL`, `CLIENT_RPC_URL` — a real provider; the public mainnet RPC rate-limits
+- `SOLANA_RPC_URL`, `CLIENT_RPC_URL` — a real provider. **Not the public Solana RPC:** both
+  `api.mainnet-beta.solana.com` and `api.devnet.solana.com` return 403 Forbidden to Cloudflare
+  Workers, which silently turns into "treasury not ready" and no price on the card. Confirmed
+  against the deployed worker on both clusters. Helius is what we use.
 - `COIN_MINT`, `TREASURY_WALLET` — **only once the coin exists**
 
 Never set on the deployed site: `FAL_KEY`, any `NEWSDESK_*`, `INTERACT_ORIGIN`, `CHART_MINT`.
@@ -96,9 +99,12 @@ rate-limited, then run it again — the seeds are saved, so the address does not
 Staging build and deploy:
 
 ```sh
-D1_DATABASE_ID=6c07b691-cdbe-4681-82a8-4e14a7c85bcb npm run build
-npx wrangler deploy --config dist/server/wrangler.json --name interdimensional-podcast-staging
+npm run deploy:staging
 ```
+
+That script rebuilds for staging, deploys, then **rebuilds for production again**. The database
+id is baked in at build time, so leaving `dist/` on the staging build is how you accidentally
+point production at the staging database. The trailing rebuild is what stops that.
 
 Staging secrets: the devnet `COIN_MINT` and `TREASURY_WALLET`, `SOLANA_RPC_URL` **and**
 `CLIENT_RPC_URL` both on devnet, and `PRICE_FIXED=1000`.
