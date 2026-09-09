@@ -4,3 +4,33 @@ NEWSDESK_URL=http://127.0.0.1:8791
 NEWSDESK_TOKEN=local
 # Comma-separated X handles to watch; defaults to the built-in memecoin/Solana roster.
 NEWSDESK_X_HANDLES=
+
+# ---- pump.fun launch. Leave COIN_MINT and TREASURY_WALLET empty until the coin exists:
+# the site then shows "Launching soon" and refuses quotes with 409 NOT_LAUNCHED.
+# The pump.fun mint address of the show's coin.
+COIN_MINT=
+# Name and ticker the hosts say on air and the site prints.
+COIN_NAME=Frogclench
+COIN_TICKER=FROGCLENCH
+# Wallet that receives every five-dollar payment. It must already hold a token account
+# for the coin (buy a dust amount once) or quotes answer 409 TREASURY.
+TREASURY_WALLET=
+# Server-side RPC for quotes and payment checks (a Helius free-tier URL is recommended).
+SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
+# RPC the viewer's browser broadcasts through; defaults to the public mainnet RPC.
+CLIENT_RPC_URL=
+# Shared secret between the studio and the deployed site for pull/aired. Required in
+# production; locally, token-less pulls are allowed only from localhost.
+STUDIO_TOKEN=
+# Studio only: the deployed site, e.g. https://pepe-chad.example.workers.dev. When set, the
+# local worker proxies pull/aired there with STUDIO_TOKEN instead of using its own database.
+INTERACT_ORIGIN=
+# Dollars one request costs.
+INTERACT_USD=5
+# Cloudflare Stream Live iframe URL for the public site; empty shows the watch buttons.
+STREAM_EMBED_URL=
+# Link to the X live broadcast.
+X_LIVE_URL=
+# Devnet only: tokens per dollar. Bypasses the Jupiter and pump.fun price feeds.
+PRICE_FIXED=
+# Build time only (.env.production, not here): D1_DATABASE_ID from `wrangler d1 create`.

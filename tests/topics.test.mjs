@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { build } from './build.mjs';
-await build(['topics','show','chat']);
+await build(['topics','gestures','video-frames','show','chat']);
 const T = await import('../work/tests/topics.js');
 const { lintVoices, parseLines } = await import('../work/tests/show.js');
 const { parseChatLines } = await import('../work/tests/chat.js');
@@ -49,7 +49,7 @@ test('a used title is not re-queued later', () => {
   assert.equal(q.topics.filter((t) => t.status === 'queued').length, 0);
 });
 
-test('selection prefers pinned, then chat, and respects both cadences', () => {
+test('selection prefers chat, then the chart, and respects every cadence', () => {
   const base = T.enqueue(
     T.createQueue(),
     [draft('A feed story', { score: 90 }), draft('A chat question', { source: 'chat', score: 10 })],
@@ -74,12 +74,34 @@ test('selection prefers pinned, then chat, and respects both cadences', () => {
     topics: base.topics.filter((t) => t.source !== 'chat'),
   };
   assert.equal(T.pickTopic(midRotation), undefined, 'the feed waits out its rotation');
-  const pinned = base.topics.find((t) => t.source === 'x');
-  assert.equal(
-    T.pickTopic(T.promote(midRotation, pinned.id)).id,
-    pinned.id,
-    'a pinned topic ignores the rotation',
+  const withCoin = T.enqueue(
+    midRotation,
+    [draft('The chart is up twelve percent', { source: 'coin', score: 60 })],
+    1,
+    T.topicConfig,
+    id,
   );
+  const coin = T.pickTopic(withCoin);
+  assert.equal(coin.source, 'coin', 'the chart interrupts the rotation like chat');
+  const afterCoin = T.enqueue(
+    T.batchWritten(T.markTopic(withCoin, coin.id, 'buffered', 1), coin),
+    [draft('The chart is down nine percent', { source: 'coin', score: 60 })],
+    2,
+    T.topicConfig,
+    id,
+  );
+  assert.equal(
+    T.pickTopic({ ...afterCoin, feedSeconds: 60 }).source,
+    'x',
+    'the chart then waits its cadence',
+  );
+  assert.equal(
+    T.pickTopic({ ...afterCoin, feedSeconds: 60, batches: afterCoin.batches + T.topicConfig.cadence.coin }).source,
+    'coin',
+  );
+  const superseded = T.supersedeLane(afterCoin, 'coin');
+  assert.equal(superseded.topics.filter((t) => t.source === 'coin' && t.status === 'queued').length, 0);
+  assert.equal(superseded.topics.filter((t) => t.source === 'coin').length, 1, 'the buffered one is untouched');
 });
 
 test('research gates on queue depth, staleness, gap and the hourly cap', () => {
@@ -138,12 +160,24 @@ test('airing a shot retires the previous topic and remembers its title', () => {
   assert.ok(T.avoidTitles(q).includes('Second story'));
 });
 
-test('queued feed topics expire but pinned ones stay', () => {
-  let q = T.enqueue(T.createQueue(), [draft('Aging story'), draft('Kept story')], 0, T.topicConfig, id);
-  q = T.promote(q, q.topics[1].id);
+test('queued feed topics expire, chart events age fastest, and a paid request never goes stale', () => {
+  let q = T.enqueue(
+    T.createQueue(),
+    [
+      draft('Aging story'),
+      draft('Bought story', { source: 'audience' }),
+      draft('Chart is up', { source: 'coin' }),
+    ],
+    0,
+    T.topicConfig,
+    id,
+  );
+  const soon = T.expire(q, T.topicConfig.maxAge.coin + 1);
+  assert.equal(soon.topics[2].status, 'dropped', 'a stale chart event is worthless');
+  assert.equal(soon.topics[0].status, 'queued');
   q = T.expire(q, T.topicConfig.maxAge.web + 1);
   assert.equal(q.topics[0].status, 'dropped');
-  assert.equal(q.topics[1].status, 'queued');
+  assert.equal(q.topics[1].status, 'queued', 'a lane with no max age is kept');
 });
 
 test('comment prefilter removes spam, stubs and duplicates', () => {
@@ -199,6 +233,7 @@ test('source labels name the provenance shown on stage', () => {
     'from reuters.com',
   );
   assert.equal(T.sourceLabel({ title: 't', source: 'chat', handle: 'deb' }), 'from live chat: deb');
+  assert.equal(T.sourceLabel({ title: 't', source: 'coin' }), 'from the chart');
 });
 
 test('a live topic is stamped on the first line only', () => {
@@ -308,6 +343,8 @@ test('chat comments are ranked locally, with spam and repeats dropped', () => {
     'a repeat of a recent topic is dropped',
   );
   assert.equal(new Set(topics.map((t) => t.title)).size, topics.length);
+  assert.equal(topics[0].who, topics[0].handle, 'the writer gets the commenter by name');
+  assert.equal(topics[0].quote, topics[0].title, 'and their exact words');
 });
 
 test('topics rotate on airtime, not on batch count', () => {

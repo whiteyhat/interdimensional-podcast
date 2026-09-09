@@ -1,0 +1,109 @@
+/* Broadcast mode: /studio?broadcast=1 renders the stage alone, framed as a 16:9 picture for an
+   OBS browser source. Same motion personality as the studio, from the shared tokens in globals.css:
+   --ease-cut with --dur-press for feedback and --dur-list for cards; exits get their own faster
+   ease inline, so the strip leaves quicker than it arrives. */
+html.broadcast-page,
+html.broadcast-page body {
+  background: #000;
+  overflow: hidden;
+}
+.broadcast-mode {
+  max-width: none;
+  padding: 0;
+  margin: 0;
+}
+.broadcast-mode header,
+.broadcast-mode .topline,
+.broadcast-mode .playbar,
+.broadcast-mode aside,
+.broadcast-mode footer,
+.broadcast-mode #studio-details {
+  display: none;
+}
+.broadcast-mode .studio {
+  display: block;
+}
+/* The picture: the largest 16:9 box the viewport holds, centred, no frame. */
+.broadcast-mode .stage {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(100vw, 177.78vh);
+  height: min(100vh, 56.25vw);
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+  z-index: 10;
+}
+.broadcast-mode .coin-bug {
+  top: 18px;
+}
+/* Alerts shrink to a corner toast under the camera label so the stream never loses the picture. */
+.broadcast-mode .notice {
+  position: fixed;
+  top: 56px;
+  left: 18px;
+  z-index: 20;
+  margin: 0;
+  max-width: 360px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  box-shadow: 0 10px 30px #0008;
+  animation: bug-in var(--dur-list) var(--ease-cut) both;
+}
+.broadcast-mode .notice .quiet {
+  display: flex;
+  margin: 8px 0 0;
+  padding: 6px 9px;
+  font-size: 11px;
+}
+/* Operator strip: invisible until the pointer (or focus) is on the stage, gone faster than it came. */
+.broadcast-controls {
+  position: absolute;
+  right: 18px;
+  bottom: 60px;
+  z-index: 6;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+  transition:
+    opacity 100ms cubic-bezier(0.3, 0, 1, 1),
+    transform 100ms cubic-bezier(0.3, 0, 1, 1);
+}
+.broadcast-mode .stage:hover .broadcast-controls,
+.broadcast-mode .stage:focus-within .broadcast-controls {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  transition:
+    opacity var(--dur-press) var(--ease-cut),
+    transform var(--dur-press) var(--ease-cut);
+}
+.broadcast-controls .quiet {
+  transition:
+    background-color var(--dur-press) var(--ease-cut),
+    transform var(--dur-press) var(--ease-cut);
+}
+.broadcast-controls .quiet:hover {
+  background: #1f2c1b;
+}
+.broadcast-controls .quiet:active {
+  transform: translateY(1px) scale(0.98);
+}
+@media (prefers-reduced-motion: reduce) {
+  .broadcast-mode .notice {
+    animation-duration: 1ms;
+  }
+  .broadcast-controls,
+  .broadcast-mode .stage:hover .broadcast-controls,
+  .broadcast-mode .stage:focus-within .broadcast-controls {
+    transform: none;
+    transition-duration: 1ms;
+  }
+  .broadcast-controls .quiet:active {
+    transform: none;
+  }
+}

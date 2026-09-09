@@ -1,6 +1,6 @@
 // Topic queue and feed policy. Pure: no DOM, no network, no timers, no clock reads.
 // The engine and the server both use these helpers so the browser and the API agree.
-export type TopicSource = 'audience' | 'chat' | 'x' | 'web';
+export type TopicSource = 'audience' | 'chat' | 'coin' | 'x' | 'web';
 export type TopicStatus =
   | 'queued'
   | 'writing'
@@ -27,7 +27,6 @@ export type Topic = TopicDraft & {
   id: string;
   at: number;
   status: TopicStatus;
-  pinned: boolean;
   shot?: number;
 };
 /** What the dialogue writer receives. */
@@ -73,6 +72,7 @@ export type TopicQueueState = {
   feedSeconds: number;
   lastTopicBatch: number;
   lastChatBatch: number;
+  lastCoinBatch: number;
   feed: FeedState;
   recentTitles: string[];
 };
@@ -88,7 +88,8 @@ export type RankResult = { topics: TopicDraft[]; cost?: CostEstimate };
 
 export const topicConfig = {
   // Write batches between chat topics. Four spoken turns per batch, roughly 24 seconds.
-  cadence: { chat: 2 },
+  // The chart gets a slot every third batch at most: the coin is a bit, not the show.
+  cadence: { chat: 2, coin: 3 },
   // The wire turns over on airtime, not batch count: a fresh subject every ~35 seconds.
   // A batch cannot be split, so this alternates one and two batches to average out.
   rotateSeconds: 35,
@@ -103,7 +104,10 @@ export const topicConfig = {
   // Fast rotation burns roughly a hundred topics an hour, so the wire is kept deep.
   maxQueued: 24,
   // A crypto take goes stale fast, and a short window self-heals a deleted post.
-  maxAge: { x: 15 * 60000, web: 45 * 60000 },
+  // A chat comment answered ten minutes late greets someone who has left the room.
+  maxAge: { x: 15 * 60000, web: 45 * 60000, coin: 5 * 60000, chat: 4 * 60000 },
+  /** Queued chat comments kept at once; a busy room must not push the other lanes off the wire. */
+  chatDepth: 4,
   keepUsed: 12,
   recentTitles: 20,
   limits: {
@@ -122,7 +126,7 @@ export const topicConfig = {
 } as const;
 export type TopicConfig = typeof topicConfig;
 
-const SOURCES: TopicSource[] = ['audience', 'chat', 'x', 'web'];
+const SOURCES: TopicSource[] = ['audience', 'chat', 'coin', 'x', 'web'];
 const CATEGORIES: TopicCategory[] = ['crypto', 'tech', 'macro', 'chat'];
 const FEED_SOURCES: TopicSource[] = ['x', 'web'];
 const PENDING: TopicStatus[] = ['queued', 'writing', 'buffered'];
@@ -147,6 +151,7 @@ export const createQueue = (): TopicQueueState => ({
   feedSeconds: topicConfig.rotateSeconds,
   lastTopicBatch: -Infinity,
   lastChatBatch: -Infinity,
+  lastCoinBatch: -Infinity,
   feed: createFeed(),
   recentTitles: [],
 });
@@ -281,6 +286,7 @@ export function sourceLabel(topic: TopicTag) {
   }
   if (topic.source === 'chat')
     return topic.handle ? `from live chat: ${topic.handle}` : 'from live chat';
+  if (topic.source === 'coin') return 'from the chart';
   return 'audience request';
 }
 
@@ -295,12 +301,10 @@ export function expire(
   now: number,
   cfg: TopicConfig = topicConfig,
 ): TopicQueueState {
+  // A lane with no entry in the table (an audience request) never goes stale on its own.
+  const maxAge: Partial<Record<TopicSource, number>> = cfg.maxAge;
   const stale = state.topics.filter(
-    (t) =>
-      t.status === 'queued' &&
-      !t.pinned &&
-      FEED_SOURCES.includes(t.source) &&
-      now - t.at > (t.source === 'x' ? cfg.maxAge.x : cfg.maxAge.web),
+    (t) => t.status === 'queued' && now - t.at > (maxAge[t.source] ?? Infinity),
   );
   if (!stale.length) return state;
   return {
@@ -326,12 +330,12 @@ export function enqueue(
       ...added.map((t) => t.title),
     ];
     if (seen.some((title) => similar(title, draft.title))) continue;
-    added.push({ ...draft, id: id(), at: now, status: 'queued', pinned: false });
+    added.push({ ...draft, id: id(), at: now, status: 'queued' });
   }
   if (!added.length) return next;
   let topics = [...next.topics, ...added];
-  // Keep the queue small: drop the coldest unused topics, never a pinned one.
-  const queued = topics.filter((t) => t.status === 'queued' && !t.pinned);
+  // Keep the queue small: drop the coldest unused topics.
+  const queued = topics.filter((t) => t.status === 'queued');
   if (queued.length > cfg.maxQueued) {
     // Cheap news goes first, then the coldest: an influencer take is never evicted by filler.
     const evict = [...queued]
@@ -355,13 +359,20 @@ function trim(topics: Topic[], cfg: TopicConfig) {
   const drop = done.slice(0, done.length - cfg.keepUsed);
   return topics.filter((t) => !drop.includes(t));
 }
+// Which lane the wire reaches for first; ties fall back to score, then to freshness.
+const RANK: Record<TopicSource, number> = {
+  chat: 0,
+  coin: 1,
+  x: 2,
+  web: 3,
+  audience: 3,
+};
 export function orderTopics(state: TopicQueueState): Topic[] {
-  const rank = (t: Topic) =>
-    t.pinned ? 0 : t.source === 'chat' ? 1 : t.source === 'x' ? 2 : 3;
   return state.topics
     .filter((t) => t.status === 'queued')
     .sort(
-      (a, b) => rank(a) - rank(b) || b.score - a.score || b.at - a.at,
+      (a, b) =>
+        RANK[a.source] - RANK[b.source] || b.score - a.score || b.at - a.at,
     );
 }
 export function pickTopic(
@@ -369,11 +380,13 @@ export function pickTopic(
   cfg: TopicConfig = topicConfig,
 ): Topic | undefined {
   const ordered = orderTopics(state);
-  const pinned = ordered.find((t) => t.pinned);
-  if (pinned) return pinned;
   const chat = ordered.find((t) => t.source === 'chat');
   if (chat && state.batches - state.lastChatBatch >= cfg.cadence.chat)
     return chat;
+  // The chart interrupts the rotation like chat does, on its own slower cadence.
+  const coin = ordered.find((t) => t.source === 'coin');
+  if (coin && state.batches - state.lastCoinBatch >= cfg.cadence.coin)
+    return coin;
   if (state.feedSeconds < cfg.rotateSeconds) return undefined;
   const take = ordered.find((t) => t.source === 'x');
   const news = ordered.find((t) => t.source === 'web');
@@ -396,12 +409,7 @@ export function markTopic(
     ...state,
     topics: state.topics.map((t) =>
       t.id === id
-        ? {
-            ...t,
-            status,
-            ...(shot === undefined ? {} : { shot }),
-            ...(done ? { pinned: false } : {}),
-          }
+        ? { ...t, status, ...(shot === undefined ? {} : { shot }) }
         : t,
     ),
     recentTitles: done
@@ -432,6 +440,8 @@ export function batchWritten(
         : state.lastTopicBatch,
     lastChatBatch:
       topic && topic.source === 'chat' ? state.batches : state.lastChatBatch,
+    lastCoinBatch:
+      topic && topic.source === 'coin' ? state.batches : state.lastCoinBatch,
   };
 }
 export function markOnAir(
@@ -454,16 +464,14 @@ export function markOnAir(
   });
   return { ...state, topics: trim(topics, cfg), recentTitles: titles };
 }
-export function promote(state: TopicQueueState, id: string): TopicQueueState {
-  if (!state.topics.some((t) => t.id === id && t.status === 'queued'))
-    return state;
-  return {
-    ...state,
-    topics: state.topics.map((t) => ({ ...t, pinned: t.id === id })),
-  };
-}
-export function dismiss(state: TopicQueueState, id: string): TopicQueueState {
-  return markTopic(state, id, 'dropped');
+/** Replace a lane's queued topics outright: a fresh chart event makes the older one stale. */
+export function supersedeLane(
+  state: TopicQueueState,
+  source: TopicSource,
+): TopicQueueState {
+  const gone = (t: Topic) => t.status === 'queued' && t.source === source;
+  if (!state.topics.some(gone)) return state;
+  return { ...state, topics: state.topics.filter((t) => !gone(t)) };
 }
 /** Queued, unused topics in one lane. The lanes refill independently. */
 export function laneDepth(state: TopicQueueState, source: TopicSource) {
@@ -570,6 +578,7 @@ export function resetRuntime(state: TopicQueueState): TopicQueueState {
     feedSeconds: topicConfig.rotateSeconds,
     lastTopicBatch: -Infinity,
     lastChatBatch: -Infinity,
+    lastCoinBatch: -Infinity,
     topics: state.topics.map((t) =>
       t.status === 'writing' ? { ...t, status: 'queued' } : t,
     ),
@@ -762,6 +771,8 @@ export function rankComments(
         angle: 'Answer the viewer directly, in character.',
         score,
         handle: comment.author,
+        who: comment.author,
+        quote: comment.text.trim(),
         category: 'chat',
         commentId: comment.id,
       },

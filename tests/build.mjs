@@ -2,13 +2,18 @@
 // depending on a build step. Shared here because the import rewrite is easy to get
 // wrong in one file and not the others.
 import ts from 'typescript';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 
-/** Transpile the named lib modules into work/tests and return their import paths. */
+/**
+ * Transpile the named modules into work/tests. A bare name is a lib module; a name with
+ * a slash (`hooks/use-coin`) is a path from the repo root. Everything lands flat, so both
+ * relative and `@/`-aliased imports rewrite to a sibling file.
+ */
 export async function build(names) {
   await mkdir('work/tests', { recursive: true });
   for (const name of names) {
-    const source = await readFile(`lib/${name}.ts`, 'utf8');
+    const path = name.includes('/') ? name : `lib/${name}`;
+    const source = await readFile(`${path}.ts`, 'utf8');
     const js = ts
       .transpileModule(source, {
         compilerOptions: {
@@ -16,7 +21,12 @@ export async function build(names) {
           module: ts.ModuleKind.ES2022,
         },
       })
-      .outputText.replace(/from '\.\/(\w+)'/g, "from './$1.js'");
-    await writeFile(`work/tests/${name}.js`, js);
+      .outputText.replace(/from '(?:\.\/|@\/\w+\/)([\w-]+)'/g, "from './$1.js'");
+    // Test files run in parallel and build the same modules, so the last step is a rename:
+    // a sibling process never imports a half-written file.
+    const out = `work/tests/${path.split('/').pop()}.js`;
+    const temp = `${out}.${process.pid}.tmp`;
+    await writeFile(temp, js);
+    await rename(temp, out);
   }
 }

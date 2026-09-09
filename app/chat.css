@@ -1,0 +1,105 @@
+/* The pump.fun chat panel in the studio aside. Same motion personality as the rest of the
+   studio, from the shared motion tokens in globals.css: --ease-cut with --dur-press / --dur-list.
+   Rows slide in from the right (translateX 14px -> 0 + opacity, five-step 40ms stagger);
+   the reconnect note drops in from above; the wire badge pops with a small scale. */
+.chat-panel {
+  border-top: 1px solid #35412b;
+  margin-top: 22px;
+  padding-top: 18px;
+}
+.chat-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.chat-head .eyebrow {
+  flex: 1;
+  margin: 0;
+}
+/* The status pill is the shared .feed-pill; its states live in globals.css. */
+.chat-viewers {
+  font: 10px monospace;
+  letter-spacing: 0.08em;
+  color: #f1b48a;
+  white-space: nowrap;
+}
+.chat-note {
+  display: block;
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: #e1ac83;
+  animation: chat-note-in var(--dur-list) var(--ease-cut) both;
+}
+@keyframes chat-note-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+.chat-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0 4px 0 0;
+  max-height: 260px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.chat-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid #2b3524;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #a6b590;
+  animation: chat-row-in var(--dur-list) var(--ease-cut) both;
+}
+.chat-row:last-child {
+  border-bottom: 0;
+}
+@keyframes chat-row-in {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+}
+.chat-author {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px monospace;
+  letter-spacing: 0.04em;
+  color: #dbab80;
+}
+.chat-text {
+  flex: 1 1 180px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.chat-row.queued .chat-text {
+  color: #efece4;
+}
+/* The wire flag is a .badge.paid; the row only adds the 140ms pop. */
+.chat-row .badge {
+  animation: chat-wire-in var(--dur-press) var(--ease-cut) both;
+}
+@keyframes chat-wire-in {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-row,
+  .chat-note,
+  .chat-row .badge {
+    animation-duration: 1ms;
+    animation-delay: 0ms !important;
+  }
+}

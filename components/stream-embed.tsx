@@ -1,0 +1,69 @@
+'use client';
+/* oxlint-disable next/no-img-element -- Static studio artwork, shown without an image optimizer. */
+import { ArrowUpRight } from 'lucide-react';
+import { show } from '@/lib/show';
+export type StreamLinks = { pumpfun: string | null; x: string | null };
+/** Cloudflare Stream starts muted so autoplay is allowed; the viewer unmutes in the player. */
+export function embedSrc(url: string) {
+  try {
+    const u = new URL(url);
+    if (u.hostname === 'cloudflarestream.com' || u.hostname.endsWith('.cloudflarestream.com')) {
+      u.searchParams.set('autoplay', 'true');
+      u.searchParams.set('muted', 'true');
+    }
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+/** The stream when we have one; otherwise the studio poster and the places it plays. */
+export function StreamEmbed({
+  url,
+  links,
+  poster = '/pepe-cartoon.png',
+}: {
+  url: string | null;
+  links: StreamLinks;
+  poster?: string;
+}) {
+  if (url) {
+    return (
+      <div className="stage stream-embed">
+        <iframe
+          src={embedSrc(url)}
+          title={`${show.name} live stream`}
+          allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
+          allowFullScreen
+        />
+        <span className="stream-hint">UNMUTE THE PLAYER TO HEAR THE SHOW</span>
+      </div>
+    );
+  }
+  const anywhere = !!(links.pumpfun || links.x);
+  return (
+    <div className="stage stream-embed">
+      <img src={poster} alt="" />
+      <div className="stream-poster">
+        <img className="opening-mark" src="/logo.png" alt={show.name} />
+        <p className="eyebrow">{anywhere ? 'WATCH THE SHOW' : 'STREAM'}</p>
+        <h1>{show.headline}</h1>
+        {anywhere ? (
+          <div className="stream-links">
+            {links.pumpfun && (
+              <a className="primary" href={links.pumpfun} target="_blank" rel="noreferrer">
+                Watch on pump.fun <ArrowUpRight size={16} />
+              </a>
+            )}
+            {links.x && (
+              <a className="primary" href={links.x} target="_blank" rel="noreferrer">
+                Watch on X <ArrowUpRight size={16} />
+              </a>
+            )}
+          </div>
+        ) : (
+          <p className="stream-soon">Stream link coming soon.</p>
+        )}
+      </div>
+    </div>
+  );
+}

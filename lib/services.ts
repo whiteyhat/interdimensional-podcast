@@ -1,5 +1,7 @@
 import type { Services, Clip } from './engine';
-import { show, shotDuration, type Line } from './show';
+import { readCoinBody } from '@/hooks/use-coin';
+import { show, shotInput, scaleInput, type Line } from './show';
+import { readRequest, type PaidRequest } from './requests';
 import {
   sanitizeDraft,
   type CostEstimate,
@@ -12,6 +14,7 @@ type Result = {
   url?: string;
   lines?: Line[];
   topics?: unknown[];
+  requests?: unknown[];
   cost?: CostEstimate;
   error?: string;
   code?: string;
@@ -68,13 +71,14 @@ export function createServices(): Services {
     return poll(token);
   }
   return {
-    async write(recent, start, cue, topic) {
+    async write(recent, start, cue, topic, from) {
       const key = JSON.stringify([
-        `${show.slug}-write-v1`,
+        `${show.slug}-write-v3`,
         recent,
         start,
         cue,
         topic,
+        from,
       ]);
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
@@ -84,6 +88,7 @@ export function createServices(): Services {
             start,
             cue,
             topic,
+            from,
           });
           if (!result.lines) throw new DialogueError('No dialogue returned');
           return result.lines;
@@ -98,9 +103,13 @@ export function createServices(): Services {
     },
     async render(line) {
       const start = Date.now();
-      const key = JSON.stringify([`${show.slug}-shot-v3`, line.speaker, line.text, shotDuration(line.text)]);
-      const result = await job(key, { action: 'shot', line });
-      if (!result.url) throw Error('No video returned');
+      const key = JSON.stringify([`${show.slug}-shot-v7`, shotInput(line)]);
+      const native = await job(key, { action: 'shot', line });
+      if (!native.url) throw Error('No video returned');
+      // Cache stages separately: a scaler/download retry must not regenerate speech.
+      const scaleKey = JSON.stringify([`${show.slug}-scale-v1`, scaleInput(native.url)]);
+      const result = await job(scaleKey, { action: 'scale', url: native.url });
+      if (!result.url) throw Error('No scaled video returned');
       const response = await fetch(
         `/api/media?url=${encodeURIComponent(result.url)}`,
       );
@@ -150,6 +159,33 @@ export function createServices(): Services {
     },
     async research(input) {
       return topics({ action: 'research', ...input });
+    },
+    requests: {
+      // The studio claims paid requests from the site; the local worker adds the studio token.
+      async pull() {
+        const data = await api(
+          { action: 'pull' },
+          '/api/interact',
+          AbortSignal.timeout(15000),
+        );
+        return (data.requests ?? [])
+          .map(readRequest)
+          .filter((r): r is PaidRequest => !!r);
+      },
+      async aired(reference) {
+        await api({ action: 'aired', reference }, '/api/interact', AbortSignal.timeout(15000));
+      },
+    },
+    async coin() {
+      const response = await fetch('/api/coin', {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(15000),
+      });
+      const data: unknown = await response.json();
+      const reading = readCoinBody(data);
+      if (!response.ok || !reading)
+        throw Error((data as { error?: string })?.error || 'Chart unavailable');
+      return reading;
     },
     release(url) {
       URL.revokeObjectURL(url);

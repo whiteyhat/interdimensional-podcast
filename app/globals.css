@@ -1,11 +1,24 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
+@import './chat.css';
+@import './interact.css';
+@import './broadcast.css';
 :root {
   --background: #171918;
   --foreground: #efece4;
   --primary: #dd8056;
   --border: #343934;
+  /* One motion personality for the whole show, shared by every stylesheet above:
+     decisive clean cuts on the signature ease, breathing on the on-air pulse.
+     140ms for presses and field feedback, 260ms for cards and list rows,
+     420ms for reveals and lower-thirds. Exits get their own faster ease inline. */
+  --ease-cut: cubic-bezier(0.2, 0, 0, 1);
+  --ease-breathe: cubic-bezier(0.4, 0, 0.6, 1);
+  --dur-press: 140ms;
+  --dur-list: 260ms;
+  --dur-reveal: 420ms;
+  --dur-breathe: 1600ms;
 }
 * {
   box-sizing: border-box;
@@ -258,31 +271,6 @@ textarea {
 textarea::placeholder {
   color: #7b896e;
 }
-aside > .primary {
-  width: 100%;
-}
-.suggestions {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  margin-top: 20px;
-}
-.suggestions button {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  background: transparent;
-  border: 1px solid #3e4934;
-  padding: 11px 12px;
-  border-radius: 4px;
-  font-size: 12px;
-  color: #b2be9f;
-  text-align: left;
-}
-.suggestions button:hover:not(:disabled) {
-  border-color: #c08756;
-}
 .producer-note {
   border-top: 1px solid #35412b;
   margin-top: 24px;
@@ -405,6 +393,11 @@ footer {
   color: #b1845d;
   font-size: 10px;
 }
+.audience-log b {
+  color: #dbab80;
+  font-weight: 500;
+  margin-right: 6px;
+}
 .playback-controls {
   display: flex;
   align-items: center;
@@ -524,10 +517,6 @@ footer {
     min-width: 120px;
   }
 }
-
-aside form .primary {
-  width: 100%;
-}
 .notice .quiet {
   margin-left: 12px;
 }
@@ -568,8 +557,8 @@ html {
 }
 
 /* Broadcast overlay and news desk.
-   One motion personality: decisive, clean cuts. Signature ease cubic-bezier(0.2,0,0,1),
-   durations 140ms (press) / 260ms (list) / 420ms (lower-third). */
+   One motion personality: decisive, clean cuts, on the motion tokens declared in :root above
+   (--ease-cut, --dur-press / --dur-list / --dur-reveal). */
 .ticker {
   position: absolute;
   left: 0;
@@ -585,7 +574,7 @@ html {
   color: #dfe7d2;
   font: 12px monospace;
   pointer-events: none;
-  animation: ticker-in 420ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation: ticker-in var(--dur-reveal) var(--ease-cut) both;
 }
 @keyframes ticker-in {
   from {
@@ -606,7 +595,7 @@ html {
   height: 7px;
   border-radius: 50%;
   background: #d78255;
-  animation: on-air 1600ms cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  animation: on-air var(--dur-breathe) var(--ease-breathe) infinite;
 }
 @keyframes on-air {
   50% {
@@ -622,7 +611,7 @@ html {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  animation: ticker-text 300ms cubic-bezier(0.2, 0, 0, 1) 120ms both;
+  animation: ticker-text 300ms var(--ease-cut) 120ms both;
 }
 @keyframes ticker-text {
   from {
@@ -637,124 +626,7 @@ html {
 .stage .caption {
   bottom: 15%;
 }
-.wire {
-  margin-top: 16px;
-}
-.wire .eyebrow em {
-  color: #b69a76;
-  font-style: normal;
-}
-.wire ul {
-  list-style: none;
-  margin: 10px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-}
-.wire-item {
-  display: flex;
-  align-items: stretch;
-  gap: 5px;
-  animation: wire-in 260ms cubic-bezier(0.2, 0, 0, 1) both;
-}
-@keyframes wire-in {
-  from {
-    opacity: 0;
-    transform: translateX(14px);
-  }
-}
-.wire-open {
-  flex: 1;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: auto 1fr;
-  grid-template-areas:
-    'badge title'
-    'meta  meta'
-    'score score';
-  gap: 6px 9px;
-  align-items: start;
-  text-align: left;
-  border: 1px solid #37442e;
-  border-radius: 4px;
-  background: #1a2117;
-  padding: 10px 11px;
-  color: #cad9b6;
-  transition:
-    border-color 140ms cubic-bezier(0.2, 0, 0, 1),
-    background 140ms cubic-bezier(0.2, 0, 0, 1),
-    transform 140ms cubic-bezier(0.2, 0, 0, 1);
-}
-.wire-open:hover:not(:disabled) {
-  border-color: #6d7d5c;
-  background: #202a1b;
-}
-.wire-open:active:not(:disabled) {
-  transform: scale(0.985);
-}
-.wire-open:disabled {
-  opacity: 0.55;
-}
-.wire-item.pinned .wire-open {
-  border-color: #c08756;
-  background: #24201a;
-}
-.wire-title {
-  grid-area: title;
-  font-size: 12.5px;
-  line-height: 1.35;
-  color: #e2ead6;
-}
-.wire-meta {
-  grid-area: meta;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10.5px;
-  color: #8a9a78;
-}
-.wire-go {
-  flex: none;
-  color: #90a971;
-  margin-left: auto;
-}
-.wire-score {
-  grid-area: score;
-  height: 2px;
-  background: #2b3524;
-  border-radius: 2px;
-  overflow: hidden;
-}
-.wire-score i {
-  display: block;
-  height: 100%;
-  background: #90a971;
-  transition: width 260ms cubic-bezier(0.2, 0, 0, 1);
-}
-.wire-drop {
-  flex: none;
-  width: 26px;
-  border: 1px solid #37442e;
-  border-radius: 4px;
-  background: #1a2117;
-  color: #7e8f6c;
-  transition:
-    color 140ms cubic-bezier(0.2, 0, 0, 1),
-    border-color 140ms cubic-bezier(0.2, 0, 0, 1);
-}
-.wire-drop:hover {
-  color: #e1ac83;
-  border-color: #634f3e;
-}
-.wire-empty {
-  margin: 9px 0 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: #8a9a78;
-}
 .badge {
-  grid-area: badge;
   flex: none;
   align-self: start;
   padding: 3px 6px;
@@ -775,6 +647,24 @@ html {
 .badge.chat {
   background: #33291f;
   color: #dbab80;
+}
+.badge.coin {
+  background: #2a3324;
+  color: #b9d38a;
+}
+.badge.paid,
+.badge.claimed {
+  background: #3a2a1f;
+  color: #f1b48a;
+}
+.badge.aired {
+  background: #22301f;
+  color: #9bb676;
+}
+.badge.failed,
+.badge.expired {
+  background: #2a2420;
+  color: #b69a76;
 }
 .feed-panel {
   border-top: 1px solid #35412b;
@@ -800,18 +690,24 @@ html {
   height: 6px;
   border-radius: 50%;
   background: #6d7d5c;
-  transition: background 260ms cubic-bezier(0.2, 0, 0, 1);
+  transition: background var(--dur-list) var(--ease-cut);
 }
 .feed-pill.live i {
   background: #9bb676;
 }
-.feed-pill.searching i {
+.feed-pill.searching i,
+.feed-pill.connecting i,
+.feed-pill.reconnecting i {
   background: #d78255;
-  animation: on-air 1600ms cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  animation: on-air var(--dur-breathe) var(--ease-breathe) infinite;
 }
-.feed-pill.error i {
+.feed-pill.error i,
+.chat-head .feed-pill.off i {
   background: #e1ac83;
 }
+/* "idle" is the resting dot for both panels, so it needs no rule. "off" does not
+   mean the same thing twice: a paused news feed keeps the resting dot, a dropped
+   chat socket is a warning, which is why that one state stays scoped to the chat. */
 .feed-stats {
   flex: 1;
   font: 10px monospace;
@@ -855,16 +751,14 @@ html {
 }
 @media (prefers-reduced-motion: reduce) {
   .ticker,
-  .ticker-title,
-  .wire-item {
+  .ticker-title {
     animation-duration: 1ms;
   }
   .ticker-live i,
-  .feed-pill.searching i {
+  .feed-pill.searching i,
+  .feed-pill.connecting i,
+  .feed-pill.reconnecting i {
     animation: none;
-  }
-  .wire-open:active:not(:disabled) {
-    transform: none;
   }
 }
 
@@ -885,7 +779,7 @@ html {
   box-shadow:
     0 0 0 2px #3e4934,
     0 12px 40px #0009;
-  animation: mark-in 420ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation: mark-in var(--dur-reveal) var(--ease-cut) both;
 }
 @keyframes mark-in {
   from {
@@ -903,5 +797,229 @@ html {
 @media (prefers-reduced-motion: reduce) {
   .opening-mark {
     animation-duration: 1ms;
+  }
+}
+
+/* The coin: card in the aside and the price bug on stage. Same personality as the ticker. */
+.coin-card {
+  border-top: 1px solid #35412b;
+  margin-top: 22px;
+  padding-top: 18px;
+  animation: card-in var(--dur-list) var(--ease-cut) both;
+}
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+.coin-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.coin-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 10px monospace;
+  letter-spacing: 0.08em;
+  color: #f1b48a;
+}
+.coin-live i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #d78255;
+  animation: on-air var(--dur-breathe) var(--ease-breathe) infinite;
+}
+.coin-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 12px 0 2px;
+}
+.coin-name b {
+  font:
+    600 17px Georgia,
+    serif;
+  letter-spacing: -0.3px;
+  color: #efece4;
+}
+.coin-name span {
+  font: 11px monospace;
+  letter-spacing: 0.06em;
+  color: #8a9a78;
+}
+.coin-price {
+  display: inline-block;
+  font:
+    600 26px/1.1 Georgia,
+    serif;
+  letter-spacing: -0.5px;
+  color: #efece4;
+}
+.coin-price.up {
+  animation: coin-tick-up var(--dur-list) var(--ease-cut) both;
+}
+.coin-price.down {
+  animation: coin-tick-down var(--dur-list) var(--ease-cut) both;
+}
+@keyframes coin-tick-up {
+  from {
+    color: #9bb676;
+    transform: translateY(3px);
+  }
+}
+@keyframes coin-tick-down {
+  from {
+    color: #e1ac83;
+    transform: translateY(-3px);
+  }
+}
+.coin-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0;
+}
+.coin-chip {
+  font: 10px monospace;
+  letter-spacing: 0.06em;
+  padding: 4px 7px;
+  border-radius: 3px;
+  background: #2b3524;
+  color: #a8bb8f;
+  transition:
+    background var(--dur-list) var(--ease-cut),
+    color var(--dur-list) var(--ease-cut);
+}
+.coin-chip.up {
+  background: #22301f;
+  color: #9bb676;
+}
+.coin-chip.down {
+  background: #3a2a1f;
+  color: #e1ac83;
+}
+.coin-spark {
+  display: block;
+  width: 100%;
+  height: 48px;
+  margin: 2px 0 10px;
+}
+.coin-spark .line {
+  fill: none;
+  stroke: #9bb676;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.coin-spark .area {
+  fill: #9bb67622;
+}
+.coin-spark.down .line {
+  stroke: #e1ac83;
+}
+.coin-spark.down .area {
+  fill: #e1ac8322;
+}
+.coin-progress-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font: 10px monospace;
+  letter-spacing: 0.06em;
+  color: #8a9a78;
+  margin-bottom: 6px;
+}
+.coin-progress-track {
+  height: 4px;
+  background: #2b3524;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.coin-progress-track i {
+  display: block;
+  height: 100%;
+  background: #d78255;
+  transition: width var(--dur-reveal) var(--ease-cut);
+}
+.coin-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+  font: 10px monospace;
+  letter-spacing: 0.06em;
+  color: #8a9a78;
+}
+.coin-foot .quiet {
+  padding: 7px 10px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.coin-empty,
+.empty-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #8a9a78;
+}
+.coin-note {
+  margin: 8px 0 0;
+  font: 10px monospace;
+  letter-spacing: 0.06em;
+  color: #b69a76;
+}
+.coin-bug {
+  position: absolute;
+  top: 56px;
+  right: 15px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  background: #0e130ceb;
+  border: 1px solid #d7825566;
+  border-radius: 4px;
+  font: 11px monospace;
+  color: #dfe7d2;
+  pointer-events: none;
+  animation: bug-in var(--dur-reveal) var(--ease-cut) both;
+}
+@keyframes bug-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+.coin-bug b {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #fff;
+}
+.coin-bug .up {
+  color: #9bb676;
+}
+.coin-bug .down {
+  color: #e1ac83;
+}
+.coin-bug-cap {
+  color: #9aab88;
+}
+@media (prefers-reduced-motion: reduce) {
+  .coin-card,
+  .coin-bug {
+    animation-duration: 1ms;
+  }
+  .coin-price.up,
+  .coin-price.down,
+  .coin-live i {
+    animation: none;
   }
 }

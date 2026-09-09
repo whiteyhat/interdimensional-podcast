@@ -1,7 +1,8 @@
 import { sites } from '@openai/sites-vite-plugin';
 import tailwindcss from '@tailwindcss/postcss';
 import vinext from 'vinext';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
+import { nodePolyfills } from 'vite-plugin-node-polyfills';
 import hostingConfig from './.openai/hosting.json';
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
@@ -19,8 +20,11 @@ const localBindingConfig = {
     ? [
         {
           binding: d1,
-          database_name: 'site-creator-d1',
-          database_id: SITE_CREATOR_PLACEHOLDER_DATABASE_ID,
+          // vinext loads .env / .env.production into process.env before the build, so a
+          // real database id lands in dist/server/wrangler.json for `wrangler deploy`;
+          // without one, wrangler dev and the tests keep a placeholder local database.
+          database_name: process.env.D1_DATABASE_NAME ?? 'pepe-chad-requests',
+          database_id: process.env.D1_DATABASE_ID ?? SITE_CREATOR_PLACEHOLDER_DATABASE_ID,
         },
       ]
     : [],
@@ -52,6 +56,16 @@ export default defineConfig(async () => {
     plugins: [
       vinext(),
       sites(),
+      // @solana/web3.js runs only in the browser bundle and still expects a Buffer global.
+      ...nodePolyfills({
+        include: ['buffer'],
+        globals: { Buffer: true, global: false, process: false },
+      }).map(
+        (plugin): Plugin => ({
+          ...plugin,
+          applyToEnvironment: (environment: { name: string }) => environment.name === 'client',
+        }),
+      ),
       cloudflare({
         viteEnvironment: { name: 'rsc', childEnvironments: ['ssr'] },
         config: localBindingConfig,

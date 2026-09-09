@@ -124,9 +124,7 @@ async function pick() {
   assets.generatedAt = new Date().toISOString();
   await writeFile(ASSETS, `${JSON.stringify(assets, null, 2)}\n`);
   console.log('Promoted public/logo.png, public/pepe-cartoon.png, public/gigachad-cartoon.png');
-  console.log('Paste into lib/show.ts:');
-  for (const [role, spec] of Object.entries(ROLES))
-    console.log(`  ${role}.source: '${assets.sources[spec.file.replace(/\.png$/, '')]}'`);
+  console.log('Run node scripts/video-frames.mjs to prepare and upload the video conditioning frames.');
 }
 
 await mkdir(OUT, { recursive: true });

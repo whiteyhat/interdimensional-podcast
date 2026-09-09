@@ -188,9 +188,7 @@ async function main() {
   }
   console.log('\nPromoted');
   for (const { path } of promoted) console.log(`  ${path}`);
-  console.log('\nPaste into lib/show.ts:');
-  for (const { role, candidate } of promoted)
-    console.log(`  ${role}.source: '${candidate.url}'`);
+  console.log('\nRun node scripts/video-frames.mjs to prepare and upload the video conditioning frames.');
 }
 
 main().catch((error) => {
