@@ -51,3 +51,6 @@ work/
 !/public/favicon.svg
 !.dev.vars.example
 .playwright-mcp/
+
+# Devnet test-token seeds. Throwaway, but still keys.
+.devnet-keys.json

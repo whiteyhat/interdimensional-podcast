@@ -33,4 +33,20 @@ STREAM_EMBED_URL=
 X_LIVE_URL=
 # Devnet only: tokens per dollar. Bypasses the Jupiter and pump.fun price feeds.
 PRICE_FIXED=
+
+# ---- Rehearsal. Before the coin exists there is no chart for the hosts to react to, so the
+# chart lane can borrow one. Studio only: never set this on the public site.
+# An address follows that coin; "auto" follows whichever live pump.fun coin is trading
+# hardest right now, re-picked at most every twenty minutes. Empty follows COIN_MINT.
+# This never touches the payment path, which reads COIN_MINT and only COIN_MINT, and the
+# public site refuses to display a borrowed chart even if this is set.
+CHART_MINT=
+
+# ---- Broadcast. Operator-side only: the deployed Worker never sees these.
+# Cloudflare account id: dashboard sidebar on any account page.
+CF_ACCOUNT_ID=
+# API token with Account > Stream > Edit (My Profile > API Tokens > Create Token > Custom).
+CF_STREAM_TOKEN=
+# Written by `node scripts/stream.mjs create`; every later stream command reads it.
+CF_LIVE_INPUT_ID=
 # Build time only (.env.production, not here): D1_DATABASE_ID from `wrangler d1 create`.
