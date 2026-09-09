@@ -68,6 +68,7 @@ export function PublicSite() {
           <StreamEmbed
             url={config?.streamEmbedUrl ?? null}
             links={config?.links ?? NO_LINKS}
+            live={online}
             poster={cast.host.image}
           />
         </section>

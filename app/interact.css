@@ -22,6 +22,23 @@
   z-index: 1;
   background: #0e130c;
 }
+/* Coming on air is a reveal, so it takes the reveal duration and the signature cut easing,
+   the same pair the lower-third and the coin bug use. The player also settles in from 1.5%
+   over, which reads as a camera locking on rather than a box fading up: an important state
+   change should never be opacity alone. */
+.stream-embed.live iframe {
+  animation: stream-in var(--dur-reveal) var(--ease-cut) both;
+}
+@keyframes stream-in {
+  from {
+    opacity: 0;
+    transform: scale(1.015);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
 .stream-hint {
   position: absolute;
   left: 15px;
@@ -656,6 +673,7 @@ body .wallet-adapter-modal-collapse-button svg {
   .interact-eta b,
   .requests-row,
   .stream-hint,
+  .stream-embed.live iframe,
   body .wallet-adapter-modal-wrapper {
     animation-duration: 1ms;
     animation-delay: 0ms;

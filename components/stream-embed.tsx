@@ -16,19 +16,27 @@ export function embedSrc(url: string) {
     return url;
   }
 }
-/** The stream when we have one; otherwise the studio poster and the places it plays. */
+/**
+ * The stream when the show is actually on air; otherwise the studio poster and the places it
+ * plays. The `live` gate matters: an idle Cloudflare live input renders the player as a blank
+ * white rectangle, which on a dark page reads as a broken site rather than a show between
+ * episodes. The studio heartbeat already tells us whether anything is being broadcast, so we
+ * hold the poster until it is.
+ */
 export function StreamEmbed({
   url,
   links,
+  live = true,
   poster = '/pepe-cartoon.png',
 }: {
   url: string | null;
   links: StreamLinks;
+  live?: boolean;
   poster?: string;
 }) {
-  if (url) {
+  if (url && live) {
     return (
-      <div className="stage stream-embed">
+      <div className="stage stream-embed live">
         <iframe
           src={embedSrc(url)}
           title={`${show.name} live stream`}
