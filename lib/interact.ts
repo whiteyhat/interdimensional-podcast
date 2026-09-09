@@ -28,6 +28,8 @@ export type RequestRow = {
   price_usd: number;
   status: RowStatus;
   signature: string | null;
+  /** Candidate reported before chain verification; never occupies the payment uniqueness key. */
+  broadcast_signature?: string | null;
   created_at: number;
   expires_at: number;
   paid_at: number | null;
@@ -217,6 +219,23 @@ export function sameToken(given: string, expected: string) {
   for (let i = 0; i < n; i++) diff |= (a[i] ?? 0) ^ (b[i] ?? 0);
   return diff === 0 && b.length > 0;
 }
+/**
+ * A studio's name for itself. Short, printable and boring, because it is stored and echoed
+ * back; anything else is treated as an unnamed studio rather than rejected.
+ */
+export function readStudioId(raw: unknown, fallback = 'studio') {
+  const id = typeof raw === 'string' ? raw.trim().slice(0, 32) : '';
+  return /^[A-Za-z0-9._-]+$/.test(id) ? id : fallback;
+}
+/**
+ * Whether a different studio holds the air. The queue belongs to whichever studio is airing
+ * until it goes quiet for heartbeatMs, so a laptop cannot quietly double the generation bill
+ * of a hosted broadcast (or the other way round).
+ */
+export function studioBusy(current: { id: string; seenAt: number }, id: string, now: number) {
+  return !!current.id && current.id !== id && now - current.seenAt < interactLimits.heartbeatMs;
+}
+
 /** Where a token-less studio pull is still acceptable: the developer's own machine. */
 export function isLocalHost(hostname: string) {
   const host = hostname.toLowerCase();

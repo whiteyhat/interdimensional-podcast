@@ -1,7 +1,9 @@
 import type { Services, Clip } from './engine';
+import { SpeechError } from './speech';
+import { createSponsorServices } from './sponsor-delivery-client';
 import { readCoinBody } from '@/hooks/use-coin';
 import { show, shotInput, scaleInput, type Line } from './show';
-import { readRequest, type PaidRequest } from './requests';
+import { readRequest, StudioBusyError, type PaidRequest } from './requests';
 import {
   sanitizeDraft,
   type CostEstimate,
@@ -10,6 +12,7 @@ import {
 } from './topics';
 type Result = {
   token?: string;
+  speechEnd?: number;
   status?: string;
   url?: string;
   lines?: Line[];
@@ -20,6 +23,7 @@ type Result = {
   code?: string;
 };
 class DialogueError extends Error {}
+class WearableError extends Error {}
 async function api(body: unknown, path = '/api/podcast', signal?: AbortSignal) {
   const response = await fetch(path, {
     method: 'POST',
@@ -29,7 +33,10 @@ async function api(body: unknown, path = '/api/podcast', signal?: AbortSignal) {
   });
   const data = (await response.json()) as Result;
   if (!response.ok) {
+    if (data.code === 'INVALID_SPEECH') throw new SpeechError(data.error);
     if (data.code === 'INVALID_DIALOGUE') throw new DialogueError(data.error);
+    if (data.code === 'STUDIO_BUSY') throw new StudioBusyError(data.error);
+    if (data.code === 'INVALID_WEARABLE') throw new WearableError(data.error);
     throw Error(data.error || 'Provider request failed');
   }
   return data;
@@ -43,7 +50,12 @@ async function poll(token: string) {
       failures = 0;
       if (result.status === 'COMPLETED') return result;
     } catch (e) {
-      if (e instanceof DialogueError || ++failures >= 3) throw e;
+      if (
+        e instanceof DialogueError ||
+        e instanceof SpeechError ||
+        ++failures >= 3
+      )
+        throw e;
     }
     await new Promise((r) => setTimeout(r, 500));
   }
@@ -60,6 +72,9 @@ async function topics(body: unknown, forceSource?: TopicSource) {
 }
 export function createServices(): Services {
   const jobs = new Map<string, string>();
+  const speechRetries = new Map<string, number>();
+  const wardrobeRetries = new Map<string, number>();
+  const media = new Map<string, string>();
   async function job(key: string, body: unknown) {
     let token = jobs.get(key);
     if (!token) {
@@ -71,7 +86,8 @@ export function createServices(): Services {
     return poll(token);
   }
   return {
-    async write(recent, start, cue, topic, from) {
+    sponsors: createSponsorServices(),
+    async write(recent, start, cue, topic, from, sponsorship) {
       const key = JSON.stringify([
         `${show.slug}-write-v3`,
         recent,
@@ -79,6 +95,7 @@ export function createServices(): Services {
         cue,
         topic,
         from,
+        sponsorship,
       ]);
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
@@ -89,6 +106,7 @@ export function createServices(): Services {
             cue,
             topic,
             from,
+            sponsorship,
           });
           if (!result.lines) throw new DialogueError('No dialogue returned');
           return result.lines;
@@ -101,17 +119,99 @@ export function createServices(): Services {
       }
       throw Error('The dialogue writer could not finish this exchange.');
     },
-    async render(line) {
+    async render(line): Promise<Clip> {
       const start = Date.now();
-      const key = JSON.stringify([`${show.slug}-shot-v7`, shotInput(line)]);
-      const native = await job(key, { action: 'shot', line });
+      const input = shotInput(line);
+      const identity = JSON.stringify([input, line.wardrobe]);
+      const attempt =
+        (speechRetries.get(identity) ?? 0) +
+        (wardrobeRetries.get(identity) ?? 0);
+      const key = JSON.stringify([
+        `${show.slug}-shot-v9`,
+        input,
+        line.wardrobe,
+        attempt,
+      ]);
+      const native = await job(key, { action: 'shot', line, attempt });
       if (!native.url) throw Error('No video returned');
       // Cache stages separately: a scaler/download retry must not regenerate speech.
-      const scaleKey = JSON.stringify([`${show.slug}-scale-v1`, scaleInput(native.url)]);
-      const result = await job(scaleKey, { action: 'scale', url: native.url });
+      const scaleKey = JSON.stringify([
+        `${show.slug}-scale-v1`,
+        scaleInput(native.url),
+      ]);
+      const speechKey = JSON.stringify([
+        `${show.slug}-speech-v1`,
+        native.url,
+        line.text,
+      ]);
+      const rejectSpeech = (error: unknown): never => {
+        if (error instanceof SpeechError) {
+          speechRetries.set(identity, Math.min(100, attempt + 1));
+          jobs.delete(key);
+          jobs.delete(speechKey);
+        }
+        throw error;
+      };
+      const [result, speech] = await Promise.all([
+        job(scaleKey, { action: 'scale', url: native.url }),
+        job(speechKey, { action: 'speech', url: native.url, line }),
+      ]).catch(rejectSpeech);
+      if (
+        typeof speech.speechEnd !== 'number' ||
+        !Number.isFinite(speech.speechEnd) ||
+        speech.speechEnd <= 0 ||
+        speech.speechEnd > 16
+      )
+        return rejectSpeech(
+          new SpeechError('No verified speech boundary returned'),
+        );
       if (!result.url) throw Error('No scaled video returned');
+      let finalUrl = result.url;
+      if (line.wardrobe) {
+        const mediaKey = JSON.stringify([result.url, line.wardrobe]);
+        finalUrl = media.get(mediaKey) || '';
+        if (!finalUrl) {
+          try {
+            const composed = (await api(
+              {
+                orderId: line.wardrobe.orderId,
+                leaseToken: line.wardrobe.leaseToken,
+                videoUrl: result.url,
+              },
+              '/api/sponsorship/media',
+              AbortSignal.timeout(120000),
+            )) as Result & {
+              quality?: { accepted?: boolean; audioVerified?: boolean };
+            };
+            if (
+              !composed.url ||
+              composed.quality?.accepted !== true ||
+              composed.quality?.audioVerified !== true
+            )
+              throw new WearableError(
+                'The cap placement did not pass its visual and audio checks.',
+              );
+            finalUrl = composed.url;
+            media.set(mediaKey, finalUrl);
+          } catch (error) {
+            if (
+              error instanceof WearableError &&
+              (wardrobeRetries.get(identity) ?? 0) < 2
+            ) {
+              wardrobeRetries.set(
+                identity,
+                (wardrobeRetries.get(identity) ?? 0) + 1,
+              );
+              return this.render(line);
+            }
+            throw error;
+          }
+        }
+      }
       const response = await fetch(
-        `/api/media?url=${encodeURIComponent(result.url)}`,
+        line.wardrobe
+          ? finalUrl
+          : `/api/media?url=${encodeURIComponent(finalUrl)}`,
       );
       if (!response.ok)
         throw Error('Video download failed. Retry will reuse this shot.');
@@ -142,16 +242,19 @@ export function createServices(): Services {
           video.src = url;
           video.load();
         });
+        if (speech.speechEnd > duration)
+          throw new SpeechError('Speech boundary exceeds clip duration');
         return {
           ...line,
           url,
-          rawUrl: result.url,
+          rawUrl: finalUrl,
           duration,
+          speechEnd: speech.speechEnd,
           renderMs: Date.now() - start,
         } satisfies Clip;
       } catch (e) {
         URL.revokeObjectURL(url);
-        throw e;
+        return rejectSpeech(e);
       }
     },
     async news(input) {
@@ -173,7 +276,11 @@ export function createServices(): Services {
           .filter((r): r is PaidRequest => !!r);
       },
       async aired(reference) {
-        await api({ action: 'aired', reference }, '/api/interact', AbortSignal.timeout(15000));
+        await api(
+          { action: 'aired', reference },
+          '/api/interact',
+          AbortSignal.timeout(15000),
+        );
       },
     },
     async coin() {

@@ -1,4 +1,5 @@
 import { env, waitUntil } from 'cloudflare:workers';
+import { settleLegacy as settle } from '@/lib/legacy-recovery';
 import { isAddress, isSignature } from '@solana/kit';
 import * as db from '@/lib/db';
 import {
@@ -11,6 +12,7 @@ import {
   publicView,
   pullView,
   queuePositions,
+  readStudioId,
   sameToken,
   usdPerRequest,
   type PublicConfig,
@@ -21,7 +23,6 @@ import { clientAddress, perMinuteCounter } from '@/lib/throttle';
 import { defaultBrand } from '@/lib/show';
 import {
   buildQuoteTx,
-  findPayment,
   inspectSigned,
   mintInfo,
   priceUsd as fetchPrice,
@@ -30,7 +31,6 @@ import {
   sendSigned,
   tokenBalance,
   treasuryReady,
-  verifyPayment,
 } from '@/lib/solana';
 
 type Vars = {
@@ -42,6 +42,7 @@ type Vars = {
   SOLANA_RPC_URL?: string;
   CLIENT_RPC_URL?: string;
   STUDIO_TOKEN?: string;
+  STUDIO_ID?: string;
   INTERACT_ORIGIN?: string;
   INTERACT_USD?: string;
   STREAM_EMBED_URL?: string;
@@ -321,7 +322,8 @@ async function submit(body: Body) {
     await db.setStatus(d, reference, 'expired', ['quoted', 'submitted'], now);
     throw fail(409, 'This quote expired. Ask for a new one.', 'REQUOTE');
   }
-  inspectSigned(signed, { wallet: row.wallet, reference });
+  const candidate=inspectSigned(signed, { wallet: row.wallet, reference });
+  await db.setStatus(d,reference,'submitted',['quoted','submitted'],now,candidate);
   const rpc = rpcFor(settings().rpcUrl);
   let signature: string;
   try {
@@ -331,56 +333,8 @@ async function submit(body: Body) {
       await db.setStatus(d, reference, 'expired', ['quoted', 'submitted'], now);
     throw e;
   }
-  await db.setStatus(d, reference, 'submitted', ['quoted', 'submitted'], now, signature);
+  if(signature!==candidate)throw fail(502,'The network returned an unexpected signature. Check this receipt.');
   return { ok: true, signature };
-}
-type Settled = { status: string; position?: number; error?: string };
-/**
- * What the chain says about one row. A signature is only ever written down once it verified,
- * so a wrong or hostile signature can never block the real payment for a request.
- */
-async function settle(
-  d: D1Database,
-  rpc: ReturnType<typeof rpcFor>,
-  row: db.RequestRow,
-  now: number,
-  offered?: string,
-): Promise<Settled> {
-  if (row.status === 'paid' || row.status === 'claimed')
-    return { status: row.status, position: await db.positionOf(d, row.reference) };
-  if (row.status === 'aired') return { status: 'aired' };
-  // The wallet's own signature first, then what the studio broadcast, then the chain itself.
-  const signature = offered || row.signature || (await findPayment(rpc, row.reference));
-  if (!signature) {
-    // A quote's blockhash lives about a minute; past that the card asks for a fresh one. A payment
-    // that still lands late is found by the studio's recovery sweep or the next confirm.
-    if (row.status === 'quoted' && now > row.expires_at) {
-      await db.setStatus(d, row.reference, 'expired', ['quoted'], now);
-      return { status: 'expired' };
-    }
-    return { status: row.status === 'expired' ? 'expired' : 'pending' };
-  }
-  const info = await mintInfo(rpc, row.mint);
-  const verdict = await verifyPayment(rpc, signature, {
-    recipient: row.recipient,
-    amountBase: row.amount_base,
-    mint: row.mint,
-    reference: row.reference,
-    program: info.program,
-  });
-  if (verdict.status === 'paid') {
-    try {
-      await db.setStatus(d, row.reference, 'paid', ['quoted', 'submitted', 'expired', 'failed'], now, signature);
-    } catch (e) {
-      // One transaction carrying two references pays for one request, never two.
-      if (/UNIQUE constraint failed/.test(e instanceof Error ? e.message : ''))
-        return { status: 'failed', error: 'That payment was already used for another request.' };
-      throw e;
-    }
-    return { status: 'paid', position: await db.positionOf(d, row.reference) };
-  }
-  if (verdict.status === 'failed') return { status: 'failed', error: verdict.error };
-  return { status: row.status === 'expired' ? 'expired' : 'pending' };
 }
 async function confirm(body: Body) {
   const reference = readReference(body.reference);
@@ -390,7 +344,6 @@ async function confirm(body: Body) {
   const now = Date.now();
   const row = await db.getByReference(d, reference);
   if (!row) throw fail(404, 'Unknown request.');
-  if (row.status === 'failed') return { status: 'failed', error: 'The payment did not go through.' };
   try {
     return await settle(d, rpcFor(settings().rpcUrl), row, now, rawSignature || undefined);
   } catch (e) {
@@ -444,7 +397,12 @@ async function proxyToSite(
   const upstream = await fetch(`${origin}/api/interact`, {
     method: 'POST',
     cache: 'no-store',
-    headers: { 'content-type': 'application/json', 'x-studio-token': token },
+    headers: {
+      'content-type': 'application/json',
+      'x-studio-token': token,
+      // Which studio this is, so the site can refuse a second one rather than pay twice.
+      'x-studio-id': readStudioId(vars().STUDIO_ID),
+    },
     body: JSON.stringify({ action, reference }),
     signal: AbortSignal.timeout(15000),
   });
@@ -472,16 +430,20 @@ function assertStudio(request: Request) {
       throw fail(503, 'STUDIO_TOKEN is not configured on this deployment.');
   } else if (!given || !sameToken(given, expected)) throw fail(401, 'Studio token rejected.');
 }
-/** The studio claims paid requests; this is also the only heartbeat and the only tidy-up. */
+/** Claim the shared producer lease before consuming legacy paid requests. */
 async function pull(request: Request): Promise<unknown> {
   const origin = settings().interactOrigin;
   if (origin) return proxyToSite(request, origin, 'pull');
   assertStudio(request);
   const d = await database();
   const now = Date.now();
+  const id = readStudioId(request.headers.get('x-studio-id'));
+  // The air belongs to whichever studio is already on it. A second one would write the same
+  // show again and bill the same generation twice, so it is turned away rather than served.
+  if (!(await db.heartbeat(d, now, id)))
+    throw fail(409, 'Another studio is on air.', 'STUDIO_BUSY');
   const [rows] = await Promise.all([
     db.claimPaid(d, interactLimits.claimBatch, now),
-    db.heartbeat(d, now),
     // One client on an 8s cadence, rather than every viewer poll, retires stale quotes.
     db.expireStale(d, now),
   ]);

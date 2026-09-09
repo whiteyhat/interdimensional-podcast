@@ -13,6 +13,7 @@ await build([
   'coin',
   'hooks/use-poll',
   'hooks/use-coin',
+  'speech',
   'services',
 ]);
 const show = await import('../work/tests/show.js');
@@ -60,7 +61,7 @@ void test('room gestures match each character and keep spoken text separate from
     // Mentioning smoking props even in a prohibition made them appear in a beard preview.
     assert.doesNotMatch(input.prompt, /\b(cigar|lighter|smoke)\b/i);
     assert.equal(input.end_image_url, input.image_url);
-    assert.ok(input.duration >= 6 && input.duration <= 7);
+    assert.equal(input.duration, 10);
     assert.match(input.prompt, /finishes the entire quoted line before/);
     assert.throws(
       () =>
@@ -126,15 +127,15 @@ void test('a long delay reserves one action without a burst of missed repetition
 });
 
 void test('tea and cigar shots give the gesture time after a short line', () => {
-  assert.equal(show.shotDuration('Neither.', 'tea'), 8);
+  assert.equal(show.shotDuration('Neither.', 'tea'), 10);
   assert.equal(show.shotDuration('Oh no.', 'cigar'), 10);
-  assert.equal(show.shotDuration('Neither.'), 5);
+  assert.equal(show.shotDuration('Neither.'), 10);
 });
 
 void test('scheduled shots anchor both ends on the native canvas before 1080P scaling', () => {
   assert.equal(typeof show.shotInput, 'function');
   for (const [speaker, gesture, duration] of [
-    ['guest', 'tea', 8],
+    ['guest', 'tea', 10],
     ['host', 'cigar', 10],
   ]) {
     const input = show.shotInput({
@@ -200,9 +201,11 @@ void test('render retries reuse a job, while identical dialogue with a gesture s
         submissions.push(body.line);
         return Response.json({ token: `job-${submissions.length}` });
       }
+      if (body.action === 'speech') return Response.json({ token: 'speech-job' });
       if (body.action === 'scale') return Response.json({ token: 'scale-job' });
       return Response.json({
         status: 'COMPLETED',
+        speechEnd: 0.8,
         url: 'https://fal.media/test.mp4',
       });
     }

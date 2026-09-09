@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "pepe-cap-v1",
+  "host": "host",
+  "canvas": {
+    "width": 1344,
+    "height": 768
+  },
+  "baseImage": {
+    "path": "public/pepe-video.png",
+    "sha256": "a6bbb6ada9d5e9ecaeeaed7b690ada6a74ee2172073b75d2faf3656731e78693"
+  },
+  "blankCapImage": {
+    "path": "public/wearables/pepe-cap-v1.png",
+    "sha256": "2c76982b3355b097cd10c4d563f38018755f4f88ff7b767f4fb5ae308cceca00"
+  },
+  "logoQuad": [
+    [
+      560,
+      119
+    ],
+    [
+      650,
+      110
+    ],
+    [
+      665,
+      151
+    ],
+    [
+      573,
+      164
+    ]
+  ],
+  "trackingRoi": [
+    408,
+    58,
+    365,
+    181
+  ],
+  "trackingMask": "public/wearables/pepe-cap-v1-track.png",
+  "foregroundMask": "public/wearables/pepe-cap-v1-foreground.png",
+  "logoMask": "public/wearables/pepe-cap-v1-logo-mask.png",
+  "tracking": {
+    "algorithm": "cloth-plane-v1",
+    "minClothCoverage": 0.96,
+    "minEdgeContrast": 15,
+    "maxForwardBackwardErrorPx": 0.8,
+    "maxCornerDifference": 14,
+    "maxFrameMotionPx": 40,
+    "frameAreaRatio": [
+      0.84,
+      1.18
+    ]
+  },
+  "qualified": true,
+  "maskHashes": {
+    "foregroundMask": "1d2145da19bf3c3c878a987f18da1d29699ca6f52357c9e66ce1c301b5159387",
+    "logoMask": "a553b486d2978cbcd1e79b6a129aec5316c3f011f267d7241894a862760f5f36"
+  },
+  "qualificationVersion": "caps-v1"
+}

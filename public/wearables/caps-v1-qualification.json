@@ -1,0 +1,178 @@
+{
+  "version": "caps-v1",
+  "accepted": true,
+  "visualReviewed": true,
+  "testedAt": "2026-09-09T20:47:46.137025+00:00",
+  "tracker": "cloth-plane-v1",
+  "code": {
+    "scripts/wearable-render.py": "2fa0931eca89441a8b64d1e4d38d6727e88f1ad6bdb4358876b007d366774578",
+    "scripts/wearable_panel.py": "54f8774197ae0fda9c3438664dd959143c422641bed895e45630bec026da2f95"
+  },
+  "templates": {
+    "pepe-cap-v1": {
+      "image": "2c76982b3355b097cd10c4d563f38018755f4f88ff7b767f4fb5ae308cceca00",
+      "foregroundMask": "1d2145da19bf3c3c878a987f18da1d29699ca6f52357c9e66ce1c301b5159387",
+      "logoMask": "a553b486d2978cbcd1e79b6a129aec5316c3f011f267d7241894a862760f5f36",
+      "manifestSha256": "92a086a56805a5396c617aa056b40e8d9053cb648dd18331a1d4b1e6226591ce"
+    },
+    "gigachad-cap-v1": {
+      "image": "e2d2bd083a80163215f02d7f3bdc766e76b7786870dc6b0fff109afa5efa1234",
+      "foregroundMask": "f2c5d5dcfbdd3739104bc1fcdcb3122f5d4e292beb64db22d79044f75826c0be",
+      "logoMask": "1ce4255eefa6f2f0dd04b2014d5d84320d7600f853ae6a70233f368f84eaefc3",
+      "manifestSha256": "74c760a020a5aac5e983b1fc4f42a0c04e7c8b35268e1e6b56dc833fad3f4bbc"
+    }
+  },
+  "trials": [
+    {
+      "host": "pepe",
+      "take": 0,
+      "mark": "graphic",
+      "frames": 243,
+      "audioVerified": true,
+      "inputSha256": "041c8f06b3d7711fe7a2d6aa15c639a7f5d30aacf1e12db0a51640b60da0ba3c",
+      "outputSha256": "ba1cd42413b7bd642d6a27b27f7591d96a6df71bb5ca39024b6fda35ed454b10",
+      "heldOut": false,
+      "minClothCoverage": 0.9721729641249488,
+      "maxForwardBackwardErrorPx": 0.0840669572353363
+    },
+    {
+      "host": "pepe",
+      "take": 0,
+      "mark": "text",
+      "frames": 243,
+      "audioVerified": true,
+      "inputSha256": "041c8f06b3d7711fe7a2d6aa15c639a7f5d30aacf1e12db0a51640b60da0ba3c",
+      "outputSha256": "4a17f7c5df6859df87fbed95877f294b3dd86ed232944ce0ce4a826d902aa3bd",
+      "heldOut": false,
+      "minClothCoverage": 0.9721729641249488,
+      "maxForwardBackwardErrorPx": 0.0840669572353363
+    },
+    {
+      "host": "pepe",
+      "take": 1,
+      "mark": "graphic",
+      "frames": 243,
+      "audioVerified": true,
+      "inputSha256": "5260e350df816b9fd26b777ce5cc4653f36264ad4f513e89f406be388b39066d",
+      "outputSha256": "7ac7766d50f6a1005a4571956f1f6654faa789cb9641b9b6f3ff20e2da96075a",
+      "heldOut": false,
+      "minClothCoverage": 0.9823591363875724,
+      "maxForwardBackwardErrorPx": 0.018057750537991524
+    },
+    {
+      "host": "pepe",
+      "take": 1,
+      "mark": "text",
+      "frames": 243,
+      "audioVerified": true,
+      "inputSha256": "5260e350df816b9fd26b777ce5cc4653f36264ad4f513e89f406be388b39066d",
+      "outputSha256": "1bca4874680c80b70854a6db955f51241579fe087a1e52f6ddaf87e1946e9d6b",
+      "heldOut": false,
+      "minClothCoverage": 0.9823591363875724,
+      "maxForwardBackwardErrorPx": 0.018057750537991524
+    },
+    {
+      "host": "pepe",
+      "take": 2,
+      "mark": "graphic",
+      "frames": 243,
+      "audioVerified": true,
+      "inputSha256": "0f39da7a20e2cfd6dda7bf407a3a00bb734717807b9920af05ff6f399d964494",
+      "outputSha256": "5e6c1bf750374e48f42d88e4368129124d91a8b16c5d069c95df3c818e1afc04",
+      "heldOut": true,
+      "minClothCoverage": 0.9828722002635046,
+      "maxForwardBackwardErrorPx": 0.03255011886358261
+    },
+    {
+      "host": "pepe",
+      "take": 2,
+      "mark": "text",
+      "frames": 243,
+      "audioVerified": true,
+      "inputSha256": "0f39da7a20e2cfd6dda7bf407a3a00bb734717807b9920af05ff6f399d964494",
+      "outputSha256": "6147de7ff8f67cdcb2d676dafd974fc0dc769c9d1eeed2424ecae0cc7fa3225b",
+      "heldOut": true,
+      "minClothCoverage": 0.9828722002635046,
+      "maxForwardBackwardErrorPx": 0.03255011886358261
+    },
+    {
+      "host": "gigachad",
+      "take": 0,
+      "mark": "graphic",
+      "frames": 243,
+      "audioVerified": true,
+      "inputSha256": "9f544b38af49d48ce05f417cea5b171267b0399a7ad51f2f0f09401c5151c7e4",
+      "outputSha256": "7ee1fe4b1dfb40e658cc084c2f6f595a0046209f8649e69eb6a2b862a55691d0",
+      "heldOut": false,
+      "minClothCoverage": 0.9855993223210504,
+      "maxForwardBackwardErrorPx": 0.02820957824587822
+    },
+    {
+      "host": "gigachad",
+      "take": 0,
+      "mark": "text",
+      "frames": 243,
+      "audioVerified": true,
+      "inputSha256": "9f544b38af49d48ce05f417cea5b171267b0399a7ad51f2f0f09401c5151c7e4",
+      "outputSha256": "8bbad21aef57ff9057db824e82836af243a8f2f829f578c7ce488d655a43bd5f",
+      "heldOut": false,
+      "minClothCoverage": 0.9855993223210504,
+      "maxForwardBackwardErrorPx": 0.02820957824587822
+    },
+    {
+      "host": "gigachad",
+      "take": 1,
+      "mark": "graphic",
+      "frames": 243,
+      "audioVerified": true,
+      "inputSha256": "2cf20de64e68a403364fe35dd99e0c4938cf31d737f17b9e10f8c6241d9bd43a",
+      "outputSha256": "92546236a40a65ffef86d879e02326c75961d4405f33542303f611997317c7d3",
+      "heldOut": false,
+      "minClothCoverage": 0.9837770382695508,
+      "maxForwardBackwardErrorPx": 0.023469550535082817
+    },
+    {
+      "host": "gigachad",
+      "take": 1,
+      "mark": "text",
+      "frames": 243,
+      "audioVerified": true,
+      "inputSha256": "2cf20de64e68a403364fe35dd99e0c4938cf31d737f17b9e10f8c6241d9bd43a",
+      "outputSha256": "40b3c5f1cd0c1140910b2ab47682358732a4fdb704e0f1a8904855f92f698f9f",
+      "heldOut": false,
+      "minClothCoverage": 0.9837770382695508,
+      "maxForwardBackwardErrorPx": 0.023469550535082817
+    },
+    {
+      "host": "gigachad",
+      "take": 3,
+      "mark": "graphic",
+      "frames": 243,
+      "audioVerified": true,
+      "inputSha256": "502b287782252a905981c65ad7f36b46ac392e8adc0e12460c104c37b5237d60",
+      "outputSha256": "81377ee40b48c8cd6a20e6f9eeb0d8f7a65201b03ffca9ff9fa5742c35c1a6f1",
+      "heldOut": true,
+      "minClothCoverage": 0.9861519093579522,
+      "maxForwardBackwardErrorPx": 0.02682747319340706
+    },
+    {
+      "host": "gigachad",
+      "take": 3,
+      "mark": "text",
+      "frames": 243,
+      "audioVerified": true,
+      "inputSha256": "502b287782252a905981c65ad7f36b46ac392e8adc0e12460c104c37b5237d60",
+      "outputSha256": "ffeba9941d5991eb7fbe247790275eb84acf7c363a6d3dfb48db0c226329ecb1",
+      "heldOut": true,
+      "minClothCoverage": 0.9861519093579522,
+      "maxForwardBackwardErrorPx": 0.02682747319340706
+    }
+  ],
+  "negativeTestsPassed": true,
+  "realOcclusionRejected": {
+    "host": "gigachad",
+    "take": 2,
+    "reason": "hand touched cap; backward flow lost"
+  },
+  "scope": "One fixed cap style per host, original uploaded raster, 1344x768 or uniform upscale, runtime rejects every uncertain take. Staging and production availability remain separate gates."
+}

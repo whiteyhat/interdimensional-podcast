@@ -4,6 +4,7 @@
 @import './chat.css';
 @import './interact.css';
 @import './broadcast.css';
+@import './sponsor.css';
 :root {
   --background: #171918;
   --foreground: #efece4;

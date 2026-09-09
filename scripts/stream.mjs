@@ -3,72 +3,16 @@
 // here rather than a dashboard means launch night is a command, not a scavenger hunt.
 //
 //   node scripts/stream.mjs create            make the live input; prints ingest + embed
+//   node scripts/stream.mjs create rehearsal  a second input nothing is simulcast from
 //   node scripts/stream.mjs status            is video arriving? which destinations are on?
+//   node scripts/stream.mjs ingest [uid]      where to push video: server + stream key
 //   node scripts/stream.mjs add x <url> <key> start simulcasting to a destination
 //   node scripts/stream.mjs rm <output-id>    stop simulcasting to one
 //   node scripts/stream.mjs delete            tear the live input down
 //
 // Credentials stay on the operator's machine: the deployed Worker never sees them.
-import { readFile, writeFile } from 'node:fs/promises';
-
-const VARS = '.dev.vars';
-const API = 'https://api.cloudflare.com/client/v4';
-
-async function devVar(name) {
-  if (process.env[name]) return process.env[name].trim();
-  const file = await readFile(VARS, 'utf8').catch(() => '');
-  const found = new RegExp(`^\\s*${name}\\s*=\\s*"?([^"\r\n]+)"?`, 'm').exec(file);
-  return found ? found[1].trim() : '';
-}
-
-async function credentials() {
-  const account = await devVar('CF_ACCOUNT_ID');
-  const token = await devVar('CF_STREAM_TOKEN');
-  if (!account || !token)
-    throw Error(
-      `Set CF_ACCOUNT_ID and CF_STREAM_TOKEN in ${VARS}.\n` +
-        '  Account id: Cloudflare dashboard, right-hand sidebar of any account page.\n' +
-        '  Token: My Profile > API Tokens > Create Token > Custom, with Account > Stream > Edit.',
-    );
-  return { account, token };
-}
-
-async function cf(path, { token }, init = {}) {
-  const response = await fetch(`${API}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      ...init.headers,
-    },
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.success === false) {
-    const why =
-      data.errors?.map((e) => `${e.code} ${e.message}`).join('; ') || `HTTP ${response.status}`;
-    // A Stream call that 403s on a valid token usually means Stream is not subscribed.
-    throw Error(`Cloudflare refused: ${why}`);
-  }
-  return data.result;
-}
-
-/** The live input id, remembered in .dev.vars so every later command finds it. */
-async function inputId() {
-  const id = await devVar('CF_LIVE_INPUT_ID');
-  if (!id) throw Error('No live input yet. Run: node scripts/stream.mjs create');
-  return id;
-}
-
-/** Append or replace a key in .dev.vars without disturbing the rest of the file. */
-async function remember(pairs) {
-  let file = await readFile(VARS, 'utf8').catch(() => '');
-  for (const [key, value] of Object.entries(pairs)) {
-    const line = `${key}=${value}`;
-    const existing = new RegExp(`^\\s*${key}\\s*=.*$`, 'm');
-    file = existing.test(file) ? file.replace(existing, line) : `${file.replace(/\s*$/, '')}\n${line}`;
-  }
-  await writeFile(VARS, `${file.replace(/\s*$/, '')}\n`);
-}
+import { cf, credentials, ingest, inputId } from './cfapi.mjs';
+import { remember, VARS } from './devvars.mjs';
 
 /**
  * The player URL has to sit on this account's own cloudflarestream.com host: that is what
@@ -87,14 +31,27 @@ function embedUrl(input) {
   return null;
 }
 
-async function create(creds) {
+/**
+ * A named input is a rehearsal input: it is created and printed but never written to .dev.vars,
+ * so it has no simulcast destinations and nothing said into it can reach X or pump.fun. The
+ * unnamed one is the show's input, and it is remembered.
+ */
+async function create(creds, [name]) {
   const input = await cf(`/accounts/${creds.account}/stream/live_inputs`, creds, {
     method: 'POST',
     body: JSON.stringify({
-      meta: { name: 'Pepe & Chad Live' },
+      meta: { name: name ? `Pepe & Chad ${name}` : 'Pepe & Chad Live' },
       recording: { mode: 'automatic', timeoutSeconds: 10, requireSignedURLs: false },
     }),
   });
+  if (name) {
+    console.log(`Rehearsal input "${input.meta.name}" created; nothing is simulcast from it.\n`);
+    console.log(`  Server      ${input.rtmps.url}`);
+    console.log(`  Stream key  ${input.rtmps.streamKey}`);
+    console.log(`\n  Live input ${input.uid} (not saved; watch it in the Stream dashboard)`);
+    console.log('  Point the box at it with: railway variable set RTMP_KEY --stdin');
+    return;
+  }
   const embed = embedUrl(input);
   // Only ever remember a URL the player can actually use. Writing a known-bad one plus a
   // printed apology just means the next command reads it back as though it were good.
@@ -158,7 +115,19 @@ async function destroy(creds) {
   console.log(`Deleted live input ${uid}. Clear CF_LIVE_INPUT_ID from ${VARS}.`);
 }
 
-const commands = { create, status, add, rm, delete: destroy };
+/**
+ * Where to push video. OBS reads this off `create`, but a hosted broadcast box needs it again
+ * later, and possibly for a second live input kept for rehearsals.
+ */
+async function where(creds, [uid]) {
+  const target = await ingest(creds, uid || (await inputId()));
+  console.log(`Live input ${target.uid}`);
+  console.log(`  server      ${target.url}`);
+  console.log(`  stream key  ${target.key}`);
+  console.log('\nThis key is a credential: anyone holding it can broadcast to this input.');
+}
+
+const commands = { create, status, add, rm, ingest: where, delete: destroy };
 
 const [command, ...rest] = process.argv.slice(2);
 const run = commands[command];

@@ -65,6 +65,28 @@ test('the public view hides the wallet and amounts and numbers the unaired queue
   assert.equal(pulled.from, 'Deb');
 });
 
+test('only one studio holds the air, and a quiet one lets the next take over', () => {
+  const now = 1_000_000;
+  const holder = { id: 'railway', seenAt: now - 5_000 };
+  assert.equal(I.studioBusy(holder, 'mac', now), true, 'a second studio is refused');
+  assert.equal(I.studioBusy(holder, 'railway', now), false, 'the studio on air keeps pulling');
+  assert.equal(
+    I.studioBusy({ id: 'railway', seenAt: now - 61_000 }, 'mac', now),
+    false,
+    'a studio that stopped checking in a minute ago has left the air',
+  );
+  assert.equal(I.studioBusy({ id: '', seenAt: 0 }, 'mac', now), false, 'nobody has ever been on air');
+});
+
+test('a studio id is short and printable, or the studio is simply unnamed', () => {
+  assert.equal(I.readStudioId('railway'), 'railway');
+  assert.equal(I.readStudioId('  mac-2  '), 'mac-2');
+  assert.equal(I.readStudioId('rm -rf /'), 'studio', 'anything odd becomes the fallback');
+  assert.equal(I.readStudioId(''), 'studio');
+  assert.equal(I.readStudioId(null), 'studio');
+  assert.equal(I.readStudioId('x'.repeat(80)).length, 32, 'the id is bounded before it is stored');
+});
+
 test('the studio token compares in constant time and only localhost may skip it', () => {
   assert.equal(I.sameToken('secret', 'secret'), true);
   assert.equal(I.sameToken('secret', 'secreT'), false);

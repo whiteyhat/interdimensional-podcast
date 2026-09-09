@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { clusterItems, feedUrl, feeds, parseRss, toDrafts } from '@/lib/gnews';
+import { withHistory } from '@/lib/stories';
 import { deskUser, researchUser } from '@/lib/newsdesk';
 import {
   readTopicList,
@@ -71,6 +72,7 @@ async function newsTopics(): Promise<TopicDraft[]> {
           cache: 'no-store',
           redirect: 'follow',
           headers: { 'user-agent': 'Mozilla/5.0 (compatible; PepeAndChadLive/1.0)' },
+          signal: AbortSignal.timeout(10000),
         });
         if (!response.ok) return [];
         // Search feeds cluster less than topic sections, so they need a lower bar
@@ -127,11 +129,9 @@ export async function POST(request: Request) {
 
     if (body.action === 'news') {
       const topics = await newsTopics();
-      const fresh = topics.filter(
-        (t) => !avoid.some((a) => a.toLowerCase() === t.title.toLowerCase()),
-      );
+      const fresh = withHistory(topics, [...avoid, ...(onAir ? [onAir] : [])], Math.floor(Date.now() / 600000));
       console.log(`[topics] news items=${fresh.length} ms=${Date.now() - started}`);
-      return reply({ topics: fresh, model: 'google-news-rss', ms: Date.now() - started });
+      return reply({ topics: fresh, model: 'google-news-rss+curated-history', ms: Date.now() - started });
     }
 
 

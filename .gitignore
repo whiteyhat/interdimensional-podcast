@@ -53,8 +53,13 @@ work/
 !/public/launch/
 /public/launch/*
 !/public/launch/report.json
+!/public/wearables/
+!/public/wearables/**
 !.dev.vars.example
 .playwright-mcp/
 
 # Devnet test-token seeds. Throwaway, but still keys.
 .devnet-keys.json
+
+# Local computer-vision tooling.
+__pycache__/

@@ -5,11 +5,17 @@ Mac; the public site is a Cloudflare Worker; OBS pushes one stream to Cloudflare
 Cloudflare fans it out. Nothing generates video in production, ever.
 
 ```
-/studio?broadcast=1&autostart=1  →  OBS  →  Cloudflare Stream live input
-                                                 ├── X Live Studio
-                                                 ├── pump.fun coin page
-                                                 └── the player on the public site
+/studio?broadcast=1&autostart=1  →  OBS or the box  →  Cloudflare Stream live input
+                                                            ├── X Live Studio
+                                                            ├── pump.fun coin page
+                                                            └── the player on the public site
 ```
+
+Two ways to make that first arrow. **The box** is a container on Railway running the studio, a
+screen, a speaker, a browser and ffmpeg, so the show survives a closed laptop; it is the
+default. **OBS on the Mac** still works, unchanged, and is the fallback when the box is down or
+when you want to watch what you are broadcasting. Only one of them may be on air at a time,
+and the site now enforces that rather than trusting you to remember.
 
 ## Accounts and one-time setup
 
@@ -55,10 +61,88 @@ with the key server-side and only forwards the calls a wallet needs to pay.
 Never set on the deployed site: `FAL_KEY`, any `NEWSDESK_*`, `INTERACT_ORIGIN`, `CHART_MINT`.
 Generation happens only in the studio, and a borrowed chart is never shown to the audience.
 
-## Going on air
+## Going on air, from the box
+
+Once, per machine. Put a Railway workspace token from
+[railway.com/account/tokens](https://railway.com/account/tokens) in `.dev.vars` as
+`RAILWAY_TOKEN`, then:
+
+```sh
+node scripts/air.mjs setup --no-queue   # create the project, service, variables and URL
+node scripts/air.mjs deploy             # upload the source and build the image
+```
+
+`setup` creates the Railway project and service if they do not exist yet and remembers their
+ids in `.dev.vars`, the same way `stream.mjs` remembers the live input. It sends only the
+variables the studio worker is allowed to see: `CF_ACCOUNT_ID`, `CF_STREAM_TOKEN` and
+`CLIENT_RPC_URL` are refused by the allowlist in `broadcast/air-policy.mjs`, so the box cannot
+publish a key it was never given.
+
+`--no-queue` leaves `INTERACT_ORIGIN` off the box. Use it until you have watched a full
+rehearsal: without it the box claims paid requests from the deployed site the moment it goes on
+air, which opens the five-dollar seat to real viewers. Drop the flag and run `setup` again when
+you want the box to carry the queue.
+
+Note the scripts talk to Railway's API, not its CLI. A workspace token has no user attached, so
+`railway login` and every CLI command reject it; the API accepts it for everything the box
+needs. `node scripts/air.mjs logs` and `logs build` read the box's output without the CLI too.
+
+Rehearse on an input nothing is simulcast from, so a first run cannot reach X or pump.fun:
+
+```sh
+node scripts/stream.mjs create rehearsal   # a second live input with no destinations
+# put its uid in .dev.vars as AIR_RTMP_INPUT, then re-run setup
+node scripts/air.mjs setup --no-queue
+```
+
+Clear `AIR_RTMP_INPUT` and run `setup` again to put the box back on the show's own input.
+
+Then, per broadcast:
+
+```sh
+node scripts/air.mjs on            # on air; the first frame is ~90s away
+node scripts/air.mjs status        # the box, the show, the encoder, and Cloudflare's ingest
+node scripts/air.mjs frame         # save the picture currently going out
+node scripts/air.mjs off           # off air; generation stops
+```
+
+The box refuses to go on air at all without a stream destination: generating a show nobody can
+watch costs exactly as much as broadcasting one. It also refuses if it would answer to the same
+`STUDIO_ID` as this machine, because two studios with one name is a guard that never fires.
+
+The box goes off air on its own after `AIR_MAX_MINUTES` (24 hours by default). `air on
+--minutes 720` sets a shorter run, and running it again while on air extends the deadline
+without interrupting the show. It also stands down by itself if playback wedges twice in a row,
+if the show stops itself, if the encoder cannot hold a connection, if the worker or the screen
+dies, or if another studio takes the air — every one of those costs generation credits to keep
+running blind. The end-of-broadcast stop runs on its own timer, so a page that stops answering
+cannot defer it.
+
+If the container restarts, for any reason, the box comes back **off air** and stays there. That
+is deliberate: a box that restarts itself back into a paid broadcast is a box that can spend all
+night on its own. Set `AIR_ALERT_WEBHOOK` and you get a line every time it starts, so a restart
+in the middle of a long show is visible rather than silent.
+
+What the box does while on air, in order: a 1920×1080 virtual screen, a virtual speaker
+(Chrome's audio has to go somewhere real or the Web Audio graph stays silent), the studio worker
+on loopback, Chrome with autoplay allowed and muting disabled, and ffmpeg pushing screen and
+speaker to Cloudflare. It starts the encoder only once the page is actually playing, so a
+warming-up poster never goes out, and it encodes the region the page reports rather than the
+whole screen, so a kiosk window that lands a pixel short cannot put a black edge on air.
+
+The box opens the studio with `hosted=1`, which hides the two surfaces meant for an operator
+sitting at the machine: the control strip (the pointer rests on the stage forever on a virtual
+screen, so it would otherwise be permanently visible) and the error notice. Errors reach you
+through `air status` instead of the audience.
+
+Drop `AIR_HEIGHT` to 720 if the encoder cannot keep up; it moves the screen, the window and the
+encode together.
+
+## Going on air, from the Mac
 
 ```sh
 node scripts/stream.mjs create            # first time only; prints OBS server + key
+node scripts/stream.mjs ingest            # the same server + key again, later
 node scripts/stream.mjs add x <url> <key> # X Live Studio RTMP source
 node scripts/stream.mjs status            # confirm video is arriving
 ```
@@ -71,8 +155,12 @@ Then, on the Mac:
    shots render. Going live into an empty buffer is the one thing that looks amateur.
 4. `node scripts/stream.mjs status` until the input reads `connected`.
 
-Exactly one studio tab may run at a time. A second one spends fal credits twice, and nothing
-in the code stops you.
+Exactly one studio may be on air at a time: a second one writes the same show again and pays
+for the same generation twice. The site enforces this now. Whichever studio is pulling paid
+requests holds the air, and a second one is refused with `STUDIO_BUSY` and takes itself off air
+saying "Another studio is on air." A studio that stops pulling gives up the air after a minute,
+so switching between the box and the Mac only means stopping one and starting the other.
+Studios are told apart by `STUDIO_ID`, so keep the box and the laptop on different names.
 
 ## Rehearsing the chart lane
 
@@ -165,6 +253,7 @@ when using `prepare-treasury`.
 |---|---|
 | Airtime | ~$22/hr promo, ~$90/hr list — dominated by video generation |
 | Cloudflare Stream | ~$5/mo + ~$1/day live input + ~$1 per 1,000 viewer-minutes |
+| The box | ~$0.25/hr on air, ~$1/mo parked, on a $5/mo Railway plan |
 | Workers + D1 | Effectively free at this scale |
 
 Airtime is the only number that matters. It is charged per second of generated video, so the

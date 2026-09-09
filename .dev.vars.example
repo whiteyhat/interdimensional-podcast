@@ -1,4 +1,6 @@
 FAL_KEY=your_fal_key_here
+# Local Director console: extended account target. Shorter limits reported by fal take precedence.
+DIRECTOR_SESSION_SECONDS=3600
 # Optional: the crypto desk runs through your local Grok CLI login (grok login).
 NEWSDESK_URL=http://127.0.0.1:8791
 NEWSDESK_TOKEN=local
@@ -47,6 +49,37 @@ PRICE_FIXED=
 # public site refuses to display a borrowed chart even if this is set.
 CHART_MINT=
 
+# ---- The hosted broadcast box (scripts/air.mjs). Optional: the Mac and OBS still work.
+# What THIS machine's studio calls itself. The site lets one studio hold the air at a time and
+# tells them apart by this name. The box never inherits it: `air setup` names the box "railway"
+# (or AIR_STUDIO_ID) and refuses if the two would match.
+STUDIO_ID=mac
+# What the box calls itself, if not "railway".
+AIR_STUDIO_ID=
+# Railway token for the workspace the box lives in (railway.com/account/tokens). The scripts
+# talk to Railway's API directly rather than through its CLI, because the CLI authenticates a
+# user and a workspace token has none.
+RAILWAY_TOKEN=
+# Written by `node scripts/air.mjs setup`: the box's own address and the ids it deploys to.
+AIR_URL=
+RAILWAY_PROJECT_ID=
+RAILWAY_ENVIRONMENT_ID=
+RAILWAY_SERVICE_ID=
+# A live input to broadcast to instead of the show's own. A rehearsal input has no simulcast
+# destinations, so nothing said into it can reach X or pump.fun. Empty uses CF_LIVE_INPUT_ID.
+AIR_RTMP_INPUT=
+# Railway service name, if the project has more than one.
+AIR_SERVICE=
+# The box turns itself off after this many minutes, whatever happens. Generation is the
+# expensive part of a forgotten broadcast, not the hosting.
+AIR_MAX_MINUTES=1440
+# Encode height, frame rate and bitrate. Drop to 720 if the box runs short of CPU.
+AIR_HEIGHT=1080
+AIR_FPS=30
+AIR_BITRATE=
+# Optional: a Discord or Slack webhook that hears about every on-air, off-air and reload.
+AIR_ALERT_WEBHOOK=
+
 # ---- Broadcast. Operator-side only: the deployed Worker never sees these.
 # Cloudflare account id: dashboard sidebar on any account page.
 CF_ACCOUNT_ID=
@@ -55,3 +88,22 @@ CF_STREAM_TOKEN=
 # Written by `node scripts/stream.mjs create`; every later stream command reads it.
 CF_LIVE_INPUT_ID=
 # Build time only (.env.production, not here): D1_DATABASE_ID from `wrangler d1 create`.
+
+# ---- Sponsorships. Opt in after staging wallet, delivery, and refund rehearsal.
+SPONSOR_ENABLED=false
+# Public site origin used for immutable artwork and video URLs.
+SITE_URL=
+# Server-side Jupiter v3 price access. USDC stays available without a market quote.
+JUPITER_API_KEY=
+# Dedicated refund reserve wallet: JSON array of 64 secret-key bytes. Server only.
+# Fund it with every enabled asset and SOL for refund fees; never use the treasury key.
+SPONSOR_REFUND_SECRET_KEY=
+SPONSOR_RECONCILE_TOKEN=
+# Authenticated CPU worker from broadcast/Dockerfile.sponsor-media (HTTPS in production).
+SPONSOR_MEDIA_URL=
+SPONSOR_MEDIA_TOKEN=
+# Optional devnet USDC mint. Never put a devnet override on the mainnet deployment.
+SPONSOR_USDC_MINT=
+# Build-time: SPONSOR_ASSETS_BUCKET picks the R2 bucket for this environment.
+# Reconciler service only: SPONSOR_ORIGIN and SPONSOR_RECONCILE_TOKEN.
+# Media service only: SPONSOR_SITE_ORIGIN, SPONSOR_MEDIA_TOKEN, WEARABLE_PYTHON.

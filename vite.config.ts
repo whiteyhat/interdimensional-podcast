@@ -28,14 +28,15 @@ const localBindingConfig = {
         },
       ]
     : [],
-  r2_buckets: r2
-    ? [
+  r2_buckets: [
+    ...(r2 ? [
         {
           binding: r2,
           bucket_name: 'site-creator-r2',
         },
-      ]
-    : [],
+      ] : []),
+    {binding: 'SPONSOR_ASSETS', bucket_name: process.env.SPONSOR_ASSETS_BUCKET || 'pepe-chad-sponsor-assets'},
+  ],
 };
 
 export default defineConfig(async () => {

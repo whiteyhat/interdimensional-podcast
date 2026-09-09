@@ -1,9 +1,10 @@
 // D1 access for the paid-request queue. Server only: `D1Database` is the Workers binding.
 // Every function takes the binding, so the route decides which database it talks to.
 import { interactLimits, type RequestRow, type RowStatus } from './interact';
+import { heartbeatProducer, producerSchema } from './producer-lease';
 export type { RequestRow, RowStatus } from './interact';
 
-/** Mirror of migrations/0001_requests.sql; idempotent so it can run on every cold start. */
+/** Request schema plus shared producer metadata; idempotent on every cold start. */
 export const schema = [
   `CREATE TABLE IF NOT EXISTS requests (
     id TEXT PRIMARY KEY,
@@ -26,18 +27,22 @@ export const schema = [
   )`,
   'CREATE INDEX IF NOT EXISTS requests_status_created ON requests (status, created_at)',
   'CREATE INDEX IF NOT EXISTS requests_wallet_created ON requests (wallet, created_at)',
-  `CREATE TABLE IF NOT EXISTS meta (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_at INTEGER NOT NULL
-  )`,
+  ...producerSchema,
+  `CREATE TABLE IF NOT EXISTS legacy_payment_recovery(reference TEXT PRIMARY KEY, cursor TEXT, checked_at INTEGER NOT NULL DEFAULT 0)`,
 ];
 const ready = new WeakMap<D1Database, Promise<void>>();
 /** Run the schema once per isolate, so dev never depends on a migration step. */
 export function ensureSchema(db: D1Database): Promise<void> {
   let pending = ready.get(db);
   if (!pending) {
-    pending = db.batch(schema.map((sql) => db.prepare(sql))).then(() => undefined);
+    pending = db.batch(schema.map((sql) => db.prepare(sql))).then(async () => {
+      const columns=await db.prepare('PRAGMA table_info(requests)').all<{name:string}>();
+      if(!columns.results.some(c=>c.name==='broadcast_signature')){
+        try{await db.prepare('ALTER TABLE requests ADD COLUMN broadcast_signature TEXT').run();}
+        catch(e){if(!/duplicate column/i.test(String(e)))throw e;}
+      }
+      await db.prepare("UPDATE requests SET broadcast_signature=COALESCE(broadcast_signature,signature),signature=NULL WHERE status IN ('quoted','submitted','expired','failed') AND signature IS NOT NULL").run();
+    });
     pending.catch(() => ready.delete(db)); // a failed attempt must not poison the isolate
     ready.set(db, pending);
   }
@@ -98,7 +103,7 @@ export async function setStatus(
     params.push(now);
   }
   if (signature) {
-    sets.push('signature = COALESCE(signature, ?)');
+    sets.push(status==='submitted'?'broadcast_signature = ?':'signature = COALESCE(signature, ?)');
     params.push(signature);
   }
   const marks = from.map(() => '?').join(', ');
@@ -205,10 +210,11 @@ export async function expireStale(db: D1Database, now: number) {
 export async function recoverable(db: D1Database, now: number, limit: number) {
   const result = await db
     .prepare(
-      `SELECT * FROM requests WHERE status IN ('expired', 'submitted') AND created_at > ?
-       ORDER BY RANDOM() LIMIT ?`,
+      `SELECT r.* FROM requests r LEFT JOIN legacy_payment_recovery c ON c.reference=r.reference
+       WHERE r.status IN ('quoted','expired','submitted','failed') AND r.created_at < ?
+       ORDER BY COALESCE(c.checked_at,0),r.created_at LIMIT ?`,
     )
-    .bind(now - interactLimits.recoverWindowMs, limit)
+    .bind(now - interactLimits.staleQuoteMs, limit)
     .all<RequestRow>();
   return result.results;
 }
@@ -217,6 +223,7 @@ export async function recoverable(db: D1Database, now: number, limit: number) {
 
 const RECOVER = 'recover_at';
 const HEARTBEAT = 'studio_seen_at';
+const STUDIO = 'studio_id';
 const metaRead = (db: D1Database, key: string) =>
   db.prepare('SELECT value FROM meta WHERE key = ?').bind(key);
 /** A stored timestamp, or 0 when the key was never written or holds nonsense. */
@@ -227,14 +234,15 @@ const readMs = (value: unknown) => {
 async function getMeta(db: D1Database, key: string) {
   return readMs(await metaRead(db, key).first<string>('value'));
 }
-async function setMeta(db: D1Database, key: string, now: number) {
-  await db
+const metaWrite = (db: D1Database, key: string, value: string, now: number) =>
+  db
     .prepare(
       `INSERT INTO meta (key, value, updated_at) VALUES (?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
     )
-    .bind(key, String(now), now)
-    .run();
+    .bind(key, value, now);
+async function setMeta(db: D1Database, key: string, now: number) {
+  await metaWrite(db, key, String(now), now).run();
 }
 /** True once per recoverEveryMs, so the sweep costs at most a couple of RPC calls a minute. */
 export async function recoverDue(db: D1Database, now: number) {
@@ -242,8 +250,17 @@ export async function recoverDue(db: D1Database, now: number) {
   await setMeta(db, RECOVER, now);
   return true;
 }
-export function heartbeat(db: D1Database, now: number) {
-  return setMeta(db, HEARTBEAT, now);
+/** Check in only if this studio acquires the shared producer lease. */
+export function heartbeat(db: D1Database, now: number, id: string) {
+  return heartbeatProducer(db, id, now);
+}
+/** Who last claimed the air, and when. An empty id means nobody ever has. */
+export async function getStudio(db: D1Database) {
+  const row = await db
+    .prepare('SELECT value,updated_at FROM meta WHERE key=?')
+    .bind(STUDIO)
+    .first<{ value: string; updated_at: number }>();
+  return { seenAt: readMs(row?.updated_at), id: row?.value ?? '' };
 }
 /** Milliseconds since the epoch of the studio's last pull, or 0 when it never pulled. */
 export function getHeartbeat(db: D1Database) {

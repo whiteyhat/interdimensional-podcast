@@ -17,10 +17,12 @@
     "deploy": "npm run build && wrangler deploy --config dist/server/wrangler.json",
     "deploy:staging": "D1_DATABASE_NAME=pepe-chad-requests-staging D1_DATABASE_ID=6c07b691-cdbe-4681-82a8-4e14a7c85bcb npm run build && wrangler deploy --config dist/server/wrangler.json --name interdimensional-podcast-staging && npm run build",
     "stream": "node scripts/stream.mjs",
+    "air": "node scripts/air.mjs",
     "launch": "node scripts/launch.mjs"
   },
   "dependencies": {
     "@base-ui/react": "1.7.0",
+    "@fal-ai/client": "1.11.0-alpha.3",
     "@pump-fun/pump-sdk": "1.36.0",
     "@shadcn/react": "0.3.0",
     "@solana-program/compute-budget": "0.16.0",
@@ -51,6 +53,7 @@
     "embla-carousel-react": "8.5.2",
     "input-otp": "1.4.2",
     "lucide-react": "1.31.0",
+    "playwright-core": "1.63.0",
     "react": "19.2.6",
     "react-day-picker": "9.8.1",
     "react-dom": "19.2.6",

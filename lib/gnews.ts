@@ -28,10 +28,9 @@ export type Feed = {
   query?: string;
 };
 export const feeds: Feed[] = [
-  { id: 'crypto', query: 'crypto OR bitcoin OR ethereum OR solana when:1d', category: 'crypto' },
-  { id: 'memecoin', query: 'memecoin OR "meme coin" OR dogecoin OR "pump.fun" when:2d', category: 'crypto' },
-  { id: 'tech', topic: 'TECHNOLOGY', category: 'tech' },
-  { id: 'business', topic: 'BUSINESS', category: 'macro' },
+  { id: 'solana', query: 'solana when:1d', category: 'crypto' },
+  { id: 'memecoin', query: '(solana OR "pump.fun" OR bonk OR dogwifhat) (memecoin OR "meme coin" OR launch OR community) when:1d', category: 'crypto' },
+  { id: 'crypto', query: '(bitcoin OR ethereum OR crypto) (exchange OR network OR regulation) when:1d', category: 'crypto' },
 ];
 const BASE = 'hl=en-US&gl=US&ceid=US:en';
 export const feedUrl = (feed: Feed) =>
@@ -240,7 +239,7 @@ export function toDrafts(
     const draft = sanitizeDraft({
       title: item.title,
       brief: synthBrief(item, nowMs),
-      angle: `Treat it as a headline the hosts half-read, not a briefing they studied.`,
+      angle: `React to the reported event and its consequences for Solana memecoin traders. Keep the event central; invent no details beyond these headlines.`,
       source: 'web',
       score,
       handle: item.publisher,

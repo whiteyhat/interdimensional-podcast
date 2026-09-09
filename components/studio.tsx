@@ -1,6 +1,12 @@
 'use client';
 /* oxlint-disable next/no-img-element -- Canonical generated camera still, shown without an image optimizer. */
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
@@ -13,7 +19,12 @@ import {
   VolumeX,
   Maximize,
 } from 'lucide-react';
-import { Podcast, type Snapshot } from '@/lib/engine';
+import {
+  Podcast,
+  bufferConfig,
+  readySeconds,
+  type Snapshot,
+} from '@/lib/engine';
 import { createServices } from '@/lib/services';
 import { Player } from '@/components/player';
 import { Ticker } from '@/components/ticker';
@@ -22,7 +33,8 @@ import { CoinBug } from '@/components/coin-bug';
 import { PumpChatSource } from '@/lib/pumpchat';
 import { ChatPanel } from '@/components/chat-panel';
 import { ManualCommentSource } from '@/lib/chat';
-import { cast, show, shotDuration } from '@/lib/show';
+import { cast, show } from '@/lib/show';
+import { SponsorConsole, SponsorOnAir } from '@/components/sponsor-console';
 /** The pause/resume and stop/start pair, shown on the broadcast overlay and the playbar. */
 function Transport({
   engine,
@@ -56,10 +68,21 @@ function Transport({
   );
 }
 /** The one mute toggle, shared by the stage tools and the broadcast overlay. */
-function MuteButton({ muted, onToggle }: { muted: boolean; onToggle: () => void }) {
+function MuteButton({
+  muted,
+  onToggle,
+}: {
+  muted: boolean;
+  onToggle: () => void;
+}) {
   const label = muted ? 'Unmute' : 'Mute';
   return (
-    <button className="quiet" title={label} aria-label={label} onClick={onToggle}>
+    <button
+      className="quiet"
+      title={label}
+      aria-label={label}
+      onClick={onToggle}
+    >
       {muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
     </button>
   );
@@ -73,6 +96,9 @@ export function Studio() {
   const params = useSearchParams();
   const broadcast = params.get('broadcast') === '1';
   const autostart = params.get('autostart') === '1';
+  // A hosted box has no operator sitting at the screen: everything drawn for one would only
+  // reach the audience. The box reports errors through its own status instead.
+  const hosted = params.get('hosted') === '1';
   const [engine] = useState(() => new Podcast(createServices()));
   const [chat] = useState(() => new ManualCommentSource());
   const state = useSyncExternalStore(
@@ -86,7 +112,10 @@ export function Studio() {
   // The engine owns the chart: one poll, and its copy is the one carrying the live viewer count.
   const mint = state.coin?.mint ?? null;
   // The pump.fun chat is read only once the coin exists; the constructor has no side effects.
-  const pumpChat = useMemo(() => (mint ? new PumpChatSource(mint) : null), [mint]);
+  const pumpChat = useMemo(
+    () => (mint ? new PumpChatSource(mint) : null),
+    [mint],
+  );
   // The snapshot changes many times a clip; the queued ids only move when the topics do.
   const queuedIds = useMemo(
     () =>
@@ -146,9 +175,39 @@ export function Studio() {
   }, [running, broadcast]);
   useEffect(() => {
     if (!broadcast) return;
-    document.documentElement.classList.add('broadcast-page');
-    return () => document.documentElement.classList.remove('broadcast-page');
-  }, [broadcast]);
+    const classes = document.documentElement.classList;
+    classes.add('broadcast-page');
+    if (hosted) classes.add('hosted-page');
+    return () => classes.remove('broadcast-page', 'hosted-page');
+  }, [broadcast, hosted]);
+  // A hosted broadcast box has no eyes. It reads the show's state off the document to decide
+  // whether to keep streaming, reload a wedged page, or go off air. Broadcast view only.
+  const { phase, aired, stalls, error } = state;
+  const airClip = state.current ? String(state.current.id) : '';
+  // Warmup can outlast any fixed deadline when takes are rejected and retried, so the box is
+  // told how much footage exists rather than left to guess whether the show is stuck.
+  const airBuffered = Math.floor(readySeconds(state.slots));
+  useEffect(() => {
+    if (!broadcast) return;
+    const air = document.documentElement.dataset;
+    air.airPhase = phase;
+    air.airClip = airClip;
+    air.airAired = String(aired);
+    air.airStalls = String(stalls);
+    air.airBuffered = String(airBuffered);
+    air.airError = error;
+    return () => {
+      for (const key of [
+        'airPhase',
+        'airClip',
+        'airAired',
+        'airStalls',
+        'airBuffered',
+        'airError',
+      ])
+        delete air[key];
+    };
+  }, [broadcast, phase, airClip, aired, stalls, airBuffered, error]);
   // Tune in once, and only after the local server has confirmed a fal key.
   useEffect(() => {
     if (!autostart || configured !== true || autostarted.current) return;
@@ -215,10 +274,7 @@ export function Studio() {
     } catch {}
     return () => lifecycle.abort();
   }, [engine]);
-  const ready = state.slots.filter((s) => s.status === 'ready');
-  const latest =
-    state.requests.filter((r) => r.status !== 'aired').at(-1) ??
-    state.requests.at(-1);
+  const bufferedSeconds = airBuffered;
   return (
     <main className={broadcast ? 'podcast broadcast-mode' : 'podcast'}>
       <header>
@@ -243,12 +299,17 @@ export function Studio() {
               : 'OPEN CHANNEL'}
         </span>
       </div>
-      {(state.error || uiError || configured === false || state.slots.some(s=>s.status==='failed')) && (
+      {(state.error ||
+        uiError ||
+        configured === false ||
+        state.slots.some((s) => s.status === 'failed')) && (
         <div className="notice" role="alert">
           {uiError ||
             state.error ||
-            (configured===false?'Add FAL_KEY to .dev.vars and restart the local server.':'Some buffered shots need retry.')}
-          {(state.error || state.slots.some(s=>s.status==='failed')) && (
+            (configured === false
+              ? 'Add FAL_KEY to .dev.vars and restart the local server.'
+              : 'Some buffered shots need retry.')}
+          {(state.error || state.slots.some((s) => s.status === 'failed')) && (
             <button className="quiet" onClick={() => engine.retry()}>
               Retry existing jobs
             </button>
@@ -267,6 +328,9 @@ export function Studio() {
               muted={muted}
               onEnded={(id) => engine.clipEnded(id)}
               onShown={(id) => engine.shown(id)}
+              onPlaybackFailure={(id, url, reason) =>
+                engine.playbackFailed(id, url, reason)
+              }
             />
             {!state.current && (
               <div className="opening">
@@ -274,22 +338,31 @@ export function Studio() {
                 <p className="eyebrow">OPEN MIC / NO FINAL EPISODE</p>
                 <h1>{show.headline}</h1>
                 <p>
-                  {state.phase === 'buffering'
-                    ? `${ready.length} of 3 opening shots ready. Loading complete videos before we roll.`
+                  {state.phase === 'buffering' && !hosted
+                    ? `${bufferedSeconds} of ${bufferConfig.startupSeconds} seconds ready. Building a reserve before we go live.`
                     : `${cast.host.name} and ${cast.guest.name} react to the news as it breaks. None of it is advice.`}
                 </p>
-                <button
-                  className="primary"
-                  disabled={!configured}
-                  onClick={() => (running ? engine.stop() : engine.start())}
-                >
-                  {running ? 'Cancel warmup' : 'Tune in'}
-                  <ArrowUpRight size={17} />
-                </button>
-                <small>
-                  Tightly paced 5-7-second speaking turns. Three-shot startup buffer. Sound
-                  on.
-                </small>
+                {/*
+                  A hosted box is already streaming when the show rebuilds its reserve after a
+                  reload, so this card is what the audience sees. It stays a title slate: no
+                  buffer arithmetic, and no button nobody can press.
+                */}
+                {!hosted && (
+                  <>
+                    <button
+                      className="primary"
+                      disabled={!configured}
+                      onClick={() => (running ? engine.stop() : engine.start())}
+                    >
+                      {running ? 'Cancel warmup' : 'Tune in'}
+                      <ArrowUpRight size={17} />
+                    </button>
+                    <small>
+                      {bufferConfig.startupSeconds} seconds of footage ready
+                      before we go live. Sound on.
+                    </small>
+                  </>
+                )}
               </div>
             )}
             {state.current && !broadcast && (
@@ -319,6 +392,7 @@ export function Studio() {
               </div>
             )}
             {state.coin && <CoinBug coin={state.coin} />}
+            <SponsorOnAir sponsor={state.current?.sponsorship} />
             {state.current && (
               <Ticker topics={state.topics} requests={state.requests} />
             )}
@@ -342,30 +416,28 @@ export function Studio() {
           </div>
         </section>
         <aside>
-          <p className="eyebrow">THE FLOOR IS PAID</p>
-          <h2>Pay to steer the show.</h2>
-          <p className="muted">
-            Viewers on the site put five dollars of {show.ticker} behind a
-            message and it lands in the very next exchange. Nothing else gets
-            into the studio.
-          </p>
-          <output className="statusline">
-            {state.writing
-              ? 'Writing the next exchange…'
-              : latest?.status === 'on-air'
-                ? `${latest.from}’s request is on air.`
-                : latest && latest.status !== 'aired'
-                  ? `Next paid request ${latest.status}. Already-committed shots play first; roughly ${Math.ceil((state.current?.duration || 0) + state.slots.reduce((sum, s) => sum + (s.clip?.duration || shotDuration(s.text, s.gesture)), 0))}s or more.`
-                  : 'Paid requests from the site go straight into the next exchange.'}
-          </output>
-          <CoinCard
-            coin={state.coin}
-            launched={state.coinLaunched}
-            error={state.coinError}
-            ticker={show.ticker}
+          <SponsorConsole
+            orders={state.sponsors}
+            requests={state.requests}
+            error={state.sponsorError}
+            running={running}
           />
+          <details className="sponsor-coin-disclosure">
+            <summary>The coin chart</summary>
+            <CoinCard
+              coin={state.coin}
+              launched={state.coinLaunched}
+              error={state.coinError}
+              ticker={show.ticker}
+            />
+          </details>
           {pumpChat && <ChatPanel source={pumpChat} queuedIds={queuedIds} />}
           <div className="producer-note">
+            <p>
+              <Link href="/studio/director">
+                Try continuous Director mode ↗
+              </Link>
+            </p>
             <span className="eyebrow">THE ROOM</span>
             <p>
               {cast.host.name.toUpperCase()} / {cast.host.tag}
@@ -374,9 +446,10 @@ export function Studio() {
               {cast.guest.name.toUpperCase()} / {cast.guest.tag}
             </p>
             <p>
-              Start fills three shots. Then we maintain up to four ahead. Pause
-              stops new submissions; Stop ends the run. Generated shots use fal
-              credits.
+              Start prepares {bufferConfig.startupSeconds} seconds of footage.
+              We then prepare up to {bufferConfig.targetSeconds} seconds ahead.
+              Pause stops new submissions; Stop ends the run. Generated shots
+              use fal credits.
             </p>
           </div>
           {state.requests.length > 0 && (

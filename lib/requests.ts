@@ -15,6 +15,13 @@ export type PaidRequest = {
   shot?: number;
   at: number;
 };
+/**
+ * The site refused this pull because another studio is already on air. Its own class, because
+ * the engine has to stand down rather than retry: two studios generate the show twice and pay
+ * for it twice.
+ */
+export class StudioBusyError extends Error {}
+
 export const requestConfig = {
   limits: { text: 240, name: 20, keep: 30 },
   minWords: 1,

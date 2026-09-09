@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "id": "gigachad-cap-v1",
+  "host": "guest",
+  "canvas": {
+    "width": 1344,
+    "height": 768
+  },
+  "baseImage": {
+    "path": "public/gigachad-video.png",
+    "sha256": "5b0908574399c0cc1bc0b5e0601f123732284bf331173a5be19460c6693e6e54"
+  },
+  "blankCapImage": {
+    "path": "public/wearables/gigachad-cap-v1.png",
+    "sha256": "e2d2bd083a80163215f02d7f3bdc766e76b7786870dc6b0fff109afa5efa1234"
+  },
+  "logoQuad": [
+    [
+      662,
+      84
+    ],
+    [
+      735,
+      85
+    ],
+    [
+      724,
+      118
+    ],
+    [
+      651,
+      116
+    ]
+  ],
+  "trackingRoi": [
+    570,
+    29,
+    310,
+    150
+  ],
+  "trackingMask": "public/wearables/gigachad-cap-v1-track.png",
+  "foregroundMask": "public/wearables/gigachad-cap-v1-foreground.png",
+  "logoMask": "public/wearables/gigachad-cap-v1-logo-mask.png",
+  "tracking": {
+    "algorithm": "cloth-plane-v1",
+    "minClothCoverage": 0.96,
+    "minEdgeContrast": 15,
+    "maxForwardBackwardErrorPx": 0.8,
+    "maxCornerDifference": 14,
+    "maxFrameMotionPx": 40,
+    "frameAreaRatio": [
+      0.84,
+      1.18
+    ]
+  },
+  "qualified": true,
+  "maskHashes": {
+    "foregroundMask": "f2c5d5dcfbdd3739104bc1fcdcb3122f5d4e292beb64db22d79044f75826c0be",
+    "logoMask": "1ce4255eefa6f2f0dd04b2014d5d84320d7600f853ae6a70233f368f84eaefc3"
+  },
+  "qualificationVersion": "caps-v1"
+}

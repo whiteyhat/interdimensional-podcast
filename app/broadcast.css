@@ -58,6 +58,15 @@ html.broadcast-page body {
   padding: 6px 9px;
   font-size: 11px;
 }
+/*
+ * A hosted box: nobody is at this screen, and the stage fills it, so the pointer counts as
+ * hovering forever and the operator strip would be on air permanently. The error notice is for
+ * an operator too; on a hosted box it reaches them through the box's status instead.
+ */
+.hosted-page .broadcast-controls,
+.hosted-page .broadcast-mode .notice {
+  display: none;
+}
 /* Operator strip: invisible until the pointer (or focus) is on the stage, gone faster than it came. */
 .broadcast-controls {
   position: absolute;

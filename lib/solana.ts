@@ -8,6 +8,7 @@ import {
   createSolanaRpc,
   createTransactionMessage,
   getBase58Decoder,
+  getAddressEncoder,
   getBase64Encoder,
   getBase64EncodedWireTransaction,
   getCompiledTransactionMessageDecoder,
@@ -20,6 +21,7 @@ import {
   type Base64EncodedWireTransaction,
 } from '@solana/kit';
 import { createTransfer, findReference } from '@solana/pay';
+import nacl from 'tweetnacl';
 import {
   getSetComputeUnitLimitInstruction,
   getSetComputeUnitPriceInstruction,
@@ -220,15 +222,20 @@ export async function buildQuoteTx(rpc: SolanaRpc, fields: QuoteFields, ticker: 
 /** Refuse to relay anything that is not this viewer's own quote. */
 export function inspectSigned(base64: string, expect: { wallet: string; reference: string }) {
   let keys: readonly string[];
+  let signature:string;
   try {
     const bytes = getBase64Encoder().encode(base64);
     const tx = getTransactionDecoder().decode(bytes);
     keys = getCompiledTransactionMessageDecoder().decode(tx.messageBytes).staticAccounts;
+    const payer=tx.signatures[address(expect.wallet)];
+    if(!payer||!nacl.sign.detached.verify(new Uint8Array(tx.messageBytes),new Uint8Array(payer),new Uint8Array(getAddressEncoder().encode(address(expect.wallet)))))throw Error('Invalid payer signature');
+    signature=getBase58Decoder().decode(payer);
   } catch {
     throw fail(400, 'That is not a signed Solana transaction.');
   }
   if (keys[0] !== expect.wallet || !keys.includes(expect.reference))
     throw fail(400, 'That transaction does not belong to this quote.');
+  return signature;
 }
 /** Broadcast a wallet-signed transaction for wallets that can sign but not send. */
 export async function sendSigned(rpc: SolanaRpc, base64: string): Promise<string> {

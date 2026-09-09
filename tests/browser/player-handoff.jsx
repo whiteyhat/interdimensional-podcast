@@ -96,6 +96,7 @@ const visible = (url) =>
 const present = (url) => {
   if (fallback) {
     for (let i = 0; i < 2; i++)
+      // oxlint-disable-next-line unicorn/no-useless-spread -- New callbacks belong to the next paint, so snapshot this queue.
       for (const [id, callback] of [...paints]) {
         paints.delete(id);
         callback(performance.now());
@@ -183,6 +184,24 @@ window.playerChecks = (async () => {
     !!document.querySelector('button'),
     'Autoplay rejection offers a manual play control',
   );
+  // oxlint-disable-next-line typescript/unbound-method -- Saved for restoration on the same prototype.
+  const resumeAudio = AudioContext.prototype.resume;
+  let completeOldClick;
+  AudioContext.prototype.resume = () => new Promise(resolve => { completeOldClick = resolve; });
+  document.querySelector('button').click();
+  AudioContext.prototype.resume = resumeAudio;
+  const obsolete = engine.getSnapshot().current;
+  engine.clipEnded(obsolete.id);
+  await tick();
+  // oxlint-disable-next-line typescript/unbound-method -- Called with play.call(this) and restored below.
+  const play = HTMLVideoElement.prototype.play;
+  HTMLVideoElement.prototype.play = function () {
+    return this.getAttribute('src') === obsolete.url ? Promise.resolve() : play.call(this);
+  };
+  completeOldClick();
+  await tick();
+  check(!!document.querySelector('button'), 'An obsolete play click cannot clear the current autoplay block');
+  HTMLVideoElement.prototype.play = play;
   engine.pause();
   await tick();
   check(

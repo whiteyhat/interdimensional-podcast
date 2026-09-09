@@ -1,0 +1,6 @@
+# This service keeps running when the studio is stopped; only the HTTP reconciliation token is needed.
+FROM node:22-bookworm-slim
+WORKDIR /app
+COPY scripts/sponsor-reconcile.mjs scripts/sponsor-reconcile.mjs
+USER node
+CMD ["node", "scripts/sponsor-reconcile.mjs", "--watch"]

@@ -1,0 +1,206 @@
+.sponsor-console {
+  color: var(--text, #efeee6);
+}
+.sponsor-console-heading,
+.sponsor-console-order-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sponsor-console-heading {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.sponsor-console-heading .eyebrow {
+  margin: 0;
+  font-size: 10px;
+}
+.sponsor-console h2 {
+  font-size: 30px;
+  margin: 15px 0 10px;
+}
+.sponsor-console > .muted,
+.sponsor-console-policy {
+  font-size: 12px;
+  line-height: 1.6;
+}
+.sponsor-console-signal {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: 9px var(--font-mono, monospace);
+  color: #8e967e;
+}
+.sponsor-console-signal.active {
+  color: #a6b785;
+}
+.sponsor-console-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  border-block: 1px solid #343d2b;
+  padding: 14px 0;
+  margin: 18px 0;
+  font-size: 11px;
+  color: #a0a68f;
+}
+.sponsor-console-summary b {
+  color: #eeeadd;
+  font-size: 17px;
+  font-weight: 500;
+  margin-right: 3px;
+}
+.sponsor-console-empty {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 14px 0;
+  color: #abb599;
+  font-size: 13px;
+}
+.sponsor-console-empty small {
+  font-size: 11px;
+  color: #929c83;
+}
+.sponsor-console-orders {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.sponsor-console-orders li {
+  padding: 14px 0;
+  border-bottom: 1px solid #343d2b;
+}
+.sponsor-console-order-title {
+  font-size: 12px;
+}
+.sponsor-console-order-title b {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.sponsor-console-order-title span {
+  color: #bca377;
+  text-transform: uppercase;
+  font: 9px var(--font-mono, monospace);
+}
+.sponsor-console-orders p {
+  margin: 7px 0;
+  font-size: 11px;
+  color: #9ca98c;
+}
+.sponsor-console-orders small {
+  display: block;
+  font-size: 10px;
+  color: #a5ad97;
+  line-height: 1.6;
+}
+.sponsor-console-orders progress {
+  appearance: none;
+  height: 4px;
+  border: 0;
+  border-radius: 2px;
+  width: 100%;
+  margin: 7px 0;
+  overflow: hidden;
+  background: #30392a;
+}
+.sponsor-console-orders progress::-webkit-progress-bar {
+  background: #30392a;
+}
+.sponsor-console-orders progress::-webkit-progress-value {
+  background: #c8a16c;
+}
+.sponsor-console-orders progress::-moz-progress-bar {
+  background: #c8a16c;
+}
+.sponsor-console-alert {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  color: #ddae82 !important;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.sponsor-console-alert svg {
+  flex-shrink: 0;
+}
+.sponsor-console details {
+  margin-top: 14px;
+  font-size: 12px;
+}
+.sponsor-console details p {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.sponsor-console-policy {
+  color: #8e9a80;
+  margin: 15px 0 0;
+}
+.sponsor-on-air {
+  position: absolute;
+  z-index: 5;
+  bottom: 64px;
+  left: 18px;
+  max-width: calc(100% - 36px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 13px;
+  border: 1px solid #a6885155;
+  border-radius: 7px;
+  color: #f3ecdc;
+  background: #1c2119ee;
+  box-shadow: 0 5px 18px #0003;
+}
+.sponsor-on-air > span {
+  font: 9px var(--font-mono, monospace);
+  letter-spacing: 1px;
+  color: #d4b77f;
+}
+.sponsor-on-air img {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+.sponsor-on-air div {
+  min-width: 0;
+}
+.sponsor-on-air b,
+.sponsor-on-air small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sponsor-on-air b {
+  font-size: 13px;
+}
+.sponsor-on-air small {
+  color: #a9b29b;
+  font-size: 10px;
+  margin-top: 3px;
+}
+.sponsor-on-air a {
+  color: #d4b77f;
+  display: flex;
+  padding: 4px;
+}
+@media (max-width: 480px) {
+  .sponsor-on-air {
+    gap: 7px;
+    padding: 7px 9px;
+    left: 8px;
+    bottom: 50px;
+    max-width: calc(100% - 16px);
+  }
+  .sponsor-on-air > span {
+    font-size: 7px;
+  }
+  .sponsor-on-air b {
+    font-size: 11px;
+  }
+  .sponsor-on-air small {
+    font-size: 8px;
+  }
+}

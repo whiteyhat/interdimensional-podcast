@@ -1,6 +1,12 @@
 import { isBeat, opening, runsOk, shotDuration, type Line } from './show';
 import { GestureSchedule } from './gestures';
 import {
+  SponsorProgram,
+  type SponsorCue,
+  type SponsorDelivery,
+  type SponsorServices,
+} from './sponsor-program';
+import {
   avoidTitles,
   batchWritten,
   briefOf,
@@ -33,6 +39,7 @@ import {
   markRequest,
   mergeIncoming,
   nextQueued,
+  StudioBusyError,
   trimRequests,
   type PaidRequest,
 } from './requests';
@@ -48,6 +55,8 @@ export type { CoinSnapshot } from './coin';
 export type Clip = Line & {
   url: string;
   rawUrl: string;
+  /** Verified end of the scripted utterance; the remaining picture plays silently. */
+  speechEnd?: number;
   duration: number;
   renderMs: number;
 };
@@ -70,12 +79,14 @@ export type Services = {
     cue?: string,
     topic?: TopicBrief,
     from?: string,
+    sponsorship?: SponsorCue,
   ) => Promise<Line[]>;
   render: (line: Line) => Promise<Clip>;
   release: (url: string) => void;
   research?: (input: ResearchInput) => Promise<ResearchResult>;
   news?: (input: ResearchInput) => Promise<ResearchResult>;
   requests?: RequestServices;
+  sponsors?: SponsorServices;
   /** The show's own chart; the snapshot is null until the coin is launched. */
   coin?: () => Promise<CoinReading>;
 };
@@ -86,6 +97,8 @@ export type Snapshot = {
   slots: Slot[];
   history: Clip[];
   requests: PaidRequest[];
+  sponsors: SponsorDelivery[];
+  sponsorError: string;
   coin: CoinSnapshot | null;
   /** null until the coin lane's first answer; false means the coin has not launched yet. */
   coinLaunched: boolean | null;
@@ -99,6 +112,29 @@ export type Snapshot = {
   stalls: number;
   aired: number;
 };
+export type BufferPolicy = {
+  startupSeconds: number;
+  targetSeconds: number;
+  recoverySeconds: number;
+  concurrency: number;
+  maxSlots: number;
+};
+export const bufferConfig: BufferPolicy = {
+  startupSeconds: 40,
+  targetSeconds: 60,
+  recoverySeconds: 30,
+  concurrency: 3,
+  maxSlots: 8,
+};
+/** Only uninterrupted, decoded footage can protect the next cut. */
+export function readySeconds(slots: Slot[]) {
+  let seconds = 0;
+  for (const slot of slots) {
+    if (slot.status !== 'ready' || !slot.clip) break;
+    seconds += slot.clip.duration;
+  }
+  return seconds;
+}
 const initial = (): Snapshot => ({
   phase: 'idle',
   current: null,
@@ -106,6 +142,8 @@ const initial = (): Snapshot => ({
   slots: [],
   history: [],
   requests: [],
+  sponsors: [],
+  sponsorError: '',
   coin: null,
   coinLaunched: null,
   coinError: '',
@@ -128,6 +166,15 @@ export class Podcast {
   private draftRequestId?: string;
   private writing = false;
   private inflightRequestId?: string;
+  private draftSponsorId?: string;
+  private inflightSponsorId?: string;
+  private sponsorProgram?: SponsorProgram;
+  private sponsorTimer?: ReturnType<typeof setInterval>;
+  private sponsorSyncing = false;
+  private advancing = false;
+  private playbackEpoch = 0;
+  private paidBuffered = false;
+  private lastPaidAt = -Infinity;
   private active = 0;
   private ended = false;
   private playedSeconds = 0;
@@ -138,11 +185,20 @@ export class Podcast {
   private lanes = new Map<string, { at: number; inflight: boolean }>();
   /** The last shot of each request's written batch, so airing never assumes a batch length. */
   private requestEnds = new Map<string, number>();
+  private pendingAired = new Set<string>();
   private coinMemory: CoinMemory = createCoinMemory();
   private viewers?: number;
   // The wire outlives a single run, so a restart keeps the topics already gathered.
   private queue: TopicQueueState = createQueue();
-  constructor(private services: Services) {}
+  constructor(
+    private services: Services,
+    private policy: BufferPolicy = bufferConfig,
+  ) {
+    if (services.sponsors)
+      this.sponsorProgram = new SponsorProgram(services.sponsors, () =>
+        this.set({ sponsors: this.sponsorProgram!.snapshot() }),
+      );
+  }
   getSnapshot = () => this.state;
   subscribe = (fn: () => void) => {
     this.listeners.add(fn);
@@ -178,16 +234,29 @@ export class Podcast {
     this.draftRequestId = undefined;
     this.started = Date.now();
     this.playedSeconds = 0;
+    this.lastPaidAt = Number.isFinite(this.lastPaidAt) ? 0 : -Infinity;
+    this.paidBuffered = false;
+    this.sponsorProgram?.beginRun();
     this.gestures = new GestureSchedule();
     this.set({ phase: 'buffering', ...this.queuePatch() });
+    if (this.sponsorProgram) {
+      this.sponsorTimer = setInterval(() => void this.syncSponsors(), 10000);
+      void this.syncSponsors();
+    }
     this.pump();
   }
   stop() {
+    ++this.playbackEpoch;
     ++this.run;
     this.writingEpoch++;
     this.active = 0;
     this.writing = false;
     this.inflightRequestId = undefined;
+    this.inflightSponsorId = undefined;
+    this.advancing = false;
+    clearInterval(this.sponsorTimer);
+    this.sponsorTimer = undefined;
+    void this.sponsorProgram?.stop();
     this.queue = resetRuntime(this.queue);
     this.set({ phase: 'stopped', writing: false, ...this.queuePatch() });
   }
@@ -201,6 +270,7 @@ export class Podcast {
     for (const url of urls) if (url) this.services.release(url);
     this.draft = [];
     this.draftRequestId = undefined;
+    this.draftSponsorId = undefined;
     this.requestEnds.clear();
     this.ended = false;
   }
@@ -211,26 +281,57 @@ export class Podcast {
     const before = this.state.requests;
     const requests = mergeIncoming(before, [item]);
     if (requests === before) return;
-    if (this.draft.length && !this.draftRequestId) {
+    if (this.draft.length && !this.draftRequestId && !this.draftSponsorId) {
       this.draft = [];
     }
-    if (this.writing && !this.inflightRequestId) this.writingEpoch++;
+    if (this.writing && !this.inflightRequestId && !this.inflightSponsorId)
+      this.writingEpoch++;
     this.set({ requests, error: '' });
     this.pump();
   }
   pause() {
-    if (this.state.phase === 'playing') this.set({ phase: 'paused' });
-    else if (this.state.phase === 'paused') {
+    ++this.playbackEpoch;
+    if (this.state.phase === 'playing') {
+      this.set({ phase: 'paused' });
+      void this.sponsorProgram?.stop();
+    } else if (this.state.phase === 'paused') {
+      if (this.state.current?.sponsorship || this.state.current?.wardrobe)
+        this.ended = true;
       this.set({ phase: this.ended ? 'waiting' : 'playing' });
+      void this.syncSponsors();
       if (this.ended) this.advance();
       this.pump();
     }
   }
   clipEnded(id: number) {
     if (this.state.current?.id !== id || this.ended || !this.running()) return;
-    this.playedSeconds += this.state.current.duration;
+    const clip = this.state.current;
+    this.playedSeconds += clip.duration;
     this.ended = true;
-    if (this.state.phase !== 'paused') this.advance();
+    const completed = this.state.requests.filter(
+      (request) =>
+        request.status === 'on-air' && this.requestEnds.get(request.id) === id,
+    );
+    if (completed.length) {
+      for (const request of completed) {
+        this.requestEnds.delete(request.id);
+        this.pendingAired.add(request.reference);
+      }
+      this.set({
+        requests: this.state.requests.map((request) =>
+          completed.includes(request)
+            ? { ...request, status: 'aired' as const }
+            : request,
+        ),
+      });
+      void this.reportAired();
+    }
+    if (this.sponsorProgram?.needsGate(clip)) {
+      const run = this.run;
+      void this.sponsorProgram.ended(clip).finally(() => {
+        if (run === this.run && this.state.phase !== 'paused') this.advance();
+      });
+    } else if (this.state.phase !== 'paused') this.advance();
   }
   shown(id: number) {
     if (this.state.current?.id !== id) return;
@@ -238,7 +339,27 @@ export class Podcast {
     if (previous) this.services.release(previous.url);
     this.set({ previous: null });
   }
-  private advance() {
+  playbackFailed(id: number, url: string, reason: string) {
+    const current = this.state.current;
+    if (!current || current.id !== id || current.url !== url || !this.running())
+      return false;
+    if (!this.sponsorProgram?.playbackFailed(current, Error(reason)))
+      return false;
+    ++this.playbackEpoch;
+    this.ended = true;
+    const held = this.state.previous ?? current;
+    if (held !== current) this.services.release(current.url);
+    this.set({
+      current: null,
+      previous: held,
+      phase: 'waiting',
+      sponsorError:
+        'Playback was interrupted. The sponsorship is being rescheduled.',
+    });
+    this.pump();
+    return true;
+  }
+  private advance(authorized = false) {
     const first = this.state.slots[0];
     if (first?.status === 'ready') this.queue = markOnAir(this.queue, first.id);
     if (!first?.clip || first.status !== 'ready') {
@@ -247,24 +368,53 @@ export class Podcast {
       this.pump();
       return;
     }
-    const old = this.state.current;
+    if (this.sponsorProgram?.needsGate(first.clip) && !authorized) {
+      if (this.advancing) return;
+      this.advancing = true;
+      const run = this.run;
+      const playbackEpoch = this.playbackEpoch;
+      void this.sponsorProgram
+        .before(first.clip)
+        .then(
+          () => {
+            if (
+              run === this.run &&
+              playbackEpoch === this.playbackEpoch &&
+              this.state.phase !== 'paused' &&
+              this.state.slots[0]?.id === first.id
+            )
+              this.advance(true);
+          },
+          () => {
+            if (run !== this.run) return;
+            this.rejectPlacement(first);
+          },
+        )
+        .finally(() => {
+          if (run === this.run) {
+            this.advancing = false;
+            this.pump();
+          }
+        });
+      return;
+    }
+    const old = this.state.current ?? this.state.previous;
     this.ended = false;
     const before = this.state.requests;
     const requests = before.map((r) => {
       if (r.shot === first.id && r.status === 'buffered')
         return { ...r, status: 'on-air' as const };
-      // Once the conversation has moved past the last shot of its batch, the request is done.
-      const end = this.requestEnds.get(r.id);
-      if (r.status === 'on-air' && end !== undefined && first.id > end)
-        return { ...r, status: 'aired' as const };
       return r;
     });
-    // The site hears about a request once, on the edge where it reaches the air.
-    requests.forEach((r, i) => {
-      if (r.status === 'on-air' && before[i].status === 'buffered')
-        void this.services.requests?.aired(r.reference).catch(() => {});
-      if (r.status === 'aired') this.requestEnds.delete(r.id);
-    });
+    if (
+      first.sponsorship?.first ||
+      requests.some(
+        (r, i) => r.status === 'on-air' && before[i].status === 'buffered',
+      )
+    ) {
+      this.lastPaidAt = this.playedSeconds;
+      this.paidBuffered = false;
+    }
     this.set({
       current: first.clip,
       previous: old,
@@ -278,10 +428,79 @@ export class Podcast {
     });
     this.pump();
   }
+  /** Cancelled ads never air; ordinary dialogue with an obsolete cap is rendered again without it. */
+  private rejectPlacement(first: Slot) {
+    if (first.sponsorship) {
+      const id = first.sponsorship.orderId;
+      const removed = this.state.slots.filter(
+        (slot) => slot.sponsorship?.orderId === id,
+      );
+      for (const slot of removed)
+        if (slot.clip) this.services.release(slot.clip.url);
+      this.draft = this.draft.filter(
+        (line) => line.sponsorship?.orderId !== id,
+      );
+      this.paidBuffered = false;
+      this.set({
+        slots: this.state.slots.filter(
+          (slot) => slot.sponsorship?.orderId !== id,
+        ),
+        sponsorError:
+          'An interrupted sponsorship is being rescheduled. Editorial conversation continues.',
+      });
+    } else if (first.wardrobe) {
+      if (first.clip) this.services.release(first.clip.url);
+      const line = {
+        ...first,
+        wardrobe: undefined,
+        clip: undefined,
+        status: 'rendering' as const,
+        error: undefined,
+      };
+      this.set({
+        slots: this.state.slots.map((slot) =>
+          slot.id === first.id ? line : slot,
+        ),
+      });
+      this.launch(line, this.run);
+    }
+    if (this.ended) this.set({ phase: 'waiting' });
+  }
+  private async syncSponsors() {
+    if (
+      !this.sponsorProgram ||
+      !this.running() ||
+      this.state.phase === 'paused' ||
+      this.sponsorSyncing
+    )
+      return;
+    this.sponsorSyncing = true;
+    const run = this.run;
+    try {
+      await this.sponsorProgram.sync();
+      if (run === this.run) this.set({ sponsorError: '' });
+    } catch (error) {
+      if (run === this.run) {
+        if (error instanceof StudioBusyError) this.standDown(error.message);
+        else
+          this.set({
+            sponsorError:
+              error instanceof Error
+                ? error.message
+                : 'Sponsorship delivery is temporarily unavailable.',
+          });
+      }
+    } finally {
+      this.sponsorSyncing = false;
+      if (run === this.run) this.pump();
+    }
+  }
   retry() {
     this.writeFailures = 0;
     this.set({ error: '' });
-    for (const slot of this.state.slots.filter(s=>s.status==='failed').slice(0,Math.max(0,2-this.active)))
+    for (const slot of this.state.slots
+      .filter((s) => s.status === 'failed')
+      .slice(0, Math.max(0, this.policy.concurrency - this.active)))
       if (slot.status === 'failed') {
         this.set({
           slots: this.state.slots.map((s) =>
@@ -308,7 +527,8 @@ export class Podcast {
   setViewers(count: number) {
     if (!Number.isFinite(count) || count < 0 || count === this.viewers) return;
     this.viewers = count;
-    if (this.state.coin) this.set({ coin: { ...this.state.coin, viewers: count } });
+    if (this.state.coin)
+      this.set({ coin: { ...this.state.coin, viewers: count } });
   }
   /** Chat ranking is a pure heuristic, so it runs here rather than over the network. */
   ingestComments(batch: Comment[]) {
@@ -372,11 +592,36 @@ export class Podcast {
     const requests = this.services.requests;
     if (!requests) return;
     this.lane('requests', 8000, () =>
-      requests.pull().then((batch) => {
-        if (run !== this.run) return;
-        for (const item of batch) this.request(item);
-      }, () => {}),
+      this.reportAired()
+        .then(() => requests.pull())
+        .then(
+          (batch) => {
+            if (run !== this.run) return;
+            for (const item of batch) this.request(item);
+          },
+          (e) => {
+            if (run === this.run && e instanceof StudioBusyError)
+              this.standDown(e.message);
+          },
+        ),
     );
+  }
+  private async reportAired() {
+    if (!this.services.requests) return;
+    await Promise.allSettled(
+      [...this.pendingAired].map(async (reference) => {
+        await this.services.requests!.aired(reference);
+        this.pendingAired.delete(reference);
+      }),
+    );
+  }
+  /**
+   * Leave the air for something only the operator can fix, and say so plainly. Used when
+   * another studio holds the queue: retrying would just generate the show twice.
+   */
+  private standDown(reason: string) {
+    this.stop();
+    this.set({ error: reason || 'Another studio is on air.' });
   }
   /**
    * Read the chart once, whatever the show is doing. The lanes only run while the show is
@@ -476,52 +721,90 @@ export class Podcast {
     this.pumpFeed(run);
     this.pumpNews();
     while (
-      this.active < 2 &&
-      this.state.slots.length < 4 &&
+      this.active < this.policy.concurrency &&
+      this.needsFootage() &&
       this.draft.length
     ) {
       const draft = this.draft[0];
       // Include committed footage, but never count a finished frame held during an underrun twice.
-      const startsAt = this.playedSeconds
-        + (this.state.current && !this.ended ? this.state.current.duration : 0)
-        + this.state.slots.reduce((seconds, slot) => seconds
-          + (slot.clip?.duration ?? shotDuration(slot.text, slot.gesture)), 0);
-      // Keep a due short turn until its predecessors decode. Skipping it would starve gestures
-      // whenever the renderer runs behind playback; reserving early would guess at their spacing.
-      if (this.gestures.isDue(draft.speaker, isBeat(draft.text), startsAt)
-        && this.state.slots.some((slot) => slot.status !== 'ready')) break;
+      const startsAt =
+        this.playedSeconds +
+        (this.state.current && !this.ended ? this.state.current.duration : 0) +
+        this.state.slots.reduce(
+          (seconds, slot) =>
+            seconds +
+            (slot.clip?.duration ?? shotDuration(slot.text, slot.gesture)),
+          0,
+        );
+      // Precise gesture timing may wait only when enough playable footage protects the air.
+      // Otherwise render this line normally and leave the gesture due for a later short turn.
+      const deferGesture =
+        this.gestures.isDue(draft.speaker, isBeat(draft.text), startsAt) &&
+        this.state.slots.some((slot) => slot.status !== 'ready');
+      if (
+        deferGesture &&
+        readySeconds(this.state.slots) >= this.policy.startupSeconds
+      )
+        break;
       this.draft.shift();
-      const gesture = this.gestures.reserve(draft.speaker, isBeat(draft.text), startsAt, draft.id);
-      const line: Line = { ...draft, gesture };
+      const decorated =
+        this.sponsorProgram?.decorate(
+          draft,
+          this.state.slots.at(-1)?.speaker ?? this.state.current?.speaker,
+        ) ?? draft;
+      const gesture =
+        deferGesture || decorated.wardrobe
+          ? undefined
+          : this.gestures.reserve(
+              draft.speaker,
+              isBeat(draft.text),
+              startsAt,
+              draft.id,
+            );
+      const line: Line = { ...decorated, gesture };
       this.set({
         slots: [...this.state.slots, { ...line, status: 'rendering' }],
       });
       this.launch(line, run);
     }
-    if (!this.draft.length) this.draftRequestId = undefined;
+    if (!this.draft.length) {
+      this.draftRequestId = undefined;
+      this.draftSponsorId = undefined;
+    }
     if (
       this.state.phase === 'buffering' &&
-      this.state.slots.slice(0, 3).length === 3 &&
-      this.state.slots.slice(0, 3).every((s) => s.status === 'ready')
+      readySeconds(this.state.slots) >= this.policy.startupSeconds
     ) {
       this.advance();
       return;
     }
     if (
       this.state.phase === 'waiting' &&
-      this.state.slots[0]?.status === 'ready'
+      readySeconds(this.state.slots) >= this.policy.recoverySeconds
     ) {
       this.advance();
       return;
     }
     if (
       this.draft.length === 0 &&
-      this.state.slots.length < 4 &&
+      this.needsFootage() &&
       !this.writing &&
       !this.state.error
     ) {
       void this.writeNext(run);
     }
+  }
+  private needsFootage() {
+    const committed = this.state.slots.reduce(
+      (seconds, slot) =>
+        seconds +
+        (slot.clip?.duration ?? shotDuration(slot.text, slot.gesture)),
+      0,
+    );
+    return (
+      this.state.slots.length < this.policy.maxSlots &&
+      committed < this.policy.targetSeconds
+    );
   }
   private launch(line: Line, run: number) {
     this.active++;
@@ -533,6 +816,10 @@ export class Podcast {
             this.services.release(clip.url);
             return;
           }
+          if (!this.state.slots.some((slot) => slot.id === line.id)) {
+            this.services.release(clip.url);
+            return;
+          }
           this.gestures.rendered(line.id, clip.duration);
           this.set({
             slots: this.state.slots.map((s) =>
@@ -540,8 +827,14 @@ export class Podcast {
             ),
           });
         },
-        (e) => {
+        async (e) => {
           if (run !== this.run) return;
+          if (line.sponsorship || line.wardrobe) {
+            await this.sponsorProgram?.failedRender(line, e);
+            if (run === this.run)
+              this.rejectPlacement({ ...line, status: 'failed' });
+            return;
+          }
           this.set({
             slots: this.state.slots.map((s) =>
               s.id === line.id
@@ -564,10 +857,19 @@ export class Podcast {
   private async writeNext(run: number) {
     this.writing = true;
     const epoch = this.writingEpoch;
-    const request = nextQueued(this.state.requests);
-    const topic = request ? undefined : pickTopic(this.queue);
+    const paidEligible =
+      !this.paidBuffered && this.playedSeconds - this.lastPaidAt >= 120;
+    const sponsorship = paidEligible
+      ? this.sponsorProgram?.nextCue(this.playedSeconds)
+      : undefined;
+    const request =
+      !sponsorship && paidEligible
+        ? nextQueued(this.state.requests)
+        : undefined;
+    const topic = request || sponsorship ? undefined : pickTopic(this.queue);
     if (topic) this.queue = markTopic(this.queue, topic.id, 'writing');
     this.inflightRequestId = request?.id;
+    this.inflightSponsorId = sponsorship?.orderId;
     const recent: Line[] = [...this.state.history, ...this.state.slots]
       .slice(-12)
       .map(({ id, speaker, text }) => ({ id, speaker, text }));
@@ -586,16 +888,20 @@ export class Podcast {
         request?.text,
         topic && briefOf(topic),
         request?.from,
+        sponsorship,
       );
       if (run !== this.run) return;
       if (epoch !== this.writingEpoch) {
+        if (sponsorship) this.sponsorProgram?.failedWrite(sponsorship);
         // A paid request cancelled this batch; the topic goes back on the wire.
         if (topic) {
           this.queue = markTopic(this.queue, topic.id, 'queued');
           this.set({ topics: this.queue.topics });
         }
         if (request)
-          this.set({ requests: markRequest(this.state.requests, request.id, 'queued') });
+          this.set({
+            requests: markRequest(this.state.requests, request.id, 'queued'),
+          });
         return;
       }
       // The writer now chooses who speaks, so the show only checks that the batch is
@@ -605,7 +911,8 @@ export class Podcast {
         lines.length !== 4 ||
         lines.some(
           (l, i) =>
-            l.id !== next + i || (l.speaker !== 'host' && l.speaker !== 'guest'),
+            l.id !== next + i ||
+            (l.speaker !== 'host' && l.speaker !== 'guest'),
         ) ||
         !runsOk(
           lines.map((l) => l.speaker),
@@ -613,8 +920,12 @@ export class Podcast {
         )
       )
         throw Error('Writer returned out-of-order dialogue');
-      this.draft = lines;
+      this.draft = sponsorship
+        ? this.sponsorProgram!.written(sponsorship, lines)
+        : lines;
       this.draftRequestId = request?.id;
+      this.draftSponsorId = sponsorship?.orderId;
+      if (request || sponsorship) this.paidBuffered = true;
       this.writeFailures = 0;
       if (topic) this.queue = markTopic(this.queue, topic.id, 'buffered', next);
       // Remember where this batch ends so airing does not have to know how long a batch is.
@@ -631,17 +942,24 @@ export class Podcast {
         ...this.queuePatch(),
       });
     } catch (e) {
+      if (sponsorship) this.sponsorProgram?.failedWrite(sponsorship);
       if (run === this.run) {
         if (topic) this.queue = markTopic(this.queue, topic.id, 'queued');
         // A rejected exchange is common enough that the show writes another one
         // instead of stopping. Only a run of failures is worth interrupting for.
         const giveUp = ++this.writeFailures >= 3;
+        if (giveUp && sponsorship) {
+          await this.sponsorProgram?.failedExchange(sponsorship, next, e);
+          if (run !== this.run) return;
+          this.writeFailures = 0;
+        }
         this.set({
-          error: giveUp
-            ? e instanceof Error
-              ? e.message
-              : 'The writer failed.'
-            : '',
+          error:
+            giveUp && !sponsorship
+              ? e instanceof Error
+                ? e.message
+                : 'The writer failed.'
+              : '',
           requests: request
             ? markRequest(this.state.requests, request.id, 'queued')
             : this.state.requests,
@@ -652,6 +970,7 @@ export class Podcast {
       if (run === this.run) {
         this.writing = false;
         this.inflightRequestId = undefined;
+        this.inflightSponsorId = undefined;
         this.set({ writing: false });
         this.pump();
       }
