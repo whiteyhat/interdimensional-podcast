@@ -101,7 +101,10 @@ function settings() {
     name: v.COIN_NAME?.trim() || defaultBrand.name,
     usd: usdPerRequest(v.INTERACT_USD, defaultBrand.usd),
     rpcUrl: v.SOLANA_RPC_URL?.trim() || publicRpc,
-    clientRpcUrl: v.CLIENT_RPC_URL?.trim() || publicRpc,
+    // Deliberately NOT SOLANA_RPC_URL: that carries the provider API key and this value is
+    // published to every anonymous visitor. Left empty here and filled in by config() with
+    // this deployment's own /api/rpc, which proxies to the provider with the key server-side.
+    clientRpcUrl: v.CLIENT_RPC_URL?.trim() || '',
     streamEmbedUrl: v.STREAM_EMBED_URL?.trim() || null,
     xLiveUrl: v.X_LIVE_URL?.trim() || null,
     interactOrigin,
@@ -148,7 +151,7 @@ function failure(e: unknown, where: string) {
 
 // ---- GET ------------------------------------------------------------------------------
 
-async function config(): Promise<PublicConfig> {
+async function config(origin: string): Promise<PublicConfig> {
   const s = settings();
   const now = Date.now();
   let studioOnline = false;
@@ -191,7 +194,7 @@ async function config(): Promise<PublicConfig> {
     links: { pumpfun: s.buyUrl, x: s.xLiveUrl },
     studioOnline,
     treasuryReady: ready,
-    clientRpcUrl: s.clientRpcUrl,
+    clientRpcUrl: s.clientRpcUrl || `${origin}/api/rpc`,
     queued,
   };
 }
@@ -213,7 +216,7 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const action = url.searchParams.get('action') ?? 'config';
   try {
-    if (action === 'config') return reply(await config());
+    if (action === 'config') return reply(await config(url.origin));
     if (action === 'status') return reply(await status(url.searchParams.get('reference')));
     return reply({ error: 'Unknown action' }, 400);
   } catch (e) {

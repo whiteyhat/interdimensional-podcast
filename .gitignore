@@ -48,6 +48,7 @@ work/
 !/public/pepe-video.png
 !/public/gigachad-video.png
 !/public/logo.png
+!/public/share-card.png
 !/public/favicon.svg
 !.dev.vars.example
 .playwright-mcp/
