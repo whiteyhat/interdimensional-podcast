@@ -48,12 +48,15 @@ export function StreamEmbed({
     );
   }
   const anywhere = !!(links.pumpfun || links.x);
+  // Three different silences, and saying the wrong one is its own kind of broken: the stream
+  // is not built yet, the show is between episodes, or it is on somewhere we can link to.
+  const offAir = !!url && !live;
   return (
     <div className="stage stream-embed">
       <img src={poster} alt="" />
       <div className="stream-poster">
         <img className="opening-mark" src="/logo.png" alt={show.name} />
-        <p className="eyebrow">{anywhere ? 'WATCH THE SHOW' : 'STREAM'}</p>
+        <p className="eyebrow">{anywhere ? 'WATCH THE SHOW' : offAir ? 'OFF AIR' : 'STREAM'}</p>
         <h1>{show.headline}</h1>
         {anywhere ? (
           <div className="stream-links">
@@ -69,7 +72,11 @@ export function StreamEmbed({
             )}
           </div>
         ) : (
-          <p className="stream-soon">Stream link coming soon.</p>
+          <p className="stream-soon">
+            {offAir
+              ? 'The studio is dark right now. The show picks up when it comes back.'
+              : 'Stream link coming soon.'}
+          </p>
         )}
       </div>
     </div>
