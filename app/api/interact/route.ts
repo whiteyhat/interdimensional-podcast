@@ -17,6 +17,7 @@ import {
   type PublicRequest,
 } from '@/lib/interact';
 import { checkMessage, checkName, quoteAmount, toBaseUnits } from '@/lib/requests';
+import { clientAddress, perMinuteCounter } from '@/lib/throttle';
 import { defaultBrand } from '@/lib/show';
 import {
   buildQuoteTx,
@@ -60,24 +61,8 @@ const vars = () => env as unknown as Vars;
 const BASE64 = /^[A-Za-z0-9+/]+=*$/;
 const reply = (body: unknown, status = 200) =>
   Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
-// Quote attempts per minute per client address, counted before any chain work. This map lives
-// in one isolate and a colo runs many, so it is a best-effort first gate only; the limit that
-// actually holds across isolates is the per-wallet count in D1.
-const attempts = new Map<string, number[]>();
-function tooMany(key: string, limit: number, now: number) {
-  const list = (attempts.get(key) ?? []).filter((t) => now - t < 60_000);
-  list.push(now);
-  attempts.set(key, list);
-  if (attempts.size > 5000) attempts.clear();
-  return list.length > limit;
-}
-function clientAddress(request: Request) {
-  return (
-    request.headers.get('cf-connecting-ip')?.trim() ||
-    request.headers.get('x-forwarded-for')?.split(',')[0].trim() ||
-    'local'
-  );
-}
+// Quote attempts per minute per client address, counted before any chain work.
+const tooMany = perMinuteCounter();
 
 /** The deployment's launch state, read fresh on every request so a redeploy flips it. */
 function settings() {
@@ -101,10 +86,10 @@ function settings() {
     name: v.COIN_NAME?.trim() || defaultBrand.name,
     usd: usdPerRequest(v.INTERACT_USD, defaultBrand.usd),
     rpcUrl: v.SOLANA_RPC_URL?.trim() || publicRpc,
-    // Deliberately NOT SOLANA_RPC_URL: that carries the provider API key and this value is
-    // published to every anonymous visitor. Left empty here and filled in by config() with
-    // this deployment's own /api/rpc, which proxies to the provider with the key server-side.
-    clientRpcUrl: v.CLIENT_RPC_URL?.trim() || '',
+    // Whatever ends up here is served to every anonymous visitor, so it must never carry a
+    // credential. Left empty by default and filled in by config() with this deployment's own
+    // /api/rpc, which reaches the provider with the key held server-side.
+    clientRpcUrl: publishableRpc(v.CLIENT_RPC_URL),
     streamEmbedUrl: v.STREAM_EMBED_URL?.trim() || null,
     xLiveUrl: v.X_LIVE_URL?.trim() || null,
     interactOrigin,
@@ -138,6 +123,25 @@ async function chainState(s: LiveSettings, now: number) {
     treasuryReady(rpc, s.treasury, s.mint, info.program, now).catch(() => false),
   ]);
   return { decimals: info.decimals, priceUsd, treasuryReady: ready, program: info.program };
+}
+/**
+ * A browser RPC URL is only safe to publish if it carries no credential. Providers put keys in
+ * the query string or the path, so anything beyond a bare origin is refused rather than served
+ * — the proxy is already the safe default, so refusing costs the operator nothing but a log
+ * line, where honouring it would publish a paid key to everyone who loads the page.
+ */
+function publishableRpc(raw: string | undefined) {
+  const value = raw?.trim();
+  if (!value) return '';
+  try {
+    const url = new URL(value);
+    if (!url.search && !url.username && !url.password && (url.pathname === '/' || url.pathname === ''))
+      return url.toString();
+    console.warn('[interact] ignoring CLIENT_RPC_URL: it carries credentials and would be public');
+  } catch {
+    console.warn('[interact] ignoring CLIENT_RPC_URL: not a URL');
+  }
+  return '';
 }
 function failure(e: unknown, where: string) {
   if (e instanceof HttpError)

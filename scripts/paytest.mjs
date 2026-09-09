@@ -1,104 +1,59 @@
 // End-to-end exercise of the five-dollar seat against the DEPLOYED staging worker, on devnet.
 // Happy path first, then the adversarial cases that must keep failing.
-import { readFile, writeFile } from 'node:fs/promises';
+//
+//   SITE=... STUDIO_TOKEN=... RPC_URL=... MINT=... node scripts/paytest.mjs
 import {
   address,
-  appendTransactionMessageInstructions,
-  createKeyPairSignerFromPrivateKeyBytes,
   createSolanaRpc,
   createSolanaRpcSubscriptions,
-  createTransactionMessage,
-  getBase64Encoder,
-  getBase64EncodedWireTransaction,
-  getSignatureFromTransaction,
-  getTransactionDecoder,
   lamports,
-  pipe,
   sendAndConfirmTransactionFactory,
-  setTransactionMessageFeePayerSigner,
-  setTransactionMessageLifetimeUsingBlockhash,
-  signTransaction,
-  signTransactionMessageWithSigners,
 } from '@solana/kit';
 import { getTransferSolInstruction } from '@solana-program/system';
-import {
-  findAssociatedTokenPda,
-  getCreateAssociatedTokenIdempotentInstructionAsync,
-  getMintToInstruction,
-  TOKEN_PROGRAM_ADDRESS,
-} from '@solana-program/token';
+import { getCreateAssociatedTokenIdempotentInstructionAsync, getMintToInstruction } from '@solana-program/token';
+import { apiFor, ataFor, loadKeys, signQuote, submitTx, until } from './devnet.mjs';
 
 const SITE = process.env.SITE;
 const STUDIO_TOKEN = process.env.STUDIO_TOKEN;
 const RPC_URL = process.env.RPC_URL;
 const MINT = address(process.env.MINT);
-const REPO = process.env.REPO ?? process.cwd();
 
 const rpc = createSolanaRpc(RPC_URL);
 const subs = createSolanaRpcSubscriptions(RPC_URL.replace(/^http/, 'ws'));
 const send = sendAndConfirmTransactionFactory({ rpc, rpcSubscriptions: subs });
-
-const pass = [];
-const fail = [];
-const check = (name, ok, detail = '') => {
-  (ok ? pass : fail).push(name + (detail ? ` — ${detail}` : ''));
-  console.log(`${ok ? '  ok  ' : '  FAIL'} ${name}${detail ? ` — ${detail}` : ''}`);
-};
-
-const api = async (body, headers = {}) => {
-  const r = await fetch(`${SITE}/api/interact`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...headers },
-    body: JSON.stringify(body),
-  });
-  return { status: r.status, body: await r.json().catch(() => ({})) };
-};
+const submit = (payer, ix) => submitTx(rpc, send, payer, ix);
+const api = apiFor(SITE);
 const studio = (body) => api(body, { 'x-studio-token': STUDIO_TOKEN });
 const heartbeat = () => studio({ action: 'pull' });
 
-async function submitTx(payer, instructions) {
-  const { value: bh } = await rpc.getLatestBlockhash().send();
-  const msg = pipe(
-    createTransactionMessage({ version: 0 }),
-    (m) => setTransactionMessageFeePayerSigner(payer, m),
-    (m) => setTransactionMessageLifetimeUsingBlockhash(bh, m),
-    (m) => appendTransactionMessageInstructions(instructions, m),
-  );
-  const signed = await signTransactionMessageWithSigners(msg);
-  await send(signed, { commitment: 'confirmed' });
-  return getSignatureFromTransaction(signed);
-}
+let passed = 0;
+const failures = [];
+const check = (name, ok, detail = '') => {
+  const line = name + (detail ? ` — ${detail}` : '');
+  if (ok) passed++;
+  else failures.push(line);
+  console.log(`${ok ? '  ok  ' : '  FAIL'} ${line}`);
+};
 
 // ---- setup: a viewer wallet with SOL for fees and test tokens to spend
-const seeds = JSON.parse(await readFile(`${REPO}/.devnet-keys.json`, 'utf8'));
-const payer = await createKeyPairSignerFromPrivateKeyBytes(Uint8Array.from(seeds.payer));
-// Persist the test wallets so a funded viewer survives between runs and other scripts can
-// reuse it; a fresh viewer every run means re-funding and re-minting every run.
-const rand = () => Array.from(crypto.getRandomValues(new Uint8Array(32)));
-let dirty = false;
-if (!seeds.viewer) { seeds.viewer = rand(); dirty = true; }
-if (!seeds.stranger) { seeds.stranger = rand(); dirty = true; }
-if (dirty) await writeFile(`${REPO}/.devnet-keys.json`, `${JSON.stringify(seeds, null, 2)}\n`);
-const viewer = await createKeyPairSignerFromPrivateKeyBytes(Uint8Array.from(seeds.viewer));
-const stranger = await createKeyPairSignerFromPrivateKeyBytes(Uint8Array.from(seeds.stranger));
+const { signers } = await loadKeys(['payer', 'viewer', 'stranger']);
+const { payer, viewer, stranger } = signers;
 console.log(`viewer   ${viewer.address}`);
 console.log(`stranger ${stranger.address}\n`);
 
-const bal = await rpc.getBalance(viewer.address).send();
-if (Number(bal.value) < 2e7) {
-  await submitTx(payer, [
+const viewerAta = await ataFor(MINT, viewer.address);
+const [sol, tokens] = await Promise.all([
+  rpc.getBalance(viewer.address).send(),
+  rpc.getTokenAccountBalance(viewerAta).send().catch(() => null),
+]);
+if (Number(sol.value) < 2e7) {
+  await submit(payer, [
     getTransferSolInstruction({ source: payer, destination: viewer.address, amount: lamports(50_000_000n) }),
   ]);
   console.log('funded viewer with SOL');
 }
-const [viewerAta] = await findAssociatedTokenPda({
-  mint: MINT,
-  owner: viewer.address,
-  tokenProgram: TOKEN_PROGRAM_ADDRESS,
-});
-const tokBal = await rpc.getTokenAccountBalance(viewerAta).send().catch(() => null);
-if (!tokBal || Number(tokBal.value.amount) < 20_000_000_000) {
-  await submitTx(payer, [
+if (!tokens || Number(tokens.value.amount) < 20_000_000_000) {
+  await submit(payer, [
     await getCreateAssociatedTokenIdempotentInstructionAsync({ payer, mint: MINT, owner: viewer.address }),
     getMintToInstruction({ mint: MINT, token: viewerAta, mintAuthority: payer, amount: 50_000_000_000n }),
   ]);
@@ -118,23 +73,13 @@ check('quote returns a signable transaction', q.status === 200 && q.body.ok && q
 check('quote prices the seat server-side', q.body.amountUi === 5000, `amountUi=${q.body.amountUi}`);
 const reference = q.body.reference;
 
-const wire = getBase64Encoder().encode(q.body.tx);
-const decoded = getTransactionDecoder().decode(wire);
-const signedTx = await signTransaction([viewer.keyPair], decoded);
-const signedB64 = getBase64EncodedWireTransaction(signedTx);
-
-const sub = await api({ action: 'submit', reference, signedTx: signedB64 });
+const sub = await api({ action: 'submit', reference, signedTx: await signQuote(q.body.tx, viewer) });
 check('submit relays the signed transaction', sub.status === 200, `status ${sub.status} ${JSON.stringify(sub.body).slice(0, 120)}`);
 
-let confirmed = null;
-for (let i = 0; i < 30; i++) {
+const confirmed = await until(async () => {
   const c = await api({ action: 'confirm', reference });
-  if (c.body.status === 'paid' || c.body.status === 'claimed' || c.body.status === 'aired') {
-    confirmed = c.body;
-    break;
-  }
-  await new Promise((r) => setTimeout(r, 2000));
-}
+  return ['paid', 'claimed', 'aired'].includes(c.body.status) && c.body;
+});
 check('payment verifies on chain', !!confirmed, confirmed ? `status=${confirmed.status}` : 'never reached paid');
 
 const pulled = await studio({ action: 'pull' });
@@ -172,7 +117,7 @@ check(
   `status=${replay.body.status}`,
 );
 
-// Rate limit: a fourth quote inside a minute for one wallet.
+// Rate limit: these are deliberately sequential, since they share one per-wallet counter.
 let limited = 0;
 for (let i = 0; i < 5; i++) {
   const r = await api({ action: 'quote', wallet: viewer.address, name: 'x', message: `Rate limit probe number ${i} here` });
@@ -180,9 +125,9 @@ for (let i = 0; i < 5; i++) {
 }
 check('a wallet cannot spam quotes', limited > 0, `${limited} of 5 rejected with 429`);
 
-console.log(`\n${pass.length} passed, ${fail.length} failed`);
-if (fail.length) {
+console.log(`\n${passed} passed, ${failures.length} failed`);
+if (failures.length) {
   console.log('\nFAILURES:');
-  for (const f of fail) console.log('  -', f);
+  for (const f of failures) console.log('  -', f);
   process.exit(1);
 }

@@ -79,15 +79,10 @@ export function PublicSite() {
             Send a message with ${usd} worth of {ticker}. Pepe and Chad will thank you by name
             and answer on air in the next exchange. Only paid messages go to the hosts.
           </p>
-          {/*
-            A borrowed chart is for rehearsing the hosts, never for showing the audience: the
-            price is real but it is somebody else's coin, and the buy link would point at it.
-            The public site treats a rehearsal as "not launched yet" and shows the teaser.
-          */}
           <CoinCard
-            coin={chart.rehearsal ? null : chart.coin}
-            launched={chart.rehearsal ? false : chart.launched}
-            error={chart.rehearsal ? undefined : chart.error}
+            coin={chart.coin}
+            launched={chart.launched}
+            error={chart.error}
             buyUrl={config?.buyUrl ?? undefined}
             ticker={ticker}
           />

@@ -111,13 +111,14 @@ That script rebuilds for staging, deploys, then **rebuilds for production again*
 id is baked in at build time, so leaving `dist/` on the staging build is how you accidentally
 point production at the staging database. The trailing rebuild is what stops that.
 
-Staging secrets: the devnet `COIN_MINT` and `TREASURY_WALLET`, `SOLANA_RPC_URL` **and**
-`CLIENT_RPC_URL` both on devnet, and `PRICE_FIXED=1000`.
+Staging secrets: the devnet `COIN_MINT` and `TREASURY_WALLET`, `SOLANA_RPC_URL` on devnet, and
+`PRICE_FIXED=1000`. Leave `CLIENT_RPC_URL` unset here too.
 
 Two traps worth knowing:
 
-- Set **both** RPC URLs to devnet. Nothing checks they are the same cluster, and if they
-  differ the wallet reports success while verification never finds the payment.
+- The browser and the server must be on the same cluster. They are now, by construction: the
+  browser goes through `/api/rpc`, which forwards to `SOLANA_RPC_URL`. Setting `CLIENT_RPC_URL`
+  to a different cluster would break that, which is one more reason to leave it unset.
 - `PRICE_FIXED` is not optional on devnet. Neither Jupiter nor pump.fun price a devnet token,
   so without it every quote fails with code `PRICE`.
 

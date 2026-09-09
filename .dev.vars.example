@@ -17,7 +17,10 @@ COIN_TICKER=FROGCLENCH
 TREASURY_WALLET=
 # Server-side RPC for quotes and payment checks (a Helius free-tier URL is recommended).
 SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
-# RPC the viewer's browser broadcasts through; defaults to the public mainnet RPC.
+# Leave this empty. The public config endpoint is unauthenticated, so anything here is served
+# to every visitor; a provider URL with an api-key in it publishes that key. Empty means the
+# browser is handed this deployment's own /api/rpc, which reaches SOLANA_RPC_URL server-side.
+# A URL carrying a query string, credentials or a path is refused and logged rather than served.
 CLIENT_RPC_URL=
 # Shared secret between the studio and the deployed site for pull/aired. Required in
 # production; locally, token-less pulls are allowed only from localhost.

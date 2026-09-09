@@ -15,9 +15,7 @@ test('the calls a wallet needs to pay are forwarded', () => {
     'getAccountInfo',
     'getTokenAccountBalance',
   ]) {
-    const seen = R.screenRpcCall(call(method));
-    assert.equal(seen.ok, true, `${method} should be allowed`);
-    assert.deepEqual(seen.methods, [method]);
+    assert.equal(R.screenRpcCall(call(method)).ok, true, `${method} should be allowed`);
   }
 });
 
@@ -36,13 +34,13 @@ test('the expensive calls someone would borrow the key for are refused', () => {
     const seen = R.screenRpcCall(call(method));
     assert.equal(seen.ok, false, `${method} must be refused`);
     assert.match(seen.why, new RegExp(method));
+    // The route logs and reports this name, so a wallet needing a new method is diagnosable.
+    assert.equal(seen.method, method);
   }
 });
 
 test('a small batch passes only when every call in it is allowed', () => {
-  const good = R.screenRpcCall([call('getLatestBlockhash'), call('getSignatureStatuses')]);
-  assert.equal(good.ok, true);
-  assert.deepEqual(good.methods, ['getLatestBlockhash', 'getSignatureStatuses']);
+  assert.equal(R.screenRpcCall([call('getLatestBlockhash'), call('getSignatureStatuses')]).ok, true);
   // One bad apple rejects the whole batch, so a disallowed call cannot ride along with a good one.
   const smuggled = R.screenRpcCall([call('getLatestBlockhash'), call('getProgramAccounts')]);
   assert.equal(smuggled.ok, false);

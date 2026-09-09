@@ -361,14 +361,7 @@ export const chartPickConfig = {
   /** Hold the pick long enough that the hosts finish a thought before the subject changes. */
   holdMs: 20 * 60000,
 } as const;
-export type LiveCoin = {
-  mint: string;
-  symbol: string;
-  score: number;
-  mcapUsd: number;
-  replies: number;
-  participants: number;
-};
+export type LiveCoin = { mint: string; symbol: string };
 /**
  * Rank the currently-live coins by how much there is to talk about. Pure: the caller
  * supplies the payload and the clock. Returns the best candidate, or null when every
@@ -377,33 +370,26 @@ export type LiveCoin = {
 export function pickChartCoin(raw: unknown, now: number): LiveCoin | null {
   if (!Array.isArray(raw)) return null;
   const ranked = raw
-    .map((c: Record<string, unknown>) => {
+    .flatMap((c: Record<string, unknown>) => {
       const mint = str(c?.mint);
       const mcapUsd = num(c?.usd_market_cap ?? c?.market_cap_usd);
       const traded = num(c?.last_trade_timestamp);
-      const replies = num(c?.reply_count);
-      const participants = num(c?.num_participants);
-      const banned = c?.is_banned === true || c?.nsfw === true;
       const since = now - traded;
-      const usable =
-        mint !== '' &&
-        !banned &&
-        c?.is_currently_live === true &&
-        mcapUsd >= chartPickConfig.minMcapUsd &&
-        mcapUsd <= chartPickConfig.maxMcapUsd &&
-        traded > 0 &&
-        since >= 0 &&
-        since <= chartPickConfig.staleTradeMs;
+      if (!mint || c?.is_banned === true || c?.nsfw === true) return [];
+      if (c?.is_currently_live !== true) return [];
+      if (mcapUsd < chartPickConfig.minMcapUsd || mcapUsd > chartPickConfig.maxMcapUsd) return [];
+      // A timestamp from the future is a bad clock, not a fresh trade.
+      if (traded <= 0 || since < 0 || since > chartPickConfig.staleTradeMs) return [];
       // Three even-weighted fifty-point pulls: chat gives the room something to react to,
       // traders move the chart, freshness proves both are happening now. Replies are a
       // lifetime count, so they are capped hard and can never outvote the other two alone.
-      const freshness = usable ? 50 * (1 - since / chartPickConfig.staleTradeMs) : 0;
-      const score = usable
-        ? Math.min(replies, 2000) / 40 + Math.min(participants, 100) / 2 + freshness
-        : -1;
-      return { mint, symbol: str(c?.symbol), score, mcapUsd, replies, participants };
+      const score =
+        Math.min(num(c?.reply_count), 2000) / 40 +
+        Math.min(num(c?.num_participants), 100) / 2 +
+        50 * (1 - since / chartPickConfig.staleTradeMs);
+      return [{ mint, symbol: str(c?.symbol), score }];
     })
-    .filter((c) => c.score >= 0)
     .sort((a, b) => b.score - a.score);
-  return ranked[0] ?? null;
+  const best = ranked[0];
+  return best ? { mint: best.mint, symbol: best.symbol } : null;
 }

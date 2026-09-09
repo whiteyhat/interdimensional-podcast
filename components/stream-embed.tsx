@@ -26,13 +26,14 @@ export function embedSrc(url: string) {
 export function StreamEmbed({
   url,
   links,
-  live = true,
-  poster = '/pepe-cartoon.png',
+  live,
+  poster,
 }: {
   url: string | null;
   links: StreamLinks;
-  live?: boolean;
-  poster?: string;
+  /** Required on purpose: a caller who forgets it would default back to the blank player. */
+  live: boolean;
+  poster: string;
 }) {
   if (url && live) {
     return (
@@ -47,18 +48,24 @@ export function StreamEmbed({
       </div>
     );
   }
+  // Two different silences, and saying the wrong one is its own kind of broken: either the
+  // stream is not built yet, or it exists and the show is simply between episodes. Reaching
+  // here at all means we are not live, so a stream we have is a stream that is off air.
+  const offAir = !!url;
   const anywhere = !!(links.pumpfun || links.x);
-  // Three different silences, and saying the wrong one is its own kind of broken: the stream
-  // is not built yet, the show is between episodes, or it is on somewhere we can link to.
-  const offAir = !!url && !live;
   return (
     <div className="stage stream-embed">
       <img src={poster} alt="" />
       <div className="stream-poster">
         <img className="opening-mark" src="/logo.png" alt={show.name} />
-        <p className="eyebrow">{anywhere ? 'WATCH THE SHOW' : offAir ? 'OFF AIR' : 'STREAM'}</p>
+        <p className="eyebrow">{offAir ? 'OFF AIR' : anywhere ? 'WATCH THE SHOW' : 'STREAM'}</p>
         <h1>{show.headline}</h1>
-        {anywhere ? (
+        <p className="stream-soon">
+          {offAir
+            ? 'The studio is dark right now. The show picks up when it comes back.'
+            : 'Stream link coming soon.'}
+        </p>
+        {anywhere && (
           <div className="stream-links">
             {links.pumpfun && (
               <a className="primary" href={links.pumpfun} target="_blank" rel="noreferrer">
@@ -71,12 +78,6 @@ export function StreamEmbed({
               </a>
             )}
           </div>
-        ) : (
-          <p className="stream-soon">
-            {offAir
-              ? 'The studio is dark right now. The show picks up when it comes back.'
-              : 'Stream link coming soon.'}
-          </p>
         )}
       </div>
     </div>

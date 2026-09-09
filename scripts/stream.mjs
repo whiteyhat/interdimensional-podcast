@@ -71,16 +71,20 @@ async function remember(pairs) {
 }
 
 /**
- * The player URL has to sit on cloudflarestream.com: that is the only host StreamEmbed
- * recognises, and the only one it adds autoplay and muted to. The account's customer
- * subdomain is not returned on its own, so lift it out of the WebRTC playback URL.
+ * The player URL has to sit on this account's own cloudflarestream.com host: that is what
+ * StreamEmbed recognises, and the only host it adds autoplay and muted to. Cloudflare does not
+ * return the customer subdomain on its own, but the WebRTC playback URL is served from it, so
+ * take the hostname from there rather than pattern-matching Cloudflare's naming.
  */
 function embedUrl(input) {
-  const customer = /https:\/\/(customer-[a-z0-9]+)\.cloudflarestream\.com/i.exec(
-    input.webRTCPlayback?.url ?? input.webRTC?.url ?? '',
-  );
-  if (!customer) return `https://iframe.videodelivery.net/${input.uid}`;
-  return `https://${customer[1]}.cloudflarestream.com/${input.uid}/iframe`;
+  try {
+    const { hostname } = new URL(input.webRTCPlayback?.url ?? '');
+    if (hostname.endsWith('.cloudflarestream.com'))
+      return `https://${hostname}/${input.uid}/iframe`;
+  } catch {
+    // Fall through: an unusable playback URL is reported, never written.
+  }
+  return null;
 }
 
 async function create(creds) {
@@ -92,18 +96,23 @@ async function create(creds) {
     }),
   });
   const embed = embedUrl(input);
-  await remember({ CF_LIVE_INPUT_ID: input.uid, STREAM_EMBED_URL: embed });
+  // Only ever remember a URL the player can actually use. Writing a known-bad one plus a
+  // printed apology just means the next command reads it back as though it were good.
+  await remember(embed ? { CF_LIVE_INPUT_ID: input.uid, STREAM_EMBED_URL: embed } : { CF_LIVE_INPUT_ID: input.uid });
   console.log('Live input created.\n');
   console.log('  OBS > Settings > Stream > Custom');
   console.log(`    Server      ${input.rtmps.url}`);
   console.log(`    Stream key  ${input.rtmps.streamKey}`);
-  console.log('\n  Public site secret (wrangler secret put STREAM_EMBED_URL)');
-  console.log(`    ${embed}`);
-  if (embed.includes('videodelivery.net'))
+  if (embed) {
+    console.log('\n  Public site secret (wrangler secret put STREAM_EMBED_URL)');
+    console.log(`    ${embed}`);
+  } else {
     console.log(
-      '\n  Note: could not read the customer subdomain, so this URL will not autoplay.\n' +
-        '  Take the iframe URL from the Stream dashboard instead.',
+      '\n  Could not read this account\'s player host from the API response, so\n' +
+        '  STREAM_EMBED_URL was not written. Copy the iframe URL from the Stream\n' +
+        '  dashboard and set it by hand.',
     );
+  }
   console.log(`\n  Live input ${input.uid} (saved to ${VARS})`);
 }
 
