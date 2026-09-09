@@ -347,3 +347,63 @@ export function coinDrafts(events: CoinEvent[]): TopicDraft[] {
     category: 'crypto' as const,
   }));
 }
+// Rehearsal only. Before the show's own coin exists there is no chart to react to, so the
+// studio can borrow one: CHART_MINT=auto points the coin lane at whichever live pump.fun
+// coin is trading hardest right now. Real moves, real chat, real whales, none of it ours.
+export const chartPickConfig = {
+  // Measured against the live list rather than guessed: pump.fun's streaming coins skew tiny,
+  // so a narrow band matches nothing. Below the floor a coin has no chart at all; above the
+  // ceiling it is too heavy to move eight percent in five minutes, which is the beat we want.
+  minMcapUsd: 5_000,
+  maxMcapUsd: 20_000_000,
+  /** A coin nobody has traded in five minutes is not a rehearsal, it is a still frame. */
+  staleTradeMs: 5 * 60000,
+  /** Hold the pick long enough that the hosts finish a thought before the subject changes. */
+  holdMs: 20 * 60000,
+} as const;
+export type LiveCoin = {
+  mint: string;
+  symbol: string;
+  score: number;
+  mcapUsd: number;
+  replies: number;
+  participants: number;
+};
+/**
+ * Rank the currently-live coins by how much there is to talk about. Pure: the caller
+ * supplies the payload and the clock. Returns the best candidate, or null when every
+ * live coin is too small, too big, too quiet or flagged.
+ */
+export function pickChartCoin(raw: unknown, now: number): LiveCoin | null {
+  if (!Array.isArray(raw)) return null;
+  const ranked = raw
+    .map((c: Record<string, unknown>) => {
+      const mint = str(c?.mint);
+      const mcapUsd = num(c?.usd_market_cap ?? c?.market_cap_usd);
+      const traded = num(c?.last_trade_timestamp);
+      const replies = num(c?.reply_count);
+      const participants = num(c?.num_participants);
+      const banned = c?.is_banned === true || c?.nsfw === true;
+      const since = now - traded;
+      const usable =
+        mint !== '' &&
+        !banned &&
+        c?.is_currently_live === true &&
+        mcapUsd >= chartPickConfig.minMcapUsd &&
+        mcapUsd <= chartPickConfig.maxMcapUsd &&
+        traded > 0 &&
+        since >= 0 &&
+        since <= chartPickConfig.staleTradeMs;
+      // Three even-weighted fifty-point pulls: chat gives the room something to react to,
+      // traders move the chart, freshness proves both are happening now. Replies are a
+      // lifetime count, so they are capped hard and can never outvote the other two alone.
+      const freshness = usable ? 50 * (1 - since / chartPickConfig.staleTradeMs) : 0;
+      const score = usable
+        ? Math.min(replies, 2000) / 40 + Math.min(participants, 100) / 2 + freshness
+        : -1;
+      return { mint, symbol: str(c?.symbol), score, mcapUsd, replies, participants };
+    })
+    .filter((c) => c.score >= 0)
+    .sort((a, b) => b.score - a.score);
+  return ranked[0] ?? null;
+}

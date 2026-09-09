@@ -130,3 +130,80 @@ test('chart events become wire topics that survive the sanitizer', () => {
   assert.equal(C.spokenUsd(830), '830 dollars');
   assert.equal(C.spokenUsd(120000), '120 thousand dollars');
 });
+
+// The stand-in picker: before the show's own coin exists, the chart lane borrows a live one.
+const live = JSON.parse(await readFile('tests/fixtures/pump-live.json', 'utf8'));
+const LIVE_NOW = 1788939137000 + 20000;
+
+test('the borrowed chart coin is live, tradeable and trading right now', () => {
+  const pick = C.pickChartCoin(live, LIVE_NOW);
+  assert.ok(pick, 'something qualified from a real currently-live payload');
+  const row = live.find((c) => c.mint === pick.mint);
+  assert.equal(row.is_currently_live, true);
+  assert.notEqual(row.is_banned, true);
+  assert.notEqual(row.nsfw, true);
+  assert.ok(
+    LIVE_NOW - row.last_trade_timestamp <= C.chartPickConfig.staleTradeMs,
+    'picked a coin that traded within the freshness window',
+  );
+  assert.ok(row.usd_market_cap >= C.chartPickConfig.minMcapUsd);
+  assert.ok(row.usd_market_cap <= C.chartPickConfig.maxMcapUsd);
+});
+
+test('a stale chart is never borrowed, however popular the coin was', () => {
+  // Every coin in the fixture is hours past its last trade by this clock.
+  assert.equal(C.pickChartCoin(live, LIVE_NOW + 24 * 3600000), null);
+  // A huge reply count cannot rescue a coin nobody is trading.
+  const dead = [
+    { ...live[0], reply_count: 500000, num_participants: 9999, last_trade_timestamp: 1 },
+  ];
+  assert.equal(C.pickChartCoin(dead, LIVE_NOW), null);
+});
+
+test('banned, flagged, offline and out-of-band coins are skipped', () => {
+  const base = {
+    mint: 'So11111111111111111111111111111111111111112',
+    symbol: 'OK',
+    usd_market_cap: 250000,
+    reply_count: 100,
+    num_participants: 40,
+    last_trade_timestamp: LIVE_NOW - 10000,
+    is_currently_live: true,
+  };
+  assert.equal(C.pickChartCoin([base], LIVE_NOW).symbol, 'OK', 'the control passes');
+  for (const bad of [
+    { is_banned: true },
+    { nsfw: true },
+    { is_currently_live: false },
+    { usd_market_cap: 100 },
+    { usd_market_cap: 900_000_000 },
+    { mint: '' },
+    { last_trade_timestamp: 0 },
+    // A timestamp from the future is a bad clock, not a fresh trade.
+    { last_trade_timestamp: LIVE_NOW + 60000 },
+  ]) {
+    assert.equal(C.pickChartCoin([{ ...base, ...bad }], LIVE_NOW), null, JSON.stringify(bad));
+  }
+  assert.equal(C.pickChartCoin(null, LIVE_NOW), null);
+  assert.equal(C.pickChartCoin([], LIVE_NOW), null);
+});
+
+test('freshness and traders can outvote a big lifetime reply count', () => {
+  const at = (over) => ({
+    mint: 'So11111111111111111111111111111111111111112',
+    symbol: 'X',
+    usd_market_cap: 250000,
+    reply_count: 0,
+    num_participants: 0,
+    last_trade_timestamp: LIVE_NOW,
+    is_currently_live: true,
+    ...over,
+  });
+  // Replies are capped at fifty points, so a busy-but-slowing coin does not automatically win.
+  const chatty = at({ symbol: 'CHAT', reply_count: 100000, last_trade_timestamp: LIVE_NOW - 280000 });
+  const busy = at({ symbol: 'BUSY', num_participants: 90, last_trade_timestamp: LIVE_NOW - 5000 });
+  assert.equal(C.pickChartCoin([chatty, busy], LIVE_NOW).symbol, 'BUSY');
+  // With the traders gone, the chat room is the better rehearsal after all.
+  const quiet = at({ symbol: 'QUIET', num_participants: 1, last_trade_timestamp: LIVE_NOW - 5000 });
+  assert.equal(C.pickChartCoin([chatty, quiet], LIVE_NOW).symbol, 'CHAT');
+});
