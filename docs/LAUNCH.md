@@ -47,6 +47,11 @@ Secrets, once each (`npx wrangler secret put NAME --config dist/server/wrangler.
   against the deployed worker on both clusters. Helius is what we use.
 - `COIN_MINT`, `TREASURY_WALLET` — **only once the coin exists**
 
+**Never set `CLIENT_RPC_URL`.** The public config endpoint is unauthenticated, so whatever it
+holds is served to every visitor; pointing it at a provider URL publishes the API key. Left
+unset, the browser is handed this deployment's own `/api/rpc`, which proxies to the provider
+with the key server-side and only forwards the calls a wallet needs to pay.
+
 Never set on the deployed site: `FAL_KEY`, any `NEWSDESK_*`, `INTERACT_ORIGIN`, `CHART_MINT`.
 Generation happens only in the studio, and a borrowed chart is never shown to the audience.
 
@@ -115,6 +120,23 @@ Two traps worth knowing:
   differ the wallet reports success while verification never finds the payment.
 - `PRICE_FIXED` is not optional on devnet. Neither Jupiter nor pump.fun price a devnet token,
   so without it every quote fails with code `PRICE`.
+
+Two scripts drive the whole thing against the deployed staging site. Rerun both after any
+change to `app/api/interact`, `lib/solana.ts`, `lib/db.ts` or `app/api/rpc`:
+
+```sh
+export SITE=https://interdimensional-podcast-staging.leonardo-chekup.workers.dev
+export STUDIO_TOKEN=$(grep '^STUDIO_TOKEN=' .dev.vars | cut -d= -f2-)
+export MINT=<devnet mint>  RPC_URL='https://devnet.helius-rpc.com/?api-key=<key>'
+
+node scripts/paytest.mjs          # quote -> sign -> submit -> confirm -> pull -> aired,
+                                  # then every adversarial case (13 assertions)
+node scripts/paytest-browser.mjs  # the hop a real viewer takes: the wallet broadcasts and
+                                  # confirms through /api/rpc, not the server-side fallback
+```
+
+`paytest.mjs` spends its quote allowance on purpose, so `paytest-browser.mjs` run straight
+afterwards will hit the per-wallet 429. Wait out the minute.
 
 These must keep failing: underpayment, transfer to another wallet, a replayed signature, an
 empty wallet, a message containing a link or an address, a fourth quote inside a minute, and
