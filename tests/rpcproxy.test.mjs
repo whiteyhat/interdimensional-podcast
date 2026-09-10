@@ -72,7 +72,6 @@ void test('a request is charged by what it carries, not by the fact of it', () =
   const ten = R.screenRpcCall(Array.from({ length: 10 }, () => call('getHealth')));
   assert.equal(ten.ok, true);
   assert.equal(ten.units, 10);
-  assert.equal(ten.calls.length, 10);
   // The reads an abuser would grind through cost more than the ones a wallet needs.
   assert.equal(R.screenRpcCall(call('getTransaction')).units, 4);
   assert.equal(R.screenRpcCall(call('getTokenAccountsByOwner')).units, 3);

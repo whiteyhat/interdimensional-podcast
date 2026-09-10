@@ -60,6 +60,8 @@ export type PullItem = {
 export const interactLimits = {
   /** A quote's blockhash lives about a minute; the card counts this down. */
   quoteTtlMs: 60_000,
+  /** How long past expiry a signed transaction for a quote is still accepted and relayed. */
+  submitGraceMs: 5 * 60_000,
   /** Quoted rows this old are marked expired the next time anyone asks for status. */
   staleQuoteMs: 180_000,
   /** Submitted rows whose transaction never landed are tidied after this long. */
@@ -104,7 +106,11 @@ export function usdPerRequest(raw: string | undefined, fallback = defaultInterac
 }
 export const buyUrlFor = (mint: string | null) => (mint ? `https://pump.fun/coin/${mint}` : null);
 /** The RPC the browser broadcasts through when a deployment names no other. */
-export const publicRpc = 'https://api.mainnet-beta.solana.com';
+/**
+ * What the browser falls back to when the deployment publishes no RPC of its own. Browser
+ * only: public Solana RPCs answer 403 to a Cloudflare Worker, so no server path may use it.
+ */
+export const browserFallbackRpc = 'https://api.mainnet-beta.solana.com';
 /** The show's coin, as this deployment configured it. Both routes read it through here. */
 export function readBrand(env: {
   COIN_NAME?: string;
@@ -156,7 +162,7 @@ export function readConfig(raw: unknown): PublicConfig | null {
     links: { pumpfun: str(links.pumpfun), x: str(links.x) },
     studioOnline: r.studioOnline === true,
     treasuryReady: r.treasuryReady === true,
-    clientRpcUrl: str(r.clientRpcUrl) ?? publicRpc,
+    clientRpcUrl: str(r.clientRpcUrl) ?? browserFallbackRpc,
     queued: num(r.queued) ?? 0,
   };
 }
@@ -237,6 +243,10 @@ export function studioBusy(current: { id: string; seenAt: number }, id: string, 
 }
 
 /** Where a token-less studio pull is still acceptable: the developer's own machine. */
+/** Whether a request carries the studio's own secret; false when no secret is configured. */
+export function isStudio(request: Request, expected: string | undefined) {
+  return sameToken(request.headers.get('x-studio-token')?.trim() ?? '', expected?.trim() ?? '');
+}
 export function isLocalHost(hostname: string) {
   const host = hostname.toLowerCase();
   return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';

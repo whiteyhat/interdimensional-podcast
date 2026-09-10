@@ -1,6 +1,6 @@
 import * as db from './db';
 import { address, signature as signatureKey } from '@solana/kit';
-import { mintInfo, verifyPayment, rpcFor, type SolanaRpc } from './solana';
+import { mintInfo, verifyPayment, rpcFor, type SolanaRpc, configuredRpcUrl } from './solana';
 export type LegacySettlement = {
   status: string;
   position?: number;
@@ -128,13 +128,13 @@ export async function reconcileLegacy(v: {
   DB?: D1Database;
   SOLANA_RPC_URL?: string;
 }) {
-  // No provider, no reconciliation. The public RPC that used to stand in here returns 403 to a
-  // Cloudflare Worker, so it did not degrade -- it failed every check while looking configured.
-  if (!v.DB || !v.SOLANA_RPC_URL?.trim()) return { checked: 0 };
+  // No provider, no reconciliation; configuredRpcUrl says why there is no public fallback.
+  const url = configuredRpcUrl(v);
+  if (!v.DB || !url) return { checked: 0 };
   await db.ensureSchema(v.DB);
   const rows = await db.recoverable(v.DB, Date.now(), 2),
     signal = AbortSignal.timeout(12000),
-    rpc = legacyRpcWithDeadline(rpcFor(v.SOLANA_RPC_URL.trim()), signal);
+    rpc = legacyRpcWithDeadline(rpcFor(url), signal);
   for (const row of rows) {
     if (signal.aborted) break;
     try {

@@ -21,32 +21,31 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export class UpstreamError extends Error {
   constructor(
     message: string,
-    readonly status: number | null,
     readonly attempts: number,
   ) {
     super(message);
   }
 }
 /**
- * Repeat `fn` while `retryIf` says the failure is transient, with a short backoff. Exposed for
- * the server-side money path, which calls the provider through @solana/kit rather than fetch.
+ * Repeat `fn` while `retryIf` says the failure is transient, with a short backoff and, when
+ * `totalMs` is given, a deadline the attempts share. Each attempt is handed a signal sized to
+ * whichever is shorter, the per-attempt timeout or what is left of the deadline.
  */
 export async function withRetry<T>(
-  fn: () => Promise<T>,
+  fn: (signal: AbortSignal) => Promise<T>,
   retryIf: (e: unknown) => boolean,
-  attempts = upstreamPolicy.attempts,
+  { attempts = upstreamPolicy.attempts, totalMs = Infinity } = {},
 ): Promise<T> {
-  let last: unknown;
-  for (let i = 0; i < attempts; i++) {
+  const deadline = Date.now() + totalMs;
+  for (let i = 1; ; i++) {
     try {
-      return await fn();
+      return await fn(AbortSignal.timeout(Math.min(upstreamPolicy.attemptTimeoutMs, deadline - Date.now())));
     } catch (e) {
-      last = e;
-      if (i === attempts - 1 || !retryIf(e)) throw e;
-      await sleep(jitter(upstreamPolicy.backoffMs[Math.min(i, upstreamPolicy.backoffMs.length - 1)]));
+      const wait = jitter(upstreamPolicy.backoffMs[Math.min(i - 1, upstreamPolicy.backoffMs.length - 1)]);
+      if (i >= attempts || !retryIf(e) || Date.now() + wait >= deadline) throw e;
+      await sleep(wait);
     }
   }
-  throw last;
 }
 /** A network-level failure from @solana/kit's transport, as opposed to an answer from the node. */
 export function isTransportError(e: unknown): boolean {
@@ -56,41 +55,28 @@ export function isTransportError(e: unknown): boolean {
   // kit wraps HTTP failures as "HTTP error (503)"; a fetch that never connected is a TypeError.
   return /HTTP error \((?:429|5\d\d)\)/.test(text) || /fetch failed|network|ECONNRESET|socket/i.test(text);
 }
-export type Forwarded = { status: number; body: string; attempts: number };
+export type Forwarded = { status: number; body: ReadableStream<Uint8Array> | null; attempts: number };
 /**
- * POST a JSON-RPC body to the provider and return its answer untouched. Throws UpstreamError
- * only when every attempt failed at the transport level.
+ * POST a JSON-RPC body to the provider and hand back its answer as it arrives, unbuffered.
+ * Throws UpstreamError, carrying the attempt it failed on, only when every attempt failed at
+ * the transport level.
  */
-export async function forwardJsonRpc(
-  url: string,
-  body: string,
-  fetcher: typeof fetch = fetch,
-): Promise<Forwarded> {
-  const deadline = Date.now() + upstreamPolicy.totalTimeoutMs;
-  let last: { status: number | null; message: string } = { status: null, message: 'no attempt' };
-  for (let attempt = 1; attempt <= upstreamPolicy.attempts; attempt++) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) break;
-    try {
-      const response = await fetcher(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body,
-        signal: AbortSignal.timeout(Math.min(upstreamPolicy.attemptTimeoutMs, remaining)),
-      });
-      if (response.status === 429 || response.status >= 500) {
-        last = { status: response.status, message: `provider returned ${response.status}` };
-      } else {
-        return { status: response.status, body: await response.text(), attempts: attempt };
+export function forwardJsonRpc(url: string, body: string, fetcher: typeof fetch = fetch): Promise<Forwarded> {
+  let attempt = 0;
+  return withRetry(
+    async (signal) => {
+      attempt++;
+      let response: Response;
+      try {
+        response = await fetcher(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body, signal });
+      } catch (e) {
+        throw new UpstreamError(e instanceof Error ? e.message : String(e), attempt);
       }
-    } catch (e) {
-      last = { status: null, message: e instanceof Error ? e.message : String(e) };
-    }
-    if (attempt < upstreamPolicy.attempts) {
-      const wait = jitter(upstreamPolicy.backoffMs[Math.min(attempt - 1, upstreamPolicy.backoffMs.length - 1)]);
-      if (Date.now() + wait >= deadline) break;
-      await sleep(wait);
-    }
-  }
-  throw new UpstreamError(last.message, last.status, upstreamPolicy.attempts);
+      if (response.status === 429 || response.status >= 500)
+        throw new UpstreamError(`provider returned ${response.status}`, attempt);
+      return { status: response.status, body: response.body, attempts: attempt };
+    },
+    () => true,
+    { totalMs: upstreamPolicy.totalTimeoutMs },
+  );
 }

@@ -3,6 +3,7 @@
 // wrong in one file and not the others.
 import ts from 'typescript';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { basename } from 'node:path';
 
 // Everything lands flat in work/tests, so a transpiled module imports its dependencies as
 // siblings. Those dependencies have to be built too: a test that asks for `services` and
@@ -12,12 +13,12 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 const ROOTS = ['lib', 'hooks'];
 const SIBLING = /from '\.\/([\w-]+)\.js'/g;
 
-async function sourcePath(name) {
-  if (name.includes('/')) return `${name}.ts`;
-  for (const root of ROOTS) {
+/** The module's path and source, found by trying each root; null when none has it. */
+async function load(name) {
+  const candidates = name.includes('/') ? [`${name}.ts`] : ROOTS.map((root) => `${root}/${name}.ts`);
+  for (const path of candidates) {
     try {
-      await readFile(`${root}/${name}.ts`);
-      return `${root}/${name}.ts`;
+      return { path, source: await readFile(path, 'utf8') };
     } catch {}
   }
   return null;
@@ -35,16 +36,13 @@ export async function build(names) {
   const queue = [...names];
   while (queue.length) {
     const name = queue.shift();
-    const path = await sourcePath(name);
+    const hit = await load(name);
     // A sibling import with no matching source is not ours to build -- a node builtin or a
     // dependency -- so leave it for the module loader to resolve.
-    if (!path) continue;
-    if (seen.has(path)) continue;
-    seen.add(path);
-
-    const source = await readFile(path, 'utf8');
+    if (!hit || seen.has(hit.path)) continue;
+    seen.add(hit.path);
     const js = ts
-      .transpileModule(source, {
+      .transpileModule(hit.source, {
         compilerOptions: {
           target: ts.ScriptTarget.ES2022,
           module: ts.ModuleKind.ES2022,
@@ -56,7 +54,7 @@ export async function build(names) {
 
     // Test files run in parallel and build the same modules, so the last step is a rename:
     // a sibling process never imports a half-written file.
-    const out = `work/tests/${path.split('/').pop().replace(/\.ts$/, '')}.js`;
+    const out = `work/tests/${basename(hit.path, '.ts')}.js`;
     const temp = `${out}.${process.pid}.tmp`;
     await writeFile(temp, js);
     await rename(temp, out);

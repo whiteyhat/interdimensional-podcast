@@ -20,7 +20,7 @@ import {
 } from '@solana/kit';
 import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/token';
 import { TOKEN_2022_PROGRAM_ADDRESS } from '@solana-program/token-2022';
-import { rpcProxyLimits } from './rpcproxy';
+import { interactLimits } from './interact';
 /** More keys than any payment carries; a relay's lookup tables stop here. */
 const maxKeys = 64;
 const SYSTEM_PROGRAM = '11111111111111111111111111111111';
@@ -33,13 +33,17 @@ export type Decoded = {
   /** Static account keys in message order; the fee payer is first. */
   keys: string[];
   instructions: { program: string; accounts: string[]; data: Uint8Array }[];
+  /** What was signed, and by whom, for the caller that also verifies a signature. */
+  messageBytes: Uint8Array;
+  signatures: Readonly<Record<string, Uint8Array | null>>;
 };
 /**
  * The accounts and instructions of a wire transaction, or null if it will not decode. base64
  * when the wallet says so (web3.js v1 and the site's own submit path), base58 otherwise, which
  * is what JSON-RPC sendTransaction defaults to. Accounts reached through an address lookup
  * table are not resolved: the site never compiles its payments that way, so a transaction that
- * hides the treasury behind one is refused, which is the safe direction.
+ * hides the treasury behind one is refused, which is the safe direction. This is the one wire
+ * decoder; the submit path's signature check is built on it too.
  */
 export function decodeWire(params: unknown): Decoded | null {
   if (!Array.isArray(params) || typeof params[0] !== 'string') return null;
@@ -61,13 +65,16 @@ export function decodeWire(params: unknown): Decoded | null {
       accounts: (ix.accountIndices ?? []).map((i) => keys[i] ?? ''),
       data: ix.data ? new Uint8Array(ix.data) : new Uint8Array(),
     }));
-    return { keys, instructions };
+    return {
+      keys,
+      instructions,
+      messageBytes: new Uint8Array(tx.messageBytes),
+      signatures: tx.signatures as Readonly<Record<string, Uint8Array | null>>,
+    };
   } catch {
     return null;
   }
 }
-/** The static account keys alone, for callers that only need to know who is named. */
-export const staticKeysOf = (params: unknown) => decodeWire(params)?.keys ?? null;
 export type OpenQuote = {
   kind: 'seat' | 'sponsor';
   reference: string;
@@ -80,12 +87,9 @@ export type OpenQuote = {
 /**
  * The open quote one of these keys refers to, or null. Two tables, because two things are
  * sold: the $5 seat (requests) and sponsorships (sponsor_payment_attempts). Both keep the
- * reference unique, both mark a quote 'submitted' when a wallet says it sent, and both get a
- * few minutes of grace past expiry because the submit action does too.
- *
- * The sponsorship table belongs to another module's schema and may not exist yet on a fresh
- * local database, so its lookup failing is treated as "no sponsorship matched" rather than as
- * an outage. The requests lookup failing is an outage, and the caller must refuse the send.
+ * reference unique and both mark a quote 'submitted' when a wallet says it sent. The seat gets
+ * the same grace past expiry its submit action gives; the sponsorship gets none, because its
+ * server gives none either. Either lookup failing is an outage, and the caller refuses the send.
  */
 export async function openQuoteFor(
   db: D1Database,
@@ -94,39 +98,45 @@ export async function openQuoteFor(
 ): Promise<OpenQuote | null> {
   if (!keys.length) return null;
   const marks = keys.map(() => '?').join(',');
-  const since = now - rpcProxyLimits.sendGraceMs;
-  const seat = db
-    .prepare(
-      `SELECT reference, wallet, recipient, mint FROM requests WHERE reference IN (${marks}) AND status IN ('quoted','submitted') AND expires_at > ? LIMIT 1`,
-    )
-    .bind(...keys, since)
-    .first<{ reference: string; wallet: string; recipient: string; mint: string }>();
-  const sponsor = db
-    .prepare(
-      `SELECT reference, wallet_hint, recipient, mint FROM sponsor_payment_attempts WHERE reference IN (${marks}) AND status IN ('issued','submitted') AND expires_at > ? LIMIT 1`,
-    )
-    .bind(...keys, since)
-    .first<{ reference: string; wallet_hint: string | null; recipient: string; mint: string | null }>()
-    .catch(() => null);
-  const [a, b] = await Promise.all([seat, sponsor]);
-  if (a) return { kind: 'seat', reference: a.reference, payer: a.wallet, recipient: a.recipient, mint: a.mint };
-  if (b)
-    return { kind: 'sponsor', reference: b.reference, payer: b.wallet_hint, recipient: b.recipient, mint: b.mint };
+  const [seat, sponsor] = await Promise.all([
+    db
+      .prepare(
+        `SELECT reference, wallet, recipient, mint FROM requests WHERE reference IN (${marks}) AND status IN ('quoted','submitted') AND expires_at > ? LIMIT 1`,
+      )
+      .bind(...keys, now - interactLimits.submitGraceMs)
+      .first<{ reference: string; wallet: string; recipient: string; mint: string }>(),
+    db
+      .prepare(
+        `SELECT reference, wallet_hint, recipient, mint FROM sponsor_payment_attempts WHERE reference IN (${marks}) AND status IN ('issued','submitted') AND expires_at > ? LIMIT 1`,
+      )
+      .bind(...keys, now)
+      .first<{ reference: string; wallet_hint: string | null; recipient: string; mint: string | null }>(),
+  ]);
+  if (seat) return { kind: 'seat', reference: seat.reference, payer: seat.wallet, recipient: seat.recipient, mint: seat.mint };
+  if (sponsor)
+    return { kind: 'sponsor', reference: sponsor.reference, payer: sponsor.wallet_hint, recipient: sponsor.recipient, mint: sponsor.mint };
   return null;
 }
 /**
  * Where a payment of `mint` to `recipient` lands: its associated token account, under either
  * token program. Both are derived, so the gate never has to ask the network which one the
- * mint uses. Pure; a PDA is a hash.
+ * mint uses. A derivation is a few hashes and a curve check, and there are one or two
+ * (treasury, mint) pairs per deployment ever, so it is done once per pair per isolate.
  */
-export async function treasuryAccountsFor(recipient: string, mint: string): Promise<string[]> {
-  const owner = recipient as Parameters<typeof findAssociatedTokenPda>[0]['owner'];
-  const m = mint as Parameters<typeof findAssociatedTokenPda>[0]['mint'];
-  const [[a], [b]] = await Promise.all([
-    findAssociatedTokenPda({ owner, mint: m, tokenProgram: TOKEN_PROGRAM_ADDRESS }),
-    findAssociatedTokenPda({ owner, mint: m, tokenProgram: TOKEN_2022_PROGRAM_ADDRESS }),
-  ]);
-  return [String(a), String(b)];
+const treasuryAccounts = new Map<string, Promise<string[]>>();
+export function treasuryAccountsFor(recipient: string, mint: string): Promise<string[]> {
+  const key = `${recipient}:${mint}`;
+  let pending = treasuryAccounts.get(key);
+  if (!pending) {
+    const owner = recipient as Parameters<typeof findAssociatedTokenPda>[0]['owner'];
+    const m = mint as Parameters<typeof findAssociatedTokenPda>[0]['mint'];
+    pending = Promise.all([
+      findAssociatedTokenPda({ owner, mint: m, tokenProgram: TOKEN_PROGRAM_ADDRESS }),
+      findAssociatedTokenPda({ owner, mint: m, tokenProgram: TOKEN_2022_PROGRAM_ADDRESS }),
+    ]).then(([[a], [b]]) => [String(a), String(b)]);
+    treasuryAccounts.set(key, pending);
+  }
+  return pending;
 }
 /**
  * Does this transaction pay this quote? Three things, all of them: it names the reference, it
@@ -136,7 +146,7 @@ export async function treasuryAccountsFor(recipient: string, mint: string): Prom
  * the gate's question is narrower: is this a payment to us at all, or a stranger's transaction
  * wearing our reference?
  */
-export function paysQuote(decoded: Decoded, quote: OpenQuote, treasuryAccounts: string[]): boolean {
+export function paysQuote(decoded: Decoded, quote: OpenQuote, treasury: string[]): boolean {
   const { keys, instructions } = decoded;
   if (!keys.includes(quote.reference)) return false;
   if (quote.payer && keys[0] !== quote.payer) return false;
@@ -145,7 +155,7 @@ export function paysQuote(decoded: Decoded, quote: OpenQuote, treasuryAccounts: 
       if (ix.program !== TOKEN_PROGRAM_ADDRESS && ix.program !== TOKEN_2022_PROGRAM_ADDRESS) return false;
       const op = ix.data[0];
       if (op !== SPL_TRANSFER && op !== SPL_TRANSFER_CHECKED) return false;
-      return ix.accounts.some((a) => treasuryAccounts.includes(a));
+      return ix.accounts.some((a) => treasury.includes(a));
     }
     if (ix.program !== SYSTEM_PROGRAM || ix.data.length < 4) return false;
     const op = ix.data[0] | (ix.data[1] << 8) | (ix.data[2] << 16) | (ix.data[3] << 24);

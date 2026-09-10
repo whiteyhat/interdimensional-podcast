@@ -1,5 +1,6 @@
 // Who a request is from, and how often they may ask. Shared by the routes that gate on it so
 // the trust policy -- which proxy headers are allowed to name a caller -- is written down once.
+import { isLocalHost } from './interact';
 /**
  * The caller's address, trusting only the header Cloudflare sets in front of the Worker.
  *
@@ -17,7 +18,7 @@ export function clientAddress(request: Request) {
   try {
     host = new URL(request.url).hostname;
   } catch {}
-  if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1') {
+  if (isLocalHost(host)) {
     const forwarded = request.headers.get('x-forwarded-for')?.split(',')[0].trim();
     return forwarded ? prefix(forwarded) : 'local';
   }
@@ -55,9 +56,7 @@ export async function charge(
     }
     return true;
   }
-  const outcomes = await Promise.all(
-    Array.from({ length: Math.max(1, units) }, () => limiter.limit({ key })),
-  );
+  const outcomes = await Promise.all(Array.from({ length: units }, () => limiter.limit({ key })));
   return outcomes.every((o) => o.success);
 }
 /**

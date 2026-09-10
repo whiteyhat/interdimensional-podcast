@@ -1,10 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from './build.mjs';
+import { d1 } from './fixtures/d1.mjs';
 import {
   address,
   appendTransactionMessageInstructions,
   compileTransaction,
+  createNoopSigner,
   createTransactionMessage,
   getBase58Decoder,
   getBase64EncodedWireTransaction,
@@ -12,18 +14,18 @@ import {
   setTransactionMessageFeePayer,
   setTransactionMessageLifetimeUsingBlockhash,
 } from '@solana/kit';
-await build(['rpc-gate', 'rpc-upstream', 'rpc-budget', 'throttle']);
+import { getTransferInstruction, getTransferCheckedInstruction, findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/token';
+import { TOKEN_2022_PROGRAM_ADDRESS } from '@solana-program/token-2022';
+import { getTransferSolInstruction } from '@solana-program/system';
+await build(['rpc-gate', 'rpc-upstream', 'rpc-budget', 'throttle', 'db', 'sponsor-db']);
 const G = await import('../work/tests/rpc-gate.js');
 const U = await import('../work/tests/rpc-upstream.js');
 const B = await import('../work/tests/rpc-budget.js');
 const T = await import('../work/tests/throttle.js');
+const DB = await import('../work/tests/db.js');
+const SDB = await import('../work/tests/sponsor-db.js');
 
 // ---- the broadcast gate ----------------------------------------------------------------
-
-import { getTransferInstruction, getTransferCheckedInstruction, findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/token';
-import { TOKEN_2022_PROGRAM_ADDRESS } from '@solana-program/token-2022';
-import { getTransferSolInstruction } from '@solana-program/system';
-import { createNoopSigner } from '@solana/kit';
 
 const PAYER = '7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXArAaKv';
 const OTHER = '3yum94n8ViPw81jAbpcshHBmT7RNEwz9zayKRUbMe8ka';
@@ -72,7 +74,7 @@ void test('the reference a quote minted is read back out of the wire transaction
   assert.ok(d.keys.includes(REFERENCE), 'the reference is among the static keys');
   assert.equal(d.instructions.length, 2);
   assert.equal(d.instructions[1].program, TOKEN_PROGRAM_ADDRESS);
-  assert.deepEqual(G.staticKeysOf(b64(payment())), d.keys);
+  assert.ok(d.messageBytes.length > 0 && PAYER in d.signatures, 'what was signed and by whom, for the signature check');
 });
 
 void test('base58 is the JSON-RPC default and decodes the same transaction', async () => {
@@ -90,9 +92,10 @@ void test('what is not a transaction is refused before the database is asked', (
   assert.equal(G.decodeWire(['A'.repeat(4001), { encoding: 'base64' }]), null, 'a relay-sized payload');
 });
 
-void test('the treasury account is derived for both token programs without asking the network', async () => {
+void test('the treasury account is derived for both token programs, once, without the network', async () => {
   const accounts = await G.treasuryAccountsFor(TREASURY, MINT);
   assert.deepEqual(accounts, [TREASURY_ATA, TREASURY_ATA_2022]);
+  assert.equal(await G.treasuryAccountsFor(TREASURY, MINT), accounts, 'the same derivation is handed back');
 });
 
 void test('a real payment passes: our reference, the quoted wallet, the coin into the treasury', async () => {
@@ -105,17 +108,14 @@ void test('a real payment passes: our reference, the quoted wallet, the coin int
   ]);
   assert.equal(G.paysQuote(G.decodeWire(b64(checked)), seatQuote, treasury), true);
   // A Token-2022 mint lands in the other derived account and is just as much a payment.
-  const to2022 = payment(PAYER, TREASURY_ATA_2022);
-  assert.equal(G.paysQuote(G.decodeWire(b64(to2022)), seatQuote, treasury), true);
+  assert.equal(G.paysQuote(G.decodeWire(b64(payment(PAYER, TREASURY_ATA_2022))), seatQuote, treasury), true);
 });
 
 void test('our reference stapled onto a transaction that does not pay us is refused', async () => {
   // The attack: take a quote, keep the reference, attach it to anything, relay for free.
   const treasury = await G.treasuryAccountsFor(TREASURY, MINT);
-  const stapled = wire([referenceMemo()]);
-  assert.equal(G.paysQuote(G.decodeWire(b64(stapled)), seatQuote, treasury), false, 'memo only');
-  const elsewhere = payment(PAYER, PAYER_ATA);
-  assert.equal(G.paysQuote(G.decodeWire(b64(elsewhere)), seatQuote, treasury), false, 'a transfer to somewhere else');
+  assert.equal(G.paysQuote(G.decodeWire(b64(wire([referenceMemo()]))), seatQuote, treasury), false, 'memo only');
+  assert.equal(G.paysQuote(G.decodeWire(b64(payment(PAYER, PAYER_ATA))), seatQuote, treasury), false, 'a transfer to somewhere else');
   const noReference = wire([
     getTransferInstruction({ source: PAYER_ATA, destination: TREASURY_ATA, authority: createNoopSigner(address(PAYER)), amount: 1n }),
   ]);
@@ -132,59 +132,68 @@ void test('a seat quote is bound to the wallet it was issued to; a sponsorship w
 
 void test('a sponsorship paid in SOL is a system transfer to the recipient itself', () => {
   const sol = { kind: 'sponsor', reference: REFERENCE, payer: null, recipient: TREASURY, mint: null };
-  const paid = wire([
-    referenceMemo(),
-    getTransferSolInstruction({ source: createNoopSigner(address(PAYER)), destination: address(TREASURY), amount: 1n }),
-  ]);
+  const paid = wire([referenceMemo(), getTransferSolInstruction({ source: createNoopSigner(address(PAYER)), destination: address(TREASURY), amount: 1n })]);
   assert.equal(G.paysQuote(G.decodeWire(b64(paid)), sol, []), true);
-  const toOther = wire([
-    referenceMemo(),
-    getTransferSolInstruction({ source: createNoopSigner(address(PAYER)), destination: address(OTHER), amount: 1n }),
-  ]);
+  const toOther = wire([referenceMemo(), getTransferSolInstruction({ source: createNoopSigner(address(PAYER)), destination: address(OTHER), amount: 1n })]);
   assert.equal(G.paysQuote(G.decodeWire(b64(toOther)), sol, []), false);
 });
 
-/** A D1 stand-in that answers the two lookups from a table of open quotes. */
-function fakeDb({ seat = [], sponsor = [], sponsorTableMissing = false } = {}) {
-  return {
-    prepare(sql) {
-      return {
-        bind(...args) {
-          const keys = args.slice(0, -1);
-          return {
-            async first() {
-              if (sql.includes('sponsor_payment_attempts')) {
-                if (sponsorTableMissing) throw Error('no such table: sponsor_payment_attempts');
-                const hit = sponsor.find((r) => keys.includes(r.reference));
-                return hit ? { reference: hit.reference, wallet_hint: hit.payer ?? null, recipient: hit.recipient, mint: hit.mint ?? null } : null;
-              }
-              const hit = seat.find((r) => keys.includes(r.reference));
-              return hit ? { reference: hit.reference, wallet: hit.payer, recipient: hit.recipient, mint: hit.mint } : null;
-            },
-          };
-        },
-      };
-    },
-  };
+/** A real database with both schemas, the way a route opens one. */
+async function database({ sponsorship = true } = {}) {
+  const d = d1();
+  await DB.ensureSchema(d);
+  if (sponsorship) await SDB.ensureSponsorSchema(d);
+  return d;
 }
-const seatRow = { reference: REFERENCE, payer: PAYER, recipient: TREASURY, mint: MINT };
+const NOW = 1_700_000_000_000;
+const seatRow = (over = {}) => ({
+  id: 'q1', reference: REFERENCE, wallet: PAYER, name: 'Carlos', message: 'hi', amount_ui: 5000, amount_base: '5000000000',
+  mint: MINT, recipient: TREASURY, price_usd: 0.001, created_at: NOW - 30_000, expires_at: NOW + 30_000, ...over,
+});
+const sponsorRow = (d, over = {}) =>
+  d.sql
+    .prepare(
+      `INSERT INTO sponsor_orders(id,token_hash,draft,product,status,created_at,updated_at) VALUES('o1','h','{}','spotlight','payment-pending',?,?)`,
+    )
+    .run(NOW, NOW) &&
+  d.sql
+    .prepare(
+      `INSERT INTO sponsor_payment_attempts(id,order_id,pay_token,asset,mint,decimals,amount_base,price_usd,price_cents,recipient,reference,issued_at,expires_at,status,wallet_hint) VALUES('a1','o1','t','coin',?,6,'1','1',100,?,?,?,?,?,?)`,
+    )
+    .run(over.mint ?? MINT, TREASURY, REFERENCE, NOW - 30_000, over.expires_at ?? NOW + 30_000, over.status ?? 'issued', over.wallet_hint ?? null);
 
-void test('an open quote is found by any key the transaction names, in either table', async () => {
-  assert.deepEqual(await G.openQuoteFor(fakeDb({ seat: [seatRow] }), [PAYER, REFERENCE], 0), seatQuote);
-  const sp = await G.openQuoteFor(fakeDb({ sponsor: [{ ...seatRow, payer: null }] }), [PAYER, REFERENCE], 0);
-  assert.equal(sp.kind, 'sponsor');
-  assert.equal(sp.payer, null);
-  assert.equal(await G.openQuoteFor(fakeDb(), [PAYER, REFERENCE], 0), null, "a stranger's transaction");
-  assert.equal(await G.openQuoteFor(fakeDb({ seat: [seatRow] }), [], 0), null, 'nothing to look up');
+void test('an open seat quote is found by any key the transaction names, with the submit grace', async () => {
+  const d = await database();
+  await DB.insertQuote(d, seatRow());
+  assert.deepEqual(await G.openQuoteFor(d, [PAYER, REFERENCE], NOW), seatQuote);
+  assert.equal(await G.openQuoteFor(d, [PAYER, OTHER], NOW), null, 'a key we never issued');
+  assert.equal(await G.openQuoteFor(d, [], NOW), null, 'nothing to look up');
+  // Expired four minutes ago: still inside the five-minute grace the submit action gives.
+  assert.ok(await G.openQuoteFor(d, [REFERENCE], NOW + 30_000 + 4 * 60_000));
+  assert.equal(await G.openQuoteFor(d, [REFERENCE], NOW + 30_000 + 6 * 60_000), null, 'past the grace');
+  await DB.setStatus(d, REFERENCE, 'paid', ['quoted'], NOW);
+  assert.equal(await G.openQuoteFor(d, [REFERENCE], NOW), null, 'a settled quote is no longer open');
 });
 
-void test('a missing sponsorship table is "no sponsorship", not an outage', async () => {
-  assert.equal((await G.openQuoteFor(fakeDb({ seat: [seatRow], sponsorTableMissing: true }), [REFERENCE], 0)).kind, 'seat');
-  assert.equal(await G.openQuoteFor(fakeDb({ sponsorTableMissing: true }), [REFERENCE], 0), null);
+void test('a sponsorship attempt is found too, carries its wallet hint, and gets no grace', async () => {
+  const d = await database();
+  sponsorRow(d, { wallet_hint: OTHER });
+  const q = await G.openQuoteFor(d, [REFERENCE], NOW);
+  assert.equal(q.kind, 'sponsor');
+  assert.equal(q.payer, OTHER);
+  assert.equal(q.mint, MINT);
+  assert.equal(await G.openQuoteFor(d, [REFERENCE], NOW + 31_000), null, 'the sponsor server refuses past expiry, so does the gate');
+});
+
+void test('a missing sponsorship table is an outage, not "no sponsorship"', async () => {
+  const d = await database({ sponsorship: false });
+  await DB.insertQuote(d, seatRow());
+  await assert.rejects(G.openQuoteFor(d, [REFERENCE], NOW), /no such table/);
 });
 
 // ---- the upstream transport --------------------------------------------------------------
 
+const text = async (r) => new Response(r.body).text();
 const answer = (status, body = '{"jsonrpc":"2.0","id":1,"result":"ok"}') =>
   new Response(body, { status, headers: { 'content-type': 'application/json' } });
 function fetchScript(...steps) {
@@ -204,18 +213,18 @@ void test('a provider that stumbles is asked again; one that answers is not', as
   const r = await U.forwardJsonRpc('https://rpc.test', '{}', f);
   assert.equal(r.status, 200);
   assert.equal(r.attempts, 3);
-  const once = fetchScript(answer(200));
-  assert.equal((await U.forwardJsonRpc('https://rpc.test', '{}', once)).attempts, 1);
+  assert.match(await text(r), /"result":"ok"/);
+  assert.equal((await U.forwardJsonRpc('https://rpc.test', '{}', fetchScript(answer(200)))).attempts, 1);
 });
 
 void test('a JSON-RPC error inside a 200 is an answer, not a failure to retry', async () => {
   const f = fetchScript(answer(200, '{"jsonrpc":"2.0","id":1,"error":{"code":-32002,"message":"Blockhash not found"}}'));
   const r = await U.forwardJsonRpc('https://rpc.test', '{}', f);
   assert.equal(r.attempts, 1);
-  assert.match(r.body, /Blockhash not found/);
+  assert.match(await text(r), /Blockhash not found/);
 });
 
-void test('a network that never answers fails with the attempt count, and 429 counts as stumbling', async () => {
+void test('a network that never answers fails naming the attempt, and 429 counts as stumbling', async () => {
   const dead = fetchScript(Object.assign(Error('fetch failed'), { name: 'TypeError' }));
   await assert.rejects(U.forwardJsonRpc('https://rpc.test', '{}', dead), (e) => {
     assert.ok(e instanceof U.UpstreamError);
@@ -223,8 +232,7 @@ void test('a network that never answers fails with the attempt count, and 429 co
     return true;
   });
   assert.equal(dead.calls.length, U.upstreamPolicy.attempts);
-  const throttled = fetchScript(answer(429), answer(200));
-  assert.equal((await U.forwardJsonRpc('https://rpc.test', '{}', throttled)).attempts, 2);
+  assert.equal((await U.forwardJsonRpc('https://rpc.test', '{}', fetchScript(answer(429), answer(200)))).attempts, 2);
 });
 
 void test('withRetry repeats only what its predicate calls transient', async () => {
@@ -279,84 +287,98 @@ void test('a binding is charged once per unit and refuses if any unit is', async
 
 // ---- the deployment-wide and per-caller budgets ---------------------------------------
 
-/**
- * A D1 stand-in for the ledger. `totals` maps a row id to the units the upsert reports back;
- * a row not listed reports exactly what was written. Records every batch.
- */
-function ledger(totals = {}, { windowAt = 0 } = {}) {
-  const writes = [];
-  return {
-    writes,
-    prepare: (sql) => ({ bind: (...args) => ({ sql, args }) }),
-    async batch(statements) {
-      writes.push(statements.map((s) => (s.sql.startsWith('DELETE') ? 'sweep' : [s.args[0], s.args[1]])));
-      if (totals instanceof Error) throw totals;
-      return statements.map((s) =>
-        s.sql.startsWith('DELETE')
-          ? { results: [] }
-          : { results: [{ units: totals[s.args[0]] ?? s.args[1], window_at: windowAt }] },
-      );
-    },
-  };
-}
 const T0 = 1_000_000;
+const rows = (d) =>
+  d.sql.prepare('SELECT id, units, window_at FROM rpc_budget ORDER BY id').all().map((r) => ({ ...r }));
 
-void test('units accumulate in the isolate and flush in batches, not per call', async () => {
+void test('units accumulate in the isolate and flush in one batch, not per call', async () => {
   B.resetMeter();
   for (let i = 0; i < 24; i++) assert.equal(B.charge('a', 1, T0 + i), false, `call ${i} does not flush`);
   assert.equal(B.charge('a', 1, T0 + 24), true, 'the 25th does');
-  const db = ledger();
-  await B.flush(db, T0 + 24);
-  assert.deepEqual(db.writes, [[['burst', 25], ['day', 25], ['ip:a', 25], 'sweep']], 'one batch: both deployment rows, the caller, and the first sweep');
+  const d = await database();
+  await B.flush(d, T0 + 24);
+  assert.deepEqual(rows(d), [
+    { id: 'burst', units: 25, window_at: T0 + 24 },
+    { id: 'day', units: 25, window_at: T0 + 24 },
+    { id: 'ip:a', units: 25, window_at: T0 + 24 },
+  ]);
   assert.equal(B.meterState().pending, 0);
   assert.equal(B.braked('a', T0 + 25), null);
 });
 
+void test('a window that has closed starts over; one still open adds up', async () => {
+  B.resetMeter();
+  const d = await database();
+  B.charge('a', 10, T0);
+  await B.flush(d, T0);
+  B.charge('a', 5, T0 + 11_000);
+  await B.flush(d, T0 + 11_000);
+  const byId = Object.fromEntries(rows(d).map((r) => [r.id, r]));
+  assert.equal(byId.burst.units, 5, 'the ten-second row rolled');
+  assert.equal(byId.day.units, 15, 'the day row kept counting');
+  assert.equal(byId['ip:a'].units, 15, 'the caller minute kept counting');
+});
+
 void test('a crossed deployment ceiling brakes the isolate, backs off further each strike, and clears', async () => {
   B.resetMeter();
-  B.charge('a', 30, T0);
-  await B.flush(ledger({ burst: 5_000, day: 5_000 }), T0);
+  const d = await database();
+  d.sql.prepare(`INSERT INTO rpc_budget VALUES('burst', 4990, ?)`).run(T0);
+  B.charge('a', 30, T0 + 1);
+  await B.flush(d, T0 + 1);
   assert.equal(B.braked('a', T0 + 59_000), 'deployment');
   assert.equal(B.braked('a', T0 + 61_000), null, 'first strike: a minute');
+  d.sql.prepare(`UPDATE rpc_budget SET units=4990, window_at=? WHERE id='burst'`).run(T0 + 61_000);
   B.charge('a', 30, T0 + 61_000);
-  await B.flush(ledger({ burst: 5_000, day: 5_000 }), T0 + 61_000);
+  await B.flush(d, T0 + 61_000);
   assert.equal(B.braked('anyone', T0 + 61_000 + 119_000), 'deployment', 'second strike: two minutes, and it is everyone');
   B.charge('a', 1, T0 + 200_000);
-  await B.flush(ledger({ burst: 1, day: 31 }), T0 + 200_000);
+  await B.flush(d, T0 + 200_000);
   assert.equal(B.meterState().strikes, 0, 'under the ceiling again, the count resets');
 });
 
 void test('a caller the ledger shows over its minute is refused until that minute rolls, and only that caller', async () => {
   B.resetMeter();
-  // This isolate saw only a few calls from "spread"; the ledger, fed by every isolate, says 301.
+  const d = await database();
+  // Other isolates already put this caller at 298 in a window that opened 40s ago.
+  d.sql.prepare(`INSERT INTO rpc_budget VALUES('ip:spread', 298, ?)`).run(T0 - 40_000);
   B.charge('spread', 3, T0);
   B.charge('honest', 2, T0);
-  const db = ledger({ 'ip:spread': 301 }, { windowAt: T0 - 40_000 });
-  const r = await B.flush(db, T0);
-  assert.deepEqual(r.callersOver, ['spread']);
+  assert.deepEqual(await B.flush(d, T0), ['spread']);
   assert.equal(B.braked('spread', T0 + 1), 'caller');
   assert.equal(B.braked('honest', T0 + 1), null, 'the other caller in the same batch is untouched');
   assert.equal(B.braked('spread', T0 + 19_000), 'caller', 'still inside the window that opened 40s ago');
   assert.equal(B.braked('spread', T0 + 21_000), null, 'the window rolled; the brake lifts on its own');
 });
 
-void test('the sweep runs with the first flush and then only every five minutes', async () => {
+void test('a quote may be broadcast ten times, then not', async () => {
+  const d = await database();
+  for (let i = 0; i < 10; i++) assert.equal(await B.chargeReference(d, REFERENCE, T0 + i), true, `send ${i + 1}`);
+  assert.equal(await B.chargeReference(d, REFERENCE, T0 + 10), false, 'the eleventh');
+  assert.equal(await B.chargeReference(d, OTHER, T0 + 10), true, 'another quote is its own count');
+});
+
+void test('the sweep drops stale caller and quote rows, keeps live ones and the deployment rows, and runs every five minutes', async () => {
   B.resetMeter();
+  const d = await database();
+  d.sql.prepare(`INSERT INTO rpc_budget VALUES('ip:old', 1, ?), ('send:old', 1, ?), ('ip:live', 1, ?)`).run(T0 - 10 * 60_000, T0 - 60 * 60_000, T0 - 30_000);
   B.charge('a', 1, T0);
-  const db = ledger();
-  await B.flush(db, T0);
+  await B.flush(d, T0);
+  assert.deepEqual(rows(d).map((r) => r.id), ['burst', 'day', 'ip:a', 'ip:live']);
+  d.sql.prepare(`INSERT INTO rpc_budget VALUES('ip:old2', 1, ?)`).run(T0 - 10 * 60_000);
   B.charge('a', 1, T0 + 60_000);
-  await B.flush(db, T0 + 60_000);
+  await B.flush(d, T0 + 60_000);
+  assert.ok(rows(d).some((r) => r.id === 'ip:old2'), 'a minute later the sweep is not due');
   B.charge('a', 1, T0 + 6 * 60_000);
-  await B.flush(db, T0 + 6 * 60_000);
-  assert.deepEqual(db.writes.map((w) => w.includes('sweep')), [true, false, true]);
+  await B.flush(d, T0 + 6 * 60_000);
+  assert.ok(!rows(d).some((r) => r.id === 'ip:old2'), 'five minutes on, it is');
 });
 
 void test('a failed flush keeps the units, for the deployment and each caller, and never brakes', async () => {
   B.resetMeter();
   B.charge('a', 30, T0);
   B.charge('b', 10, T0);
-  await B.flush(ledger(Error('D1_ERROR: too many requests')), T0);
+  const broken = { ...(await database()), batch: async () => { throw Error('D1_ERROR: too many requests'); } };
+  await B.flush(broken, T0);
   const st = B.meterState();
   assert.equal(st.pending, 40, 'nothing lost');
   assert.deepEqual([...st.callers], [['a', 30], ['b', 10]]);

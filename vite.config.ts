@@ -4,6 +4,7 @@ import vinext from 'vinext';
 import { defineConfig, type Plugin } from 'vite';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 import hostingConfig from './.openai/hosting.json';
+import { rpcProxyLimits } from './lib/rpcproxy';
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   '00000000-0000-4000-8000-000000000000';
@@ -44,9 +45,9 @@ const localBindingConfig = {
   // across connections, isolates and colos are counted in D1 (lib/rpc-budget.ts).
   // Namespace ids only need to be unique within the account. Period may only be 10 or 60.
   ratelimits: [
-    { name: 'RPC_BURST', namespace_id: '1101', simple: { limit: 60, period: 10 as const } },
-    { name: 'RPC_MINUTE', namespace_id: '1102', simple: { limit: 240, period: 60 as const } },
-    { name: 'RPC_SEND', namespace_id: '1103', simple: { limit: 6, period: 60 as const } },
+    { name: 'RPC_BURST', namespace_id: '1101', simple: { limit: rpcProxyLimits.burstPer10s, period: 10 as const } },
+    { name: 'RPC_MINUTE', namespace_id: '1102', simple: { limit: rpcProxyLimits.bindingPerMinute, period: 60 as const } },
+    { name: 'RPC_SEND', namespace_id: '1103', simple: { limit: rpcProxyLimits.sendsPerMinute, period: 60 as const } },
   ],
 };
 

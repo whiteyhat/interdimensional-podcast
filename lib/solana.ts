@@ -9,10 +9,7 @@ import {
   createTransactionMessage,
   getBase58Decoder,
   getAddressEncoder,
-  getBase64Encoder,
   getBase64EncodedWireTransaction,
-  getCompiledTransactionMessageDecoder,
-  getTransactionDecoder,
   pipe,
   setTransactionMessageFeePayer,
   setTransactionMessageLifetimeUsingBlockhash,
@@ -47,9 +44,21 @@ import {
 } from './interact';
 import { fetchJson } from './http';
 import { isTransportError, withRetry } from './rpc-upstream';
+import { decodeWire } from './rpc-gate';
 
 const clients = new Map<string, ReturnType<typeof createSolanaRpc>>();
 /** One RPC client per URL per isolate. */
+/**
+ * The provider this deployment is configured with, or null. There is deliberately no public
+ * fallback: api.mainnet-beta.solana.com answers 403 to a Worker, so a missing key would not
+ * degrade to a slower RPC, it would fail every call while looking configured.
+ */
+export const configuredRpcUrl = (v: { SOLANA_RPC_URL?: string }) => v.SOLANA_RPC_URL?.trim() || null;
+/** The configured provider, or a 503 that names the gap. */
+export function requireRpcUrl(url: string | null): string {
+  if (!url) throw fail(503, 'This deployment has no Solana RPC configured.', 'NORPC');
+  return url;
+}
 export function rpcFor(url: string) {
   let rpc = clients.get(url);
   if (!rpc) {
@@ -267,21 +276,17 @@ export async function buildQuoteTx(
 }
 /** Refuse to relay anything that is not this viewer's own quote. */
 export function inspectSigned(base64: string, expect: { wallet: string; reference: string }) {
-  let keys: readonly string[];
-  let signature:string;
-  try {
-    const bytes = getBase64Encoder().encode(base64);
-    const tx = getTransactionDecoder().decode(bytes);
-    keys = getCompiledTransactionMessageDecoder().decode(tx.messageBytes).staticAccounts;
-    const payer=tx.signatures[address(expect.wallet)];
-    if(!payer||!nacl.sign.detached.verify(new Uint8Array(tx.messageBytes),new Uint8Array(payer),new Uint8Array(getAddressEncoder().encode(address(expect.wallet)))))throw Error('Invalid payer signature');
-    signature=getBase58Decoder().decode(payer);
-  } catch {
+  const decoded = decodeWire([base64, { encoding: 'base64' }]);
+  const payer = decoded?.signatures[expect.wallet];
+  if (
+    !decoded ||
+    !payer ||
+    !nacl.sign.detached.verify(decoded.messageBytes, payer, new Uint8Array(getAddressEncoder().encode(address(expect.wallet))))
+  )
     throw fail(400, 'That is not a signed Solana transaction.');
-  }
-  if (keys[0] !== expect.wallet || !keys.includes(expect.reference))
+  if (decoded.keys[0] !== expect.wallet || !decoded.keys.includes(expect.reference))
     throw fail(400, 'That transaction does not belong to this quote.');
-  return signature;
+  return getBase58Decoder().decode(payer);
 }
 /** Broadcast a wallet-signed transaction for wallets that can sign but not send. */
 export async function sendSigned(rpc: SolanaRpc, base64: string): Promise<string> {

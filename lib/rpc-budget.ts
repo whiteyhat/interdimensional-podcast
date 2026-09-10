@@ -16,12 +16,15 @@
 // minute is up. Every isolate that flushes after the ledger shows a caller over learns the same
 // thing, so a spread attacker is refused everywhere within one flush interval. Overshoot is
 // bounded by (active isolates x flushEvery) units -- a few hundred credits on a bad day.
+import { interactLimits } from './interact';
 import { rpcProxyLimits } from './rpcproxy';
 const flushEvery = 25;
 const flushAtLeastEveryMs = 10_000;
 const brakeMinMs = 60_000;
 const brakeMaxMs = 15 * 60_000;
 const callerWindowMs = 60_000;
+/** As long as a quote can stay open, so a broadcast count cannot be reset by waiting. */
+const referenceWindowMs = interactLimits.quoteTtlMs + interactLimits.submitGraceMs;
 /** Callers carried per flush. Beyond this the rest count toward the deployment only, which is the row that stops a botnet. */
 const maxCallersPerFlush = 200;
 const sweepEveryMs = 5 * 60_000;
@@ -52,14 +55,7 @@ const fresh = (): Meter => ({
 });
 const meter: Meter = fresh();
 /** Exposed for tests; nothing else should reach in. */
-export const meterState = () => ({
-  pending: meter.pending,
-  callers: new Map(meter.callers),
-  lastFlushAt: meter.lastFlushAt,
-  blockedUntil: meter.blockedUntil,
-  strikes: meter.strikes,
-  callerBlockedUntil: new Map(meter.callerBlockedUntil),
-});
+export const meterState = () => structuredClone(meter);
 export function resetMeter() {
   Object.assign(meter, fresh());
 }
@@ -86,6 +82,7 @@ export function charge(caller: string, units: number, now: number): boolean {
   if (meter.flushing) return false;
   return meter.pending >= flushEvery || now - meter.lastFlushAt >= flushAtLeastEveryMs;
 }
+type Row = { units: number; window_at: number };
 /**
  * One statement per row: start a new window if the old one has closed, otherwise add. It
  * returns the running total and the window it belongs to, so the caller can compare against
@@ -98,33 +95,33 @@ const upsert = (db: D1Database, id: string, units: number, now: number, windowMs
       `INSERT INTO rpc_budget(id,units,window_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET units=CASE WHEN rpc_budget.window_at<=? THEN excluded.units ELSE rpc_budget.units+excluded.units END,window_at=CASE WHEN rpc_budget.window_at<=? THEN excluded.window_at ELSE rpc_budget.window_at END RETURNING units, window_at`,
     )
     .bind(id, units, now, now - windowMs, now - windowMs);
-type Row = { units: number; window_at: number };
 /**
  * Count a broadcast against its quote. The row is keyed on the reference, so it holds across
- * callers and colos, with a window as long as the quote can stay open so the count cannot be
- * reset by waiting. Over the cap is refused; a write failure is refused too, because this only
- * runs for a broadcast and the relay must not open on a ledger blip.
+ * callers and colos. Over the cap is refused; a write failure is refused too, because this
+ * only runs for a broadcast and the relay must not open on a ledger blip.
  */
 export async function chargeReference(db: D1Database, reference: string, now: number): Promise<boolean> {
-  const windowMs = rpcProxyLimits.sendGraceMs + 60_000;
-  const row = await upsert(db, `send:${reference}`, 1, now, windowMs).first<Row>();
+  const row = await upsert(db, `send:${reference}`, 1, now, referenceWindowMs).first<Row>();
   return (row?.units ?? Infinity) <= rpcProxyLimits.sendsPerReference;
 }
-/** Caller and quote rows older than any window that could still refer to them. */
+/**
+ * Caller and quote rows older than any window that could still refer to them. Range
+ * predicates rather than LIKE, so the primary key serves the scan; the byte after ':' is ';'.
+ */
 const sweep = (db: D1Database, now: number) =>
   db
     .prepare(
-      `DELETE FROM rpc_budget WHERE (id LIKE 'ip:%' AND window_at<?) OR (id LIKE 'send:%' AND window_at<?)`,
+      `DELETE FROM rpc_budget WHERE (id > 'ip:' AND id < 'ip;' AND window_at<?) OR (id > 'send:' AND id < 'send;' AND window_at<?)`,
     )
-    .bind(now - 2 * callerWindowMs, now - 2 * (rpcProxyLimits.sendGraceMs + 60_000));
-export type Flushed = { over: string | null; callersOver: string[] };
+    .bind(now - 2 * callerWindowMs, now - 2 * referenceWindowMs);
 /**
- * Write what has accumulated and apply the brakes. Safe to call when nothing is pending. A
- * failed write leaves the units pending for the next flush rather than losing them, and never
- * brakes: a D1 blip must not turn into a self-inflicted outage.
+ * Write what has accumulated and apply the brakes; returns the callers found over their
+ * minute. Safe to call when nothing is pending. A failed write leaves the units pending for
+ * the next flush rather than losing them, and never brakes: a D1 blip must not turn into a
+ * self-inflicted outage.
  */
-export async function flush(db: D1Database, now: number): Promise<Flushed> {
-  if (meter.flushing) return { over: null, callersOver: [] };
+export async function flush(db: D1Database, now: number): Promise<string[]> {
+  if (meter.flushing) return [];
   const units = meter.pending;
   const callers = [...meter.callers];
   meter.pending = 0;
@@ -140,33 +137,35 @@ export async function flush(db: D1Database, now: number): Promise<Flushed> {
     const rows = await db.batch<Row>(statements);
     meter.lastFlushAt = now;
     if (due) meter.lastSweepAt = now;
-    const total = (i: number) => rows[i]?.results?.[0];
-    const over = windows.find((w, i) => (total(i)?.units ?? 0) > w.cap) ?? null;
-    if (over) {
+    const row = (i: number) => rows[i]?.results?.[0];
+    const totals = windows.map((_, i) => row(i)?.units ?? 0);
+    const hit = totals.findIndex((total, i) => total > windows[i].cap);
+    if (hit >= 0) {
       meter.strikes = Math.min(meter.strikes + 1, 8);
       meter.blockedUntil = now + Math.min(brakeMinMs * 2 ** (meter.strikes - 1), brakeMaxMs);
       console.error(
-        `[rpc] deployment ${over.id} budget crossed (${total(windows.indexOf(over))?.units} > ${over.cap}); refusing budgeted calls for ${Math.round((meter.blockedUntil - now) / 1000)}s`,
+        `[rpc] deployment ${windows[hit].id} budget crossed (${totals[hit]} > ${windows[hit].cap}); refusing budgeted calls for ${Math.round((meter.blockedUntil - now) / 1000)}s`,
       );
     } else meter.strikes = 0;
-    const callersOver: string[] = [];
+    // Brakes that have lapsed leave with the flush, so the map holds live ones only.
+    for (const [caller, until] of meter.callerBlockedUntil) if (until <= now) meter.callerBlockedUntil.delete(caller);
+    const over: string[] = [];
     callers.forEach(([caller], i) => {
-      const row = total(windows.length + i);
-      if (row && row.units > rpcProxyLimits.perMinute) {
+      const r = row(windows.length + i);
+      if (r && r.units > rpcProxyLimits.perMinute) {
         // Refused until the caller's own minute rolls, wherever the next request lands.
-        meter.callerBlockedUntil.set(caller, row.window_at + callerWindowMs);
-        callersOver.push(caller);
+        meter.callerBlockedUntil.set(caller, r.window_at + callerWindowMs);
+        over.push(caller);
       }
     });
-    if (callersOver.length)
-      console.warn(`[rpc] ${callersOver.length} caller(s) over ${rpcProxyLimits.perMinute}/min:`, callersOver.slice(0, 5).join(' '));
-    if (meter.callerBlockedUntil.size > 5000) meter.callerBlockedUntil.clear();
-    return { over: over?.id ?? null, callersOver };
+    if (over.length)
+      console.warn(`[rpc] ${over.length} caller(s) over ${rpcProxyLimits.perMinute}/min:`, over.slice(0, 5).join(' '));
+    return over;
   } catch (e) {
     meter.pending += units;
     for (const [caller, n] of callers) meter.callers.set(caller, (meter.callers.get(caller) ?? 0) + n);
     console.warn('[rpc] budget flush failed', e instanceof Error ? e.message : e);
-    return { over: null, callersOver: [] };
+    return [];
   } finally {
     meter.flushing = false;
   }
