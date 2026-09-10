@@ -27,6 +27,13 @@ for (const [role, name] of [
     '-y',
     `public${image}`,
   ]);
+  // The same frame as WebP, for the pages that merely display it. The PNG below is the one
+  // fal conditions on, so it must stay a pixel-exact PNG; the poster is ~20x smaller and is
+  // what a phone downloads when someone opens a pasted link.
+  const poster = `/${name}-video.webp`;
+  execFileSync('ffmpeg', [
+    '-v', 'error', '-i', `public${image}`, '-quality', '82', '-y', `public${poster}`,
+  ]);
   const bytes = await readFile(`public${image}`);
   const upload = await fal(
     'https://rest.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3',
@@ -46,6 +53,7 @@ for (const [role, name] of [
   if (!result.ok) throw Error(`Upload failed for ${role}: ${result.status}`);
   frames[role] = {
     image,
+    poster,
     source: upload.file_url,
     width: 1344,
     height: 768,

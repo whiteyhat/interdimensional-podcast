@@ -2,6 +2,7 @@
 export const videoFrames = {
   host: {
     image: '/pepe-video.png',
+    poster: '/pepe-video.webp',
     source:
       'https://v3b.fal.media/files/b/0aa9a903/QCxe-llC5mNr7pB3T3HsK_pepe-video.png',
     width: 1344,
@@ -12,6 +13,7 @@ export const videoFrames = {
   },
   guest: {
     image: '/gigachad-video.png',
+    poster: '/gigachad-video.webp',
     source:
       'https://v3b.fal.media/files/b/0aa9a8eb/l-pQ87NUGdsXuCoOUFdQS_gigachad-video.png',
     width: 1344,

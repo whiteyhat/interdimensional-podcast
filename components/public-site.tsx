@@ -12,6 +12,7 @@ import { SponsorActivity } from '@/components/sponsor-activity';
 import { useCoin } from '@/hooks/use-coin';
 import { useConfig } from '@/hooks/use-config';
 import { useRequests } from '@/hooks/use-requests';
+import { videoFrames } from '@/lib/video-frames';
 import { cast, show } from '@/lib/show';
 // The wallet layer is browser-only and heavy; it arrives after the page has painted.
 const InteractCard = dynamic(
@@ -92,7 +93,7 @@ export function PublicSite() {
             url={config?.streamEmbedUrl ?? null}
             links={config?.links ?? NO_LINKS}
             live={online}
-            poster={cast.host.image}
+            poster={videoFrames.host.poster}
           />
           <SponsorActivity />
         </section>
