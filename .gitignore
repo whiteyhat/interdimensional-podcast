@@ -48,6 +48,12 @@ work/
 !/public/pepe-video.png
 !/public/gigachad-video.png
 !/public/logo.png
+# WebP copies of the three images the page preloads. The PNGs stay: pepe-video.png and
+# gigachad-video.png are the exact 1344x768 frames lib/video-frames.ts uploads to fal, and
+# logo.png is still the apple-touch-icon and the Solana Pay wallet icon.
+!/public/logo.webp
+!/public/pepe-video.webp
+!/public/gigachad-video.webp
 !/public/share-card.png
 !/public/favicon.svg
 !/public/launch/

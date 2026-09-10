@@ -73,8 +73,8 @@ export function SponsorPreview({
       ) : (
         <>
           <div className="sponsor-preview-hosts" aria-hidden="true">
-            <img src="/pepe-video.png" alt="" />
-            <img src="/gigachad-video.png" alt="" />
+            <img src="/pepe-video.webp" alt="" loading="lazy" />
+            <img src="/gigachad-video.webp" alt="" loading="lazy" />
           </div>
           <div className="sponsor-cue">
             <span className="sponsor-cue-label">

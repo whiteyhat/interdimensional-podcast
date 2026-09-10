@@ -57,7 +57,7 @@ export function StreamEmbed({
     <div className="stage stream-embed">
       <img src={poster} alt="" />
       <div className="stream-poster">
-        <img className="opening-mark" src="/logo.png" alt={show.name} />
+        <img className="opening-mark" src="/logo.webp" alt={show.name} />
         <p className="eyebrow">{offAir ? 'OFF AIR' : anywhere ? 'WATCH THE SHOW' : 'STREAM'}</p>
         <h1>{show.headline}</h1>
         <p className="stream-soon">

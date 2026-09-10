@@ -13,7 +13,9 @@ export const metadata: Metadata = {
   metadataBase: new URL(site),
   title: `${show.name} | ${cast.host.name} and ${cast.guest.name}`,
   description: show.description,
-  icons: { icon: '/logo.png', apple: '/logo.png' },
+  // The 431 KB logo was serving as the favicon on every tab load; the SVG is 712 bytes.
+  // apple-touch-icon has no SVG support, so that one keeps the raster.
+  icons: { icon: '/favicon.svg', apple: '/logo.png' },
   openGraph: {
     type: 'website',
     siteName: show.name,

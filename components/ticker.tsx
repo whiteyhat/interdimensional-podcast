@@ -22,7 +22,7 @@ export function Ticker({
   if (!title) return null;
   return (
     <div className="ticker" key={showRequest ? request.id : topic?.id}>
-      <img className="ticker-mark" src="/logo.png" alt="" />
+      <img className="ticker-mark" src="/logo.webp" alt="" />
       <span className="ticker-live">
         <i />
         LIVE
