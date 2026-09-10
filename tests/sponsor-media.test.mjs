@@ -16,6 +16,18 @@ const config = {
   workdir: 'work/media-test',
   siteOrigin: 'http://127.0.0.1:3316',
 };
+// Normalizing a cap and rejecting a malformed one both go through scripts/wearable-render.py,
+// so they need cv2 and numpy on the configured interpreter. That is present on a studio machine
+// and inside the broadcast container, and absent on a stock CI runner, where the worker answers
+// 503 rather than doing the work. Ask the worker itself instead of guessing, and skip rather
+// than fail: a missing vision runtime is not a broken build, but silently dropping the checks
+// would hide one.
+const health = await (
+  await handleMediaRequest(new Request('http://worker/health'), config)
+).json();
+const needsRuntime = health.ready
+  ? false
+  : `no wearable vision runtime on ${config.python} (needs cv2 and numpy)`;
 void test('media worker refuses unauthenticated work before decoding a file', async () => {
   const r = await handleMediaRequest(
     new Request('http://worker/preview', {
@@ -26,7 +38,7 @@ void test('media worker refuses unauthenticated work before decoding a file', as
   );
   assert.equal(r.status, 401);
 });
-void test('normalized upload returns the canonical cap image and immutable hashes', async () => {
+void test('normalized upload returns the canonical cap image and immutable hashes', { skip: needsRuntime }, async () => {
   const r = await handleMediaRequest(
     new Request('http://worker/preview?kind=cap&target=host', {
       method: 'POST',
@@ -78,7 +90,7 @@ void test('qualification requires matching trial proof and a working runtime, no
     await rm(dir, { recursive: true, force: true });
   }
 });
-void test('malformed images and remote video targets fail before any broadcast output', async () => {
+void test('malformed images and remote video targets fail before any broadcast output', { skip: needsRuntime }, async () => {
   const r = await handleMediaRequest(
     new Request('http://worker/preview?kind=logo', {
       method: 'POST',
