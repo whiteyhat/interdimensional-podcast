@@ -177,6 +177,24 @@ try {
     });
   assert.match(await tile('spotlight').innerText(), /Top seller/i);
   assert.match(await tile('cap').innerText(), /Most value/i);
+  // Choosing a product may never move what the customer is aiming at.
+  const anchors = () =>
+    page.evaluate(() => {
+      const top = (s) =>
+        Math.round(document.querySelector(s).getBoundingClientRect().top);
+      return [top('.sponsor-products'), top('.sponsor-form .sponsor-button')];
+    });
+  const resting = await anchors();
+  for (const value of ['cap', 'message', 'spotlight']) {
+    await panel
+      .locator(`input[name="sponsor-product"][value="${value}"]`)
+      .check({ force: true });
+    assert.deepEqual(
+      await anchors(),
+      resting,
+      `choosing ${value} moved the cards or the button`,
+    );
+  }
   await panel
     .locator('input[name="sponsor-product"][value="spotlight"]')
     .check({ force: true });
@@ -343,7 +361,7 @@ try {
   });
   await mobile.context.close();
   console.log(
-    'Browser rehearsal passed: three steps with no typing on the first, value badges, draft reload, discount, validation focus, QR recovery, receipt/refund, 320px reflow, 16px inputs, native keyboard, reduced motion.',
+    'Browser rehearsal passed: three steps with no typing on the first, a layout that never moves when a product is chosen, value badges, draft reload, discount, validation focus, QR recovery, receipt/refund, 320px reflow, 16px inputs, native keyboard, reduced motion.',
   );
 } catch (e) {
   for (const context of browser.contexts())

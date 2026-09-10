@@ -451,11 +451,6 @@ export function SponsorPanel() {
       <p className="sponsor-lead">
         A thought. A project. A cap with your name on it.
       </p>
-      <SponsorPreview
-        draft={draft}
-        artwork={artwork || receipt?.assetUrl}
-        paid={received}
-      />
       {received && receipt ? (
         <SponsorReceipt
           receipt={receipt}
@@ -524,6 +519,24 @@ export function SponsorPanel() {
                     );
                   })}
                 </fieldset>
+                <button
+                  type="button"
+                  className="sponsor-button"
+                  disabled={!loaded}
+                  onClick={() => goStep(2)}
+                >
+                  Continue <ArrowRight size={17} />
+                </button>
+                <p className="sponsor-checkout-note">
+                  {!available
+                    ? connectionError ||
+                      unavailableReason ||
+                      'Explore and customize while the studio is off air.'
+                    : 'One short step, then payment. No account needed.'}
+                </p>
+              </>
+            ) : step === 2 ? (
+              <>
                 {draft.product === 'cap' && (
                   <fieldset className="sponsor-host-choice">
                     <legend>Who’s wearing it?</legend>
@@ -551,24 +564,6 @@ export function SponsorPanel() {
                     ))}
                   </fieldset>
                 )}
-                <button
-                  type="button"
-                  className="sponsor-button"
-                  disabled={!loaded}
-                  onClick={() => goStep(2)}
-                >
-                  Continue <ArrowRight size={17} />
-                </button>
-                <p className="sponsor-checkout-note">
-                  {!available
-                    ? connectionError ||
-                      unavailableReason ||
-                      'Explore and customize while the studio is off air.'
-                    : 'One short step, then payment. No account needed.'}
-                </p>
-              </>
-            ) : step === 2 ? (
-              <>
                 {draft.product !== 'message' && (
                   <label
                     className="sponsor-field"
@@ -787,6 +782,11 @@ export function SponsorPanel() {
           </div>
         </form>
       )}
+      <SponsorPreview
+        draft={draft}
+        artwork={artwork || receipt?.assetUrl}
+        paid={received}
+      />
       {showRefund && (
         <fieldset
           className="sponsor-refund-confirm"

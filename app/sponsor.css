@@ -206,6 +206,9 @@ aside.sponsor-rail {
 .sponsor-preview {
   --cursor-x: 50%;
   --cursor-y: 35%;
+  /* Below the choices, never above them: switching products resizes this card,
+     and nothing the customer is aiming at may move when it does. */
+  margin-top: 24px;
   position: relative;
   overflow: hidden;
   isolation: isolate;
