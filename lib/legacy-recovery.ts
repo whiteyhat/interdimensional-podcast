@@ -128,14 +128,13 @@ export async function reconcileLegacy(v: {
   DB?: D1Database;
   SOLANA_RPC_URL?: string;
 }) {
-  if (!v.DB) return { checked: 0 };
+  // No provider, no reconciliation. The public RPC that used to stand in here returns 403 to a
+  // Cloudflare Worker, so it did not degrade -- it failed every check while looking configured.
+  if (!v.DB || !v.SOLANA_RPC_URL?.trim()) return { checked: 0 };
   await db.ensureSchema(v.DB);
   const rows = await db.recoverable(v.DB, Date.now(), 2),
     signal = AbortSignal.timeout(12000),
-    rpc = legacyRpcWithDeadline(
-      rpcFor(v.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'),
-      signal,
-    );
+    rpc = legacyRpcWithDeadline(rpcFor(v.SOLANA_RPC_URL.trim()), signal);
   for (const row of rows) {
     if (signal.aborted) break;
     try {

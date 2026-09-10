@@ -29,6 +29,8 @@ export const schema = [
   'CREATE INDEX IF NOT EXISTS requests_wallet_created ON requests (wallet, created_at)',
   ...producerSchema,
   `CREATE TABLE IF NOT EXISTS legacy_payment_recovery(reference TEXT PRIMARY KEY, cursor TEXT, checked_at INTEGER NOT NULL DEFAULT 0)`,
+  // The proxy's deployment-wide budget; two rows that never grow. See migrations/0004 and lib/rpc-budget.ts.
+  `CREATE TABLE IF NOT EXISTS rpc_budget(id TEXT PRIMARY KEY, units INTEGER NOT NULL, window_at INTEGER NOT NULL)`,
 ];
 const ready = new WeakMap<D1Database, Promise<void>>();
 /** Run the schema once per isolate, so dev never depends on a migration step. */

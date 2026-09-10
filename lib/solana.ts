@@ -46,6 +46,7 @@ import {
   readPumpPrice,
 } from './interact';
 import { fetchJson } from './http';
+import { isTransportError, withRetry } from './rpc-upstream';
 
 const clients = new Map<string, ReturnType<typeof createSolanaRpc>>();
 /** One RPC client per URL per isolate. */
@@ -173,6 +174,46 @@ export async function treasuryReady(
 // ---- quote transaction --------------------------------------------------------------
 
 /** A fresh 32-byte key that only this payment will ever carry. */
+/**
+ * What this transfer should bid per compute unit, from the provider's own estimate.
+ *
+ * The bid used to be a constant, 100,000 micro-lamports per unit: over the 60,000-unit budget
+ * that is 6,000 lamports, a tenth of a cent, so cost was never the constraint -- landing was.
+ * A constant is wrong in both directions: too high to be needed on a quiet network, and not
+ * enough to be heard on a busy one. Helius's estimate is keyed on the accounts the transaction
+ * touches, which is what actually determines contention. The floor is Helius's own threshold
+ * for routing a send through its staked lane; the ceiling is a cent on this budget, which is
+ * as much insurance as a five-dollar payment needs. On any failure the old constant stands,
+ * because devnet, a local validator and a provider that is not Helius do not know this method
+ * and the quote must still be issued.
+ */
+export const priorityFee = {
+  fallbackMicroLamports: 100_000,
+  minMicroLamports: 10_000,
+  maxMicroLamports: 1_000_000,
+  timeoutMs: 2_500,
+} as const;
+export async function priorityFeeFor(rpcUrl: string, accountKeys: string[]): Promise<number> {
+  try {
+    const response = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'getPriorityFeeEstimate',
+        params: [{ accountKeys, options: { recommended: true } }],
+      }),
+      signal: AbortSignal.timeout(priorityFee.timeoutMs),
+    });
+    const body = (await response.json()) as { result?: { priorityFeeEstimate?: unknown } };
+    const estimate = Number(body?.result?.priorityFeeEstimate);
+    if (!Number.isFinite(estimate) || estimate <= 0) return priorityFee.fallbackMicroLamports;
+    return Math.min(priorityFee.maxMicroLamports, Math.max(priorityFee.minMicroLamports, Math.round(estimate)));
+  } catch {
+    return priorityFee.fallbackMicroLamports;
+  }
+}
 export function randomReference(): Address {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return address(getBase58Decoder().decode(bytes));
@@ -188,7 +229,12 @@ export type QuoteFields = {
  * The unsigned wire transaction the wallet signs: fee payer = the viewer, compute budget
  * first, the Solana Pay transfer (with the reference attached) last.
  */
-export async function buildQuoteTx(rpc: SolanaRpc, fields: QuoteFields, ticker: string) {
+export async function buildQuoteTx(
+  rpc: SolanaRpc,
+  fields: QuoteFields,
+  ticker: string,
+  priorityMicroLamports: number = priorityFee.fallbackMicroLamports,
+) {
   const sender = createNoopSigner(address(fields.wallet));
   // The transfer and the blockhash need nothing from each other, and a wallet is waiting.
   const [transfer, latest] = await Promise.all([
@@ -211,7 +257,7 @@ export async function buildQuoteTx(rpc: SolanaRpc, fields: QuoteFields, ticker: 
       appendTransactionMessageInstructions(
         [
           getSetComputeUnitLimitInstruction({ units: 60_000 }),
-          getSetComputeUnitPriceInstruction({ microLamports: 100_000 }),
+          getSetComputeUnitPriceInstruction({ microLamports: priorityMicroLamports }),
           ...transfer,
         ],
         m,
@@ -240,14 +286,21 @@ export function inspectSigned(base64: string, expect: { wallet: string; referenc
 /** Broadcast a wallet-signed transaction for wallets that can sign but not send. */
 export async function sendSigned(rpc: SolanaRpc, base64: string): Promise<string> {
   try {
-    return await rpc
-      .sendTransaction(base64 as Base64EncodedWireTransaction, {
-        encoding: 'base64',
-        skipPreflight: false,
-        preflightCommitment: 'confirmed',
-        maxRetries: BigInt(3),
-      })
-      .send();
+    // A signed transaction is idempotent by its signature, so repeating the send when the
+    // transport fails cannot double-spend; it can only give the network another chance to hear
+    // it. A node that answers -- even to say the blockhash is stale -- is not retried.
+    return await withRetry(
+      () =>
+        rpc
+          .sendTransaction(base64 as Base64EncodedWireTransaction, {
+            encoding: 'base64',
+            skipPreflight: false,
+            preflightCommitment: 'confirmed',
+            maxRetries: BigInt(3),
+          })
+          .send(),
+      isTransportError,
+    );
   } catch (e) {
     const text = errorText(e);
     if (isRequoteError(text))
@@ -284,13 +337,17 @@ export async function verifyPayment(
   const signature = toSignature(sig);
   const recipient = address(fields.recipient);
   const mint = address(fields.mint);
-  const tx = await rpc
-    .getTransaction(signature, {
-      commitment: 'confirmed',
-      encoding: 'json',
-      maxSupportedTransactionVersion: 0,
-    })
-    .send();
+  const tx = await withRetry(
+    () =>
+      rpc
+        .getTransaction(signature, {
+          commitment: 'confirmed',
+          encoding: 'json',
+          maxSupportedTransactionVersion: 0,
+        })
+        .send(),
+    isTransportError,
+  );
   if (!tx) return { status: 'pending' };
   const [ata] = await findAssociatedTokenPda({ owner: recipient, tokenProgram: fields.program, mint });
   const check = checkTransfer(tx, {
@@ -306,7 +363,10 @@ export async function verifyPayment(
 /** Recovery when the browser never told us the signature: the oldest transaction carrying the reference. */
 export async function findPayment(rpc: SolanaRpc, reference: string): Promise<string | null> {
   try {
-    const found = await findReference(rpc, address(reference), { commitment: 'confirmed' });
+    const found = await withRetry(
+      () => findReference(rpc, address(reference), { commitment: 'confirmed' }),
+      isTransportError,
+    );
     return found.signature;
   } catch (e) {
     if (e instanceof Error && e.name === 'FindReferenceError') return null;

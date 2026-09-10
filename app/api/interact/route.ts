@@ -8,7 +8,6 @@ import {
   HttpError,
   interactLimits,
   isLocalHost,
-  publicRpc,
   publicView,
   pullView,
   queuePositions,
@@ -23,6 +22,7 @@ import { clientAddress, perMinuteCounter } from '@/lib/throttle';
 import { defaultBrand } from '@/lib/show';
 import {
   buildQuoteTx,
+  priorityFeeFor,
   inspectSigned,
   mintInfo,
   priceUsd as fetchPrice,
@@ -86,7 +86,9 @@ function settings() {
     ticker: v.COIN_TICKER?.trim().replace(/^\$/, '') || defaultBrand.ticker,
     name: v.COIN_NAME?.trim() || defaultBrand.name,
     usd: usdPerRequest(v.INTERACT_USD, defaultBrand.usd),
-    rpcUrl: v.SOLANA_RPC_URL?.trim() || publicRpc,
+    // No public fallback: api.mainnet-beta.solana.com answers 403 to a Worker, so it would not
+    // be a slower RPC, it would be an outage that looks configured. requireRpc() names the gap.
+    rpcUrl: v.SOLANA_RPC_URL?.trim() || null,
     // Whatever ends up here is served to every anonymous visitor, so it must never carry a
     // credential. Left empty by default and filled in by config() with this deployment's own
     // /api/rpc, which reaches the provider with the key held server-side.
@@ -98,6 +100,11 @@ function settings() {
   };
 }
 type Settings = ReturnType<typeof settings>;
+/** The provider URL, or a 503 that says which variable is missing. */
+function requireRpc(s: Settings): string {
+  if (!s.rpcUrl) throw fail(503, 'This deployment has no Solana RPC configured.', 'NORPC');
+  return s.rpcUrl;
+}
 /** A deployment that is actually launched: the mint and treasury are known good addresses. */
 type LiveSettings = Settings & { mint: string; treasury: string };
 async function database() {
@@ -117,7 +124,7 @@ function readReference(raw: unknown) {
  * reported as "no price" / "not ready" so one flaky feed cannot blank the whole answer.
  */
 async function chainState(s: LiveSettings, now: number) {
-  const rpc = rpcFor(s.rpcUrl);
+  const rpc = rpcFor(requireRpc(s));
   const info = await mintInfo(rpc, s.mint);
   const [priceUsd, ready] = await Promise.all([
     fetchPrice(s.mint, info.decimals, now, s.priceFixed).catch(() => null),
@@ -250,11 +257,14 @@ async function quote(request: Request, body: Body) {
   const gates = await db.quoteGates(d, wallet, now);
   if (now - gates.studioSeenAt >= interactLimits.heartbeatMs)
     throw fail(409, 'The studio is off air right now; requests reopen when the show is live.', 'OFFAIR');
-  const rpc = rpcFor(s.rpcUrl);
-  // Nothing here depends on anything else, and a wallet popup is waiting on all of it.
-  const [chain, balance] = await Promise.all([
+  const rpcUrl = requireRpc(s);
+  const rpc = rpcFor(rpcUrl);
+  // Nothing here depends on anything else, and a wallet popup is waiting on all of it. The fee
+  // estimate is keyed on the accounts this transfer will contend for.
+  const [chain, balance, bid] = await Promise.all([
     chainState(live, now),
     tokenBalance(rpc, wallet, s.mint),
+    priorityFeeFor(rpcUrl, [s.treasury, s.mint, wallet]),
   ]);
   if (!chain.treasuryReady)
     throw fail(409, `The show's treasury cannot receive ${s.ticker} yet. Try again shortly.`, 'TREASURY');
@@ -276,6 +286,7 @@ async function quote(request: Request, body: Body) {
     rpc,
     { wallet, recipient: s.treasury, mint: s.mint, amountUi, reference },
     s.ticker,
+    bid,
   );
   const expiresAt = now + interactLimits.quoteTtlMs;
   await db.insertQuote(d, {
@@ -324,7 +335,7 @@ async function submit(body: Body) {
   }
   const candidate=inspectSigned(signed, { wallet: row.wallet, reference });
   await db.setStatus(d,reference,'submitted',['quoted','submitted'],now,candidate);
-  const rpc = rpcFor(settings().rpcUrl);
+  const rpc = rpcFor(requireRpc(settings()));
   let signature: string;
   try {
     signature = await sendSigned(rpc, signed);
@@ -345,7 +356,7 @@ async function confirm(body: Body) {
   const row = await db.getByReference(d, reference);
   if (!row) throw fail(404, 'Unknown request.');
   try {
-    return await settle(d, rpcFor(settings().rpcUrl), row, now, rawSignature || undefined);
+    return await settle(d, rpcFor(requireRpc(settings())), row, now, rawSignature || undefined);
   } catch (e) {
     console.warn('[interact] confirm', e instanceof Error ? e.message : e);
     return { status: 'pending', error: 'Could not reach the network; still checking.' };
@@ -360,7 +371,7 @@ async function recover(d: D1Database, now: number) {
     if (!(await db.recoverDue(d, now))) return;
     const rows = await db.recoverable(d, now, interactLimits.recoverBatch);
     if (!rows.length) return;
-    const rpc = rpcFor(settings().rpcUrl);
+    const rpc = rpcFor(requireRpc(settings()));
     await Promise.all(
       rows.map(async (row) => {
         try {

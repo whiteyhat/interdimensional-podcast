@@ -37,6 +37,17 @@ const localBindingConfig = {
       ] : []),
     {binding: 'SPONSOR_ASSETS', bucket_name: process.env.SPONSOR_ASSETS_BUCKET || 'pepe-chad-sponsor-assets'},
   ],
+  // First-gate limits for the browser's RPC proxy: Cloudflare's own rate-limit bindings, with
+  // no network hop. Measured on staging, they count per connection rather than per location
+  // -- 150 requests over one HTTP/2 connection drew 89 refusals, 300 over ten connections drew
+  // none -- so they stop a single-connection flood and nothing wider. The limits that hold
+  // across connections, isolates and colos are counted in D1 (lib/rpc-budget.ts).
+  // Namespace ids only need to be unique within the account. Period may only be 10 or 60.
+  ratelimits: [
+    { name: 'RPC_BURST', namespace_id: '1101', simple: { limit: 60, period: 10 as const } },
+    { name: 'RPC_MINUTE', namespace_id: '1102', simple: { limit: 240, period: 60 as const } },
+    { name: 'RPC_SEND', namespace_id: '1103', simple: { limit: 6, period: 60 as const } },
+  ],
 };
 
 export default defineConfig(async () => {
