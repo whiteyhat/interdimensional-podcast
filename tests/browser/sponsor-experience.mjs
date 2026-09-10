@@ -164,32 +164,34 @@ try {
   await mkdir('work/sponsor-browser', { recursive: true });
   const { context, page } = await setup({ width: 1440, height: 1100 });
   const panel = page.locator('.sponsor-panel');
+  const noTyping =
+    '.sponsor-form input:not([type=radio]):not([type=file]), .sponsor-form textarea';
   assert.equal(
-    await panel
-      .locator('input[name="sponsor-asset"][value="USDC"]')
-      .isChecked(),
-    true,
+    await panel.locator(noTyping).count(),
+    0,
+    'the first step asks the customer to type nothing',
   );
-  await page.locator('#sponsor-name').fill('Diamond Deb');
-  await page
-    .locator('#sponsor-message')
-    .fill(
-      'Tell the room about the builders still shipping through the bear market.',
-    );
-  await panel
-    .locator('input[name="sponsor-asset"][value="FROGCLENCH"]')
-    .check({ force: true });
-  assert.match(await panel.locator('.sponsor-total').innerText(), /3\.50/);
-  await page.reload({ waitUntil: 'networkidle' });
-  assert.equal(await page.locator('#sponsor-name').inputValue(), 'Diamond Deb');
-  assert.equal(
-    await panel.locator('input[value="FROGCLENCH"]').isChecked(),
-    true,
-  );
+  const tile = (value) =>
+    panel.locator('.sponsor-product', {
+      has: page.locator(`input[value="${value}"]`),
+    });
+  assert.match(await tile('spotlight').innerText(), /Top seller/i);
+  assert.match(await tile('cap').innerText(), /Most value/i);
   await panel
     .locator('input[name="sponsor-product"][value="spotlight"]')
     .check({ force: true });
-  await panel.getByRole('button', { name: 'Review your pass' }).click();
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+  await page.screenshot({
+    path: 'work/sponsor-browser/desktop-choose.png',
+    fullPage: true,
+  });
+  await panel.getByRole('button', { name: 'Continue', exact: true }).click();
+  assert.equal(
+    await panel.locator('#sponsor-name').count(),
+    0,
+    'the on-air name is never asked for',
+  );
+  await panel.getByRole('button', { name: 'Continue to payment' }).click();
   assert.equal(
     await page
       .locator('#sponsor-projectName')
@@ -197,20 +199,51 @@ try {
     true,
   );
   await page.locator('#sponsor-projectName').fill('Trench Builders');
-  await page.locator('#sponsor-projectUrl').fill('https://example.com');
-  await page.locator('#sponsor-style').selectOption('debate');
+  await panel.getByRole('button', { name: 'Continue to payment' }).click();
+  assert.equal(
+    await page
+      .locator('#sponsor-message')
+      .evaluate((e) => e === document.activeElement),
+    true,
+    'the second step points at the only field still missing',
+  );
+  await page
+    .locator('#sponsor-message')
+    .fill(
+      'Tell the room about the builders still shipping through the bear market.',
+    );
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
   await page.screenshot({
-    path: 'work/sponsor-browser/desktop-customize.png',
+    path: 'work/sponsor-browser/desktop-write.png',
     fullPage: true,
   });
-  await panel.getByRole('button', { name: 'Review your pass' }).click();
+  await page.reload({ waitUntil: 'networkidle' });
+  await panel.getByRole('button', { name: 'Continue', exact: true }).click();
+  assert.equal(
+    await page.locator('#sponsor-projectName').inputValue(),
+    'Trench Builders',
+    'a reload keeps what was already written',
+  );
+  await panel.getByRole('button', { name: 'Continue to payment' }).click();
+  assert.equal(
+    await panel
+      .locator('input[name="sponsor-asset"][value="USDC"]')
+      .isChecked(),
+    true,
+  );
+  await panel
+    .locator('input[name="sponsor-asset"][value="FROGCLENCH"]')
+    .check({ force: true });
+  assert.match(
+    await panel.locator('.sponsor-review-summary').innerText(),
+    /17\.50/,
+  );
   await panel.getByRole('button', { name: 'Scan to pay' }).click();
   await panel.locator('.sponsor-qr svg').waitFor();
   assert.equal(quotes, 1);
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
   await page.screenshot({
-    path: 'work/sponsor-browser/desktop-qr.png',
+    path: 'work/sponsor-browser/desktop-pay.png',
     fullPage: true,
   });
   await page.reload({ waitUntil: 'networkidle' });
@@ -253,6 +286,27 @@ try {
     .locator('input[name="sponsor-product"][value="cap"]')
     .check({ force: true });
   await mobile.page
+    .locator('input[name="sponsor-product"][value="cap"]')
+    .focus();
+  await mobile.page.keyboard.press('ArrowLeft');
+  assert.equal(
+    await mobilePanel
+      .locator('input[name="sponsor-product"][value="spotlight"]')
+      .isChecked(),
+    true,
+    'native radio keyboard navigation',
+  );
+  assert.match(
+    await mobilePanel.locator('.sponsor-checkout-note').innerText(),
+    /offline|off air/i,
+  );
+  await mobilePanel
+    .locator('input[name="sponsor-product"][value="cap"]')
+    .check({ force: true });
+  await mobilePanel
+    .getByRole('button', { name: 'Continue', exact: true })
+    .click();
+  await mobile.page
     .locator('#sponsor-projectName')
     .fill('A deliberately long project title');
   const metrics = await mobile.page.evaluate(() => ({
@@ -280,17 +334,6 @@ try {
     ),
     'the off-air message fits at 320px',
   );
-  await mobile.page
-    .locator('input[name="sponsor-product"][value="cap"]')
-    .focus();
-  await mobile.page.keyboard.press('ArrowLeft');
-  assert.equal(
-    await mobilePanel
-      .locator('input[name="sponsor-product"][value="spotlight"]')
-      .isChecked(),
-    true,
-    'native radio keyboard navigation',
-  );
   await mobile.page.evaluate(() =>
     window.scrollTo({ top: 0, behavior: 'instant' }),
   );
@@ -298,13 +341,9 @@ try {
     path: 'work/sponsor-browser/mobile-320.png',
     fullPage: true,
   });
-  assert.match(
-    await mobilePanel.locator('.sponsor-checkout-note').innerText(),
-    /offline|off air/i,
-  );
   await mobile.context.close();
   console.log(
-    'Browser rehearsal passed: draft/asset reload, discount, validation focus, QR recovery, receipt/refund, 320px reflow, 16px inputs, native keyboard, reduced motion.',
+    'Browser rehearsal passed: three steps with no typing on the first, value badges, draft reload, discount, validation focus, QR recovery, receipt/refund, 320px reflow, 16px inputs, native keyboard, reduced motion.',
   );
 } catch (e) {
   for (const context of browser.contexts())

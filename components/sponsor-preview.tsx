@@ -89,7 +89,7 @@ export function SponsorPreview({
               <b>
                 {draft.product === 'spotlight'
                   ? draft.projectName || 'Your project, on the mic.'
-                  : draft.name || 'Your name, in the room.'}
+                  : 'Straight to the hosts.'}
               </b>
             </div>
             <p>

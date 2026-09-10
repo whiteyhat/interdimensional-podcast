@@ -140,9 +140,33 @@ aside.sponsor-rail {
   min-width: 0;
   flex: 1;
 }
+.sponsor-product-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
 .sponsor-product-copy b {
   font-size: 13px;
   font-weight: 500;
+}
+.sponsor-product-badge {
+  font: 8px/1.4 monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #e3aa82;
+  background: #e3b8871a;
+  border: 1px solid #e3b88726;
+  border-radius: 4px;
+  padding: 2px 5px;
+  white-space: nowrap;
+  transition:
+    color var(--dur-press) var(--ease-cut),
+    background var(--dur-press) var(--ease-cut);
+}
+.sponsor-product.selected .sponsor-product-badge {
+  color: #f0bb95;
+  background: #e3b88726;
 }
 .sponsor-product-copy small {
   font-size: 10px;
@@ -325,15 +349,86 @@ aside.sponsor-rail {
   font-size: 10px;
   color: #a6b198;
 }
-.sponsor-step {
+.sponsor-stepper {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin: 23px 0 16px;
+  list-style: none;
+  margin: 23px 0 20px;
+  padding: 0;
 }
-.sponsor-step > span:last-child {
+.sponsor-stepper-item {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+}
+/* The track behind the walk, and the warm line that fills as the step is earned. */
+.sponsor-stepper-item + .sponsor-stepper-item::before,
+.sponsor-stepper-item + .sponsor-stepper-item::after {
+  content: "";
+  position: absolute;
+  top: 11px;
+  left: calc(-50% + 18px);
+  right: calc(50% + 18px);
+  height: 1px;
+}
+.sponsor-stepper-item + .sponsor-stepper-item::before {
+  background: #ffffff1a;
+}
+.sponsor-stepper-item + .sponsor-stepper-item::after {
+  background: #d79b74;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--dur-reveal) var(--ease-cut);
+}
+.sponsor-stepper-item.done::after,
+.sponsor-stepper-item.active::after {
+  transform: scaleX(1);
+}
+.sponsor-stepper-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  border: 1px solid #69705f;
+  background: #131a12;
+  color: #a6b198;
+  font: 10px/1 monospace;
+  font-variant-numeric: tabular-nums;
+  transition:
+    background var(--dur-list) var(--ease-cut),
+    border-color var(--dur-list) var(--ease-cut),
+    color var(--dur-list) var(--ease-cut),
+    box-shadow var(--dur-list) var(--ease-cut);
+}
+.sponsor-stepper-item.done .sponsor-stepper-dot {
+  background: #30382b;
+  border-color: #8d9a72;
+  color: #d3dcbf;
+}
+.sponsor-stepper-item.active .sponsor-stepper-dot {
+  background: #d79b74;
+  border-color: #d79b74;
+  color: #20231a;
+  box-shadow: 0 0 0 4px #d79b7422;
+}
+.sponsor-stepper-label {
   font: 9px/1.2 monospace;
+  letter-spacing: 1px;
+  text-transform: uppercase;
   color: #949f89;
+  transition: color var(--dur-list) var(--ease-cut);
+}
+.sponsor-stepper-item.active .sponsor-stepper-label {
+  color: #e3aa82;
+}
+.sponsor-step-panel {
+  animation: sponsor-step-in var(--dur-list) var(--ease-cut) both;
+}
+.sponsor-step-panel:focus {
+  outline: none;
 }
 .sponsor-field {
   display: grid;
@@ -626,6 +721,14 @@ aside.sponsor-rail {
   font:
     24px Georgia,
     serif;
+  font-variant-numeric: tabular-nums;
+}
+.sponsor-review-summary del {
+  font:
+    12px/1 Arial,
+    sans-serif;
+  color: #929e86;
+  margin-right: 8px;
 }
 .sponsor-payment-methods {
   display: grid;
@@ -891,6 +994,16 @@ aside.sponsor-rail {
   border-radius: 6px;
   font-size: 12px;
 }
+@keyframes sponsor-step-in {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
 @keyframes sponsor-receipt-in {
   from {
     opacity: 0;
@@ -970,6 +1083,10 @@ aside.sponsor-rail {
   }
   .sponsor-product-copy b {
     font-size: 12px;
+  }
+  .sponsor-stepper-label {
+    font-size: 8px;
+    letter-spacing: 0.5px;
   }
   .sponsor-radio {
     display: none;

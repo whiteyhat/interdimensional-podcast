@@ -102,7 +102,7 @@ export const productCopy = {
     title: 'Get on air',
     short: 'Your message. Their take.',
     description:
-      'A question, an idea, or a little trench therapy. The hosts thank you by name and respond.',
+      'A question, an idea, or a little trench therapy. The hosts read it out on air and answer it.',
     icon: 'message',
   },
   spotlight: {

@@ -169,7 +169,11 @@ export function SponsorConsole({
                 ) : (
                   <Radio size={15} />
                 )}
-                <b>{order.draft.projectName || order.draft.name}</b>
+                <b>
+                  {order.draft.projectName ||
+                    order.draft.name ||
+                    'An anonymous viewer'}
+                </b>
                 <span>{order.displayStatus}</span>
               </div>
               <p>
@@ -177,8 +181,8 @@ export function SponsorConsole({
                   ? `Dress ${order.draft.target === 'host' ? 'Pepe' : 'Chad'}`
                   : order.draft.product === 'spotlight'
                     ? 'Project spotlight'
-                    : 'Get on air'}{' '}
-                · {order.draft.name}
+                    : 'Get on air'}
+                {order.draft.name ? ` · ${order.draft.name}` : ''}
               </p>
               {order.draft.product === 'cap' && (
                 <>

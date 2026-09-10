@@ -34,6 +34,7 @@ import {
   sponsorAction,
 } from '@/lib/sponsor-browser';
 import { SponsorPreview } from './sponsor-preview';
+import { SponsorStepper } from './sponsor-stepper';
 import { SponsorReceipt } from './sponsor-receipt';
 const SponsorWallet = dynamic(
   () => import('./sponsor-wallet').then((m) => m.SponsorWallet),
@@ -52,7 +53,12 @@ const SponsorQR = dynamic(
   },
 );
 const ICONS = { message: MessageCircle, spotlight: Sparkles, cap: Shirt };
+const BADGES: Partial<Record<SponsorDraft['product'], string>> = {
+  spotlight: 'Top seller',
+  cap: 'Most value',
+};
 const ASSETS: SponsorAsset[] = ['USDC', 'SOL', 'FROGCLENCH'];
+const STEPS = ['Choose', 'Write', 'Pay'];
 
 /** The public contribution surface owns the draft; wallet providers arrive only at review. */
 export function SponsorPanel() {
@@ -62,7 +68,7 @@ export function SponsorPanel() {
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [step, setStep] = useState<'customize' | 'review'>('customize');
+  const [step, setStep] = useState<1 | 2 | 3>(1);
   const [method, setMethod] = useState<'wallet' | 'qr'>('wallet');
   const [qr, setQr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -74,6 +80,8 @@ export function SponsorPanel() {
   const [showRefund, setShowRefund] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const form = useRef<HTMLFormElement>(null);
+  const stepPanel = useRef<HTMLDivElement>(null);
+  const navigated = useRef(false);
   const file = useRef<HTMLInputElement>(null);
   const receiptRef = useRef<Receipt | null>(null);
   const operation = useRef(false);
@@ -103,6 +111,18 @@ export function SponsorPanel() {
       /* The live receipt and its explicit link also work without storage. */
     }
   }, []);
+  useEffect(() => {
+    // Only a step the customer asked for moves focus; a restored receipt must not.
+    if (!navigated.current) return;
+    navigated.current = false;
+    const node = stepPanel.current;
+    if (!node) return;
+    const field =
+      step === 2
+        ? node.querySelector<HTMLElement>('input:not([type="file"]), textarea')
+        : null;
+    (field || node).focus({ preventScroll: true });
+  }, [step]);
   useEffect(() => {
     const timer = setTimeout(() => {
       let saved = readCheckout(null);
@@ -177,7 +197,7 @@ export function SponsorPanel() {
         if (touchedToken.current !== token) {
           setDraft(next.draft);
           setArtwork(next.assetUrl);
-          setStep('review');
+          setStep(3);
           const attempt =
             next.attempts.find((a) => a.status === 'verified') ||
             next.attempts[0];
@@ -218,7 +238,7 @@ export function SponsorPanel() {
   }, [token, updateReceipt]);
   const received =
     !!receipt && !['draft', 'payment-pending'].includes(receipt.status);
-  const locked = step === 'review' || received || signing;
+  const locked = step === 3 || received || signing;
   const price = sponsorPriceCents(draft.product, asset);
   const fullPrice = sponsorPriceCents(draft.product, 'USDC');
   const product = catalog?.products.find((p) => p.id === draft.product);
@@ -292,8 +312,6 @@ export function SponsorPanel() {
     e.preventDefault();
     if (operation.current) return;
     const fields: Record<string, string> = {};
-    if (draft.name.length > 20)
-      fields.name = 'Keep your on-air name to 20 characters.';
     if (draft.product !== 'message' && !draft.projectName?.trim())
       fields.projectName = 'Give your project a name.';
     if (draft.message.trim().length < 3)
@@ -326,7 +344,7 @@ export function SponsorPanel() {
       if (!result.receipt) throw Error('The studio could not save this order.');
       updateReceipt(result.receipt);
       touchedToken.current = result.receipt.token;
-      setStep('review');
+      goStep(3);
     } catch (e) {
       setError(
         e instanceof Error ? e.message : 'Your order could not be saved.',
@@ -385,13 +403,25 @@ export function SponsorPanel() {
       setBusy(false);
     }
   }
-  function newOrder() {
+  function goStep(next: 1 | 2 | 3) {
+    navigated.current = true;
+    setStep(next);
+  }
+  function pickAsset(next: SponsorAsset) {
+    if (next === asset || signing) return;
+    setAsset(next);
+    setMethod('wallet');
+    setQr('');
+    setError('');
+  }
+  function newOrder(back: 1 | 2 = 1) {
     if (signing) return;
     setReceipt(null);
     receiptRef.current = null;
     setToken(null);
     setQr('');
-    setStep('customize');
+    navigated.current = true;
+    setStep(back);
     setMethod('wallet');
     setError('');
     setShowRefund(false);
@@ -421,49 +451,6 @@ export function SponsorPanel() {
       <p className="sponsor-lead">
         A thought. A project. A cap with your name on it.
       </p>
-      {!received && (
-        <fieldset className="sponsor-products" disabled={locked}>
-          <legend className="sr-only">Choose your sponsorship</legend>
-          {sponsorProducts.map((p, i) => {
-            const Icon = ICONS[p.id];
-            const selected = draft.product === p.id;
-            return (
-              <label
-                key={p.id}
-                className={`sponsor-product ${selected ? 'selected' : ''}`}
-              >
-                <input
-                  type="radio"
-                  name="sponsor-product"
-                  value={p.id}
-                  checked={selected}
-                  onChange={() => change({ product: p.id })}
-                />
-                <span className="sponsor-product-icon">
-                  <Icon size={18} />
-                </span>
-                <span className="sponsor-product-copy">
-                  <b>{productCopy[p.id].title}</b>
-                  <small>
-                    {i === 0
-                      ? 'A message, answered on air'
-                      : i === 1
-                        ? 'Four turns. Your project.'
-                        : 'Your logo on Pepe or Chad'}
-                  </small>
-                </span>
-                <span className="sponsor-product-price">
-                  {dollars(sponsorPriceCents(p.id, asset))}
-                  <small>{asset === 'FROGCLENCH' ? 'with FROG' : 'USD'}</small>
-                </span>
-                <span className="sponsor-radio" aria-hidden="true">
-                  {selected && <Check size={10} />}
-                </span>
-              </label>
-            );
-          })}
-        </fieldset>
-      )}
       <SponsorPreview
         draft={draft}
         artwork={artwork || receipt?.assetUrl}
@@ -474,66 +461,115 @@ export function SponsorPanel() {
           receipt={receipt}
           busy={busy}
           onAction={act}
-          onNew={newOrder}
+          onNew={() => newOrder(1)}
         />
       ) : (
         <form ref={form} className="sponsor-form" onSubmit={review} noValidate>
-          <div className="sponsor-step">
-            <span className="sponsor-kicker">
-              {step === 'customize' ? 'MAKE IT YOURS' : 'REVIEW YOUR PASS'}
-            </span>
-            <span>{step === 'customize' ? '01 / 02' : '02 / 02'}</span>
-          </div>
-          {step === 'customize' ? (
-            <>
-              {draft.product === 'cap' && (
-                <fieldset className="sponsor-host-choice">
-                  <legend>Who’s wearing it?</legend>
-                  {(['host', 'guest'] as const).map((target) => (
-                    <label
-                      key={target}
-                      className={draft.target === target ? 'selected' : ''}
-                    >
-                      <input
-                        type="radio"
-                        name="sponsor-host"
-                        value={target}
-                        checked={draft.target === target}
-                        onChange={() => change({ target })}
-                      />
-                      {target === 'host' ? 'Pepe' : 'GigaChad'}
-                      <span>
-                        {catalog?.capInventory?.[target] === false
-                          ? 'Reserved'
-                          : target === 'host'
-                            ? 'Still holding.'
-                            : 'Never sold.'}
-                      </span>
-                    </label>
-                  ))}
+          <SponsorStepper steps={STEPS} current={step} />
+          <div
+            key={step}
+            ref={stepPanel}
+            className="sponsor-step-panel"
+            tabIndex={-1}
+          >
+            {step === 1 ? (
+              <>
+                <fieldset className="sponsor-products" disabled={locked}>
+                  <legend className="sr-only">Choose your sponsorship</legend>
+                  {sponsorProducts.map((p, i) => {
+                    const Icon = ICONS[p.id];
+                    const selected = draft.product === p.id;
+                    return (
+                      <label
+                        key={p.id}
+                        className={`sponsor-product ${selected ? 'selected' : ''}`}
+                      >
+                        <input
+                          type="radio"
+                          name="sponsor-product"
+                          value={p.id}
+                          checked={selected}
+                          onChange={() => change({ product: p.id })}
+                        />
+                        <span className="sponsor-product-icon">
+                          <Icon size={18} />
+                        </span>
+                        <span className="sponsor-product-copy">
+                          <span className="sponsor-product-title">
+                            <b>{productCopy[p.id].title}</b>
+                            {BADGES[p.id] && (
+                              <span className="sponsor-product-badge">
+                                {BADGES[p.id]}
+                              </span>
+                            )}
+                          </span>
+                          <small>
+                            {i === 0
+                              ? 'A message, answered on air'
+                              : i === 1
+                                ? 'Four turns. Your project.'
+                                : 'Your logo on Pepe or Chad'}
+                          </small>
+                        </span>
+                        <span className="sponsor-product-price">
+                          {dollars(sponsorPriceCents(p.id, asset))}
+                          <small>
+                            {asset === 'FROGCLENCH' ? 'with FROG' : 'USD'}
+                          </small>
+                        </span>
+                        <span className="sponsor-radio" aria-hidden="true">
+                          {selected && <Check size={10} />}
+                        </span>
+                      </label>
+                    );
+                  })}
                 </fieldset>
-              )}
-              <label className="sponsor-field" htmlFor="sponsor-name">
-                <span>
-                  Your on-air name <small>Optional</small>
-                </span>
-                <input
-                  id="sponsor-name"
-                  name="name"
-                  value={draft.name}
-                  maxLength={20}
-                  autoComplete="name"
-                  placeholder="What should the hosts call you?"
-                  onChange={(e) => change({ name: e.target.value })}
-                  aria-invalid={!!fieldErrors.name}
-                  aria-describedby={
-                    fieldErrors.name ? 'sponsor-name-error' : undefined
-                  }
-                />
-                {errorFor('name')}
-              </label>
-              {draft.product !== 'message' && (
-                <>
+                {draft.product === 'cap' && (
+                  <fieldset className="sponsor-host-choice">
+                    <legend>Who’s wearing it?</legend>
+                    {(['host', 'guest'] as const).map((target) => (
+                      <label
+                        key={target}
+                        className={draft.target === target ? 'selected' : ''}
+                      >
+                        <input
+                          type="radio"
+                          name="sponsor-host"
+                          value={target}
+                          checked={draft.target === target}
+                          onChange={() => change({ target })}
+                        />
+                        {target === 'host' ? 'Pepe' : 'GigaChad'}
+                        <span>
+                          {catalog?.capInventory?.[target] === false
+                            ? 'Reserved'
+                            : target === 'host'
+                              ? 'Still holding.'
+                              : 'Never sold.'}
+                        </span>
+                      </label>
+                    ))}
+                  </fieldset>
+                )}
+                <button
+                  type="button"
+                  className="sponsor-button"
+                  disabled={!loaded}
+                  onClick={() => goStep(2)}
+                >
+                  Continue <ArrowRight size={17} />
+                </button>
+                <p className="sponsor-checkout-note">
+                  {!available
+                    ? connectionError ||
+                      unavailableReason ||
+                      'Explore and customize while the studio is off air.'
+                    : 'One short step, then payment. No account needed.'}
+                </p>
+              </>
+            ) : step === 2 ? (
+              <>
+                {draft.product !== 'message' && (
                   <label
                     className="sponsor-field"
                     htmlFor="sponsor-projectName"
@@ -555,21 +591,8 @@ export function SponsorPanel() {
                     />
                     {errorFor('projectName')}
                   </label>
-                  <label className="sponsor-field" htmlFor="sponsor-projectUrl">
-                    <span>
-                      Project link <small>Optional · shown, not spoken</small>
-                    </span>
-                    <input
-                      id="sponsor-projectUrl"
-                      name="projectUrl"
-                      type="url"
-                      inputMode="url"
-                      autoComplete="url"
-                      value={draft.projectUrl || ''}
-                      placeholder="https://your-project.com"
-                      onChange={(e) => change({ projectUrl: e.target.value })}
-                    />
-                  </label>
+                )}
+                {draft.product === 'cap' && (
                   <div className="sponsor-upload">
                     <input
                       className="sr-only"
@@ -598,11 +621,7 @@ export function SponsorPanel() {
                           : draft.assetId
                             ? 'Change your logo'
                             : 'Add your logo'}
-                        <small>
-                          {draft.product === 'cap'
-                            ? 'Preview it on the actual cap'
-                            : 'A mark for your project card'}
-                        </small>
+                        <small>Preview it on the actual cap</small>
                       </span>
                       {draft.assetId && <Check size={16} />}
                     </button>
@@ -611,180 +630,161 @@ export function SponsorPanel() {
                     </p>
                     {errorFor('assetId')}
                   </div>
-                </>
-              )}
-              <label className="sponsor-field" htmlFor="sponsor-message">
-                <span>
-                  {draft.product === 'message'
-                    ? 'Give them something to talk about'
-                    : 'What should they know?'}
-                  <small>{draft.message.length}/240</small>
-                </span>
-                <textarea
-                  id="sponsor-message"
-                  name="message"
-                  value={draft.message}
-                  maxLength={240}
-                  rows={3}
-                  placeholder={
-                    draft.product === 'message'
-                      ? 'A question, a hot take, a story from the trenches…'
-                      : 'Tell us what you’re building. Keep claims specific and accurate.'
-                  }
-                  onChange={(e) => change({ message: e.target.value })}
-                  aria-invalid={!!fieldErrors.message}
-                  aria-describedby={
-                    fieldErrors.message
-                      ? 'sponsor-message-error'
-                      : 'sponsor-message-hint'
-                  }
-                />
-                {errorFor('message')}
-                <small id="sponsor-message-hint">
-                  Plain words work best. Keep links and wallet addresses out of
-                  the spoken brief.
-                </small>
-              </label>
-              {draft.product === 'spotlight' && (
-                <label className="sponsor-field" htmlFor="sponsor-style">
-                  <span>Set the tone</span>
-                  <select
-                    id="sponsor-style"
-                    value={draft.style || 'intro'}
-                    onChange={(e) =>
-                      change({ style: e.target.value as SponsorDraft['style'] })
+                )}
+                <label className="sponsor-field" htmlFor="sponsor-message">
+                  <span>
+                    {draft.product === 'message'
+                      ? 'Give them something to talk about'
+                      : 'What should they know?'}
+                    <small>{draft.message.length}/240</small>
+                  </span>
+                  <textarea
+                    id="sponsor-message"
+                    name="message"
+                    value={draft.message}
+                    maxLength={240}
+                    rows={4}
+                    placeholder={
+                      draft.product === 'message'
+                        ? 'A question, a hot take, a story from the trenches…'
+                        : 'Tell us what you’re building. Keep claims specific and accurate.'
                     }
-                  >
-                    <option value="intro">Introduce the project</option>
-                    <option value="debate">Let them debate it</option>
-                    <option value="gentle-roast">A gentle roast</option>
-                  </select>
-                  <small>
-                    Sponsored conversation, with the hosts’ own opinions.
+                    onChange={(e) => change({ message: e.target.value })}
+                    aria-invalid={!!fieldErrors.message}
+                    aria-describedby={
+                      fieldErrors.message
+                        ? 'sponsor-message-error'
+                        : 'sponsor-message-hint'
+                    }
+                  />
+                  {errorFor('message')}
+                  <small id="sponsor-message-hint">
+                    One or two lines is plenty. Links and wallet addresses stay
+                    out of the spoken brief.
                   </small>
                 </label>
-              )}
-              <fieldset className="sponsor-assets">
-                <legend>
-                  Choose how to pay <span>Solana</span>
-                </legend>
-                <div>
-                  {ASSETS.map((a) => (
-                    <label key={a} className={asset === a ? 'selected' : ''}>
-                      <input
-                        type="radio"
-                        name="sponsor-asset"
-                        value={a}
-                        checked={asset === a}
-                        onChange={() => setAsset(a)}
-                      />
-                      <span>{a === 'FROGCLENCH' ? '$FROG' : a}</span>
-                      {a === 'FROGCLENCH' && <small>−30%</small>}
-                    </label>
-                  ))}
-                </div>
-              </fieldset>
-              <div className="sponsor-total">
-                <span>
-                  {asset === 'FROGCLENCH' ? 'Holder price' : 'Your placement'}
-                  {asset === 'FROGCLENCH' && (
-                    <small>You save {dollars(fullPrice - price)}</small>
+                <button
+                  type="submit"
+                  className="sponsor-button"
+                  disabled={busy || uploading || !loaded}
+                >
+                  {busy ? (
+                    'Saving your pass…'
+                  ) : (
+                    <>
+                      Continue to payment <ArrowRight size={17} />
+                    </>
                   )}
-                </span>
-                <strong>
-                  {asset === 'FROGCLENCH' && <del>{dollars(fullPrice)}</del>}
-                  {dollars(price)}
-                </strong>
-              </div>
-              <button
-                type="submit"
-                className="sponsor-button"
-                disabled={busy || uploading || !loaded}
-              >
-                {busy ? (
-                  'Saving your pass…'
-                ) : (
-                  <>
-                    Review your pass <ArrowRight size={17} />
-                  </>
-                )}
-              </button>
-              <p className="sponsor-checkout-note">
-                {!available
-                  ? connectionError ||
-                    unavailableReason ||
-                    'Explore and customize while the studio is off air.'
-                  : 'Connect a wallet at the next step. Network fees are separate.'}
-              </p>
-            </>
-          ) : receipt ? (
-            <>
-              <div className="sponsor-review-summary">
-                <b>{productCopy[draft.product].title}</b>
-                <p>{draft.message}</p>
-                <div>
-                  <span>
-                    {asset === 'FROGCLENCH'
-                      ? '30% FROGCLENCH discount'
-                      : 'Paying with ' + asset}
-                  </span>
-                  <strong>{dollars(price)}</strong>
-                </div>
-              </div>
-              <fieldset
-                className="sponsor-payment-methods"
-                aria-label="Payment method"
-              >
-                <button
-                  type="button"
-                  className={method === 'wallet' ? 'selected' : ''}
-                  disabled={signing}
-                  onClick={() => setMethod('wallet')}
-                >
-                  <Wallet size={15} />
-                  This wallet
                 </button>
-                <button
-                  type="button"
-                  className={method === 'qr' ? 'selected' : ''}
-                  disabled={signing || busy}
-                  onClick={useQR}
-                >
-                  <ScanLine size={15} />
-                  Scan to pay
-                </button>
-              </fieldset>
-              {method === 'wallet' ? (
-                <SponsorWallet
-                  key={`${receipt.token}:${asset}`}
-                  receipt={receipt}
-                  asset={asset}
-                  endpoint={catalog?.clientRpcUrl || '/api/rpc'}
-                  onReceipt={updateReceipt}
-                  onPending={setSigning}
-                />
-              ) : qr ? (
-                <SponsorQR url={qr} />
-              ) : (
-                <p className="sponsor-working">Preparing your wallet link…</p>
-              )}
-              <p className="sponsor-checkout-note">
-                Your payment goes directly to the studio. This pass is saved if
-                you leave the page.
-              </p>
-              {receipt.attempts.length === 0 && (
+                <p className="sponsor-checkout-note">
+                  {!available
+                    ? connectionError ||
+                      unavailableReason ||
+                      'Explore and customize while the studio is off air.'
+                    : 'Connect a wallet at the next step. Network fees are separate.'}
+                </p>
                 <button
                   type="button"
                   className="sponsor-text-button"
-                  onClick={newOrder}
+                  onClick={() => goStep(1)}
                 >
-                  ← Edit this pass
+                  ← Back
                 </button>
-              )}
-            </>
-          ) : (
-            <p className="sponsor-working">Loading your saved pass…</p>
-          )}
+              </>
+            ) : receipt ? (
+              <>
+                <div className="sponsor-review-summary">
+                  <b>{productCopy[draft.product].title}</b>
+                  <p>{draft.message}</p>
+                  <div>
+                    <span>
+                      {asset === 'FROGCLENCH'
+                        ? '30% FROGCLENCH discount'
+                        : 'Paying with ' + asset}
+                    </span>
+                    <strong>
+                      {asset === 'FROGCLENCH' && (
+                        <del>{dollars(fullPrice)}</del>
+                      )}
+                      {dollars(price)}
+                    </strong>
+                  </div>
+                </div>
+                <fieldset className="sponsor-assets" disabled={signing || busy}>
+                  <legend>
+                    Choose how to pay <span>Solana</span>
+                  </legend>
+                  <div>
+                    {ASSETS.map((a) => (
+                      <label key={a} className={asset === a ? 'selected' : ''}>
+                        <input
+                          type="radio"
+                          name="sponsor-asset"
+                          value={a}
+                          checked={asset === a}
+                          onChange={() => pickAsset(a)}
+                        />
+                        <span>{a === 'FROGCLENCH' ? '$FROG' : a}</span>
+                        {a === 'FROGCLENCH' && <small>−30%</small>}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                <fieldset
+                  className="sponsor-payment-methods"
+                  aria-label="Payment method"
+                >
+                  <button
+                    type="button"
+                    className={method === 'wallet' ? 'selected' : ''}
+                    disabled={signing}
+                    onClick={() => setMethod('wallet')}
+                  >
+                    <Wallet size={15} />
+                    This wallet
+                  </button>
+                  <button
+                    type="button"
+                    className={method === 'qr' ? 'selected' : ''}
+                    disabled={signing || busy}
+                    onClick={useQR}
+                  >
+                    <ScanLine size={15} />
+                    Scan to pay
+                  </button>
+                </fieldset>
+                {method === 'wallet' ? (
+                  <SponsorWallet
+                    key={`${receipt.token}:${asset}`}
+                    receipt={receipt}
+                    asset={asset}
+                    endpoint={catalog?.clientRpcUrl || '/api/rpc'}
+                    onReceipt={updateReceipt}
+                    onPending={setSigning}
+                  />
+                ) : qr ? (
+                  <SponsorQR url={qr} />
+                ) : (
+                  <p className="sponsor-working">Preparing your wallet link…</p>
+                )}
+                <p className="sponsor-checkout-note">
+                  Your payment goes directly to the studio. This pass is saved
+                  if you leave the page.
+                </p>
+                {receipt.attempts.length === 0 && (
+                  <button
+                    type="button"
+                    className="sponsor-text-button"
+                    onClick={() => newOrder(2)}
+                  >
+                    ← Edit this pass
+                  </button>
+                )}
+              </>
+            ) : (
+              <p className="sponsor-working">Loading your saved pass…</p>
+            )}
+          </div>
         </form>
       )}
       {showRefund && (

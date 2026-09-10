@@ -189,13 +189,14 @@ try {
   await page.goto(process.env.SPONSOR_TEST_ORIGIN || 'http://127.0.0.1:3316', {
     waitUntil: 'networkidle',
   });
+  await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await page
     .locator('#sponsor-message')
     .fill('Ask Chad about builders in the trenches.');
+  await page.getByRole('button', { name: 'Continue to payment' }).click();
   await page
     .locator('input[name="sponsor-asset"][value="SOL"]')
     .check({ force: true });
-  await page.getByRole('button', { name: 'Review your pass' }).click();
   await page.getByRole('button', { name: 'Select Wallet' }).click();
   await page.getByRole('button', { name: /Phantom/ }).click();
   await page.locator('.sponsor-wallet-connect .wallet-adapter-button').click();
