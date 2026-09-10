@@ -1,0 +1,82 @@
+# Auto-deploy to Cloudflare Workers on every push to main.
+#
+# The build bakes the D1 database id into dist/server/wrangler.json (vite.config.ts reads it
+# from the environment), and .env.production, which holds it locally, is gitignored. So CI must
+# supply it as a repository variable. Without it the build emits a placeholder database id and
+# the deployed site would answer paid requests from an empty database nothing else writes to --
+# a silent failure, so the deploy refuses to ship a build that does not match.
+#
+# The public site URL is not a build input: app/layout.tsx reads process.env.SITE_URL at
+# runtime, which nodejs_compat fills from the worker's own vars, so it lives as a worker secret.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        env:
+          D1_DATABASE_NAME: ${{ vars.D1_DATABASE_NAME }}
+          D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
+        run: npm run build
+
+      # The staging database id has shipped to production before by way of a stale dist/.
+      # A build that produced anything other than the production id must not reach the edge.
+      - name: Verify the build points at the production database
+        env:
+          EXPECTED: ${{ vars.D1_DATABASE_ID }}
+        run: |
+          ACTUAL=$(node -e "console.log(require('./dist/server/wrangler.json').d1_databases[0].database_id)")
+          echo "built with database: $ACTUAL"
+          if [ -z "$EXPECTED" ]; then
+            echo "::error::D1_DATABASE_ID repository variable is not set. Refusing to deploy a placeholder database."
+            exit 1
+          fi
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Built database id $ACTUAL does not match the expected production id."
+            exit 1
+          fi
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is not set. Add it under Settings -> Secrets and variables -> Actions. The token needs Workers Scripts:Edit, Workers R2 Storage:Edit, D1:Edit and Workers KV:Edit."
+            exit 1
+          fi
+          npx wrangler deploy --config dist/server/wrangler.json
+
+      - name: Check the site answers
+        run: |
+          for i in 1 2 3 4 5; do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' https://frogclench.fun/ || true)
+            [ "$CODE" = "200" ] && echo "frogclench.fun OK" && exit 0
+            echo "attempt $i: HTTP $CODE"; sleep 10
+          done
+          echo "::error::frogclench.fun did not return 200 after the deploy."
+          exit 1

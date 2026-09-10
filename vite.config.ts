@@ -54,6 +54,14 @@ export default defineConfig(async () => {
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,
+    // @solana/web3.js's pre-bundled dev chunk cannot load through the Cloudflare
+    // dev sandbox's module runner ("Cannot read properties of undefined (reading
+    // 'from')" on any import from it); excluding it from optimization forces a
+    // different load path that the sandbox handles correctly.
+    environments: {
+      rsc: { optimizeDeps: { exclude: ['@solana/web3.js'] } },
+      ssr: { optimizeDeps: { exclude: ['@solana/web3.js'] } },
+    },
     plugins: [
       vinext(),
       sites(),
