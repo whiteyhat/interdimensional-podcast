@@ -80,8 +80,11 @@ let healthProbe:
 async function probeMediaHealth(url: URL): Promise<MediaHealth> {
   try {
     // /health is unauthenticated, so the render secret stays off this request.
+    // Workers refuse the 'error' redirect mode outright, so every call to the media service asks for
+    // the redirect back unfollowed. Nothing then reaches another host, and each caller already
+    // treats anything but a 2xx as a failure.
     const r = await fetch(new URL('/health', url), {
-      redirect: 'error',
+      redirect: 'manual',
       signal: AbortSignal.timeout(5000),
     });
     // A 503 is the service saying it is not ready, whatever its body goes on to claim.
@@ -153,7 +156,7 @@ export async function sponsorAssetHealth(
     try {
       const response = await fetch(
         new URL('/api/sponsorship/assets?action=health', v.INTERACT_ORIGIN),
-        { redirect: 'error', signal: AbortSignal.timeout(6000) },
+        { redirect: 'manual', signal: AbortSignal.timeout(6000) },
       );
       return new Response(response.body, {
         status: response.status,
@@ -261,7 +264,7 @@ export async function uploadSponsorAsset(
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': image.type },
       body: image,
-      redirect: 'error',
+      redirect: 'manual',
       signal: AbortSignal.timeout(40000),
     });
     const result = (await response.json()) as {

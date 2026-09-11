@@ -209,7 +209,8 @@ async function requestRender(endpoint: URL, token: string, body: string) {
           'content-type': 'application/json',
         },
         body,
-        redirect: 'error',
+        // Workers refuse 'error'; a redirect comes back unfollowed and fails as a non-2xx.
+        redirect: 'manual',
         signal,
       });
       if (response.ok) return response;
@@ -337,7 +338,7 @@ export async function renderSponsorMedia(
             'x-studio-id': readStudioId(v.STUDIO_ID),
           },
           body: await request.text(),
-          redirect: 'error',
+          redirect: 'manual',
           signal: AbortSignal.timeout(115000),
         },
       );
