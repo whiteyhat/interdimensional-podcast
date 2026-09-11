@@ -7,7 +7,10 @@ export type StreamLinks = { pumpfun: string | null; x: string | null };
 export function embedSrc(url: string) {
   try {
     const u = new URL(url);
-    if (u.hostname === 'cloudflarestream.com' || u.hostname.endsWith('.cloudflarestream.com')) {
+    if (
+      u.hostname === 'cloudflarestream.com' ||
+      u.hostname.endsWith('.cloudflarestream.com')
+    ) {
       u.searchParams.set('autoplay', 'true');
       u.searchParams.set('muted', 'true');
     }
@@ -17,22 +20,25 @@ export function embedSrc(url: string) {
   }
 }
 /**
- * The stream when the show is actually on air; otherwise the studio poster and the places it
- * plays. The `live` gate matters: an idle Cloudflare live input renders the player as a blank
- * white rectangle, which on a dark page reads as a broken site rather than a show between
- * episodes. The studio heartbeat already tells us whether anything is being broadcast, so we
- * hold the poster until it is.
+ * The stream when a picture is actually arriving; otherwise the studio poster and the places
+ * the show plays. The `live` gate matters: an idle Cloudflare live input renders the player as
+ * a blank white rectangle, which on a dark page reads as a broken site rather than a show
+ * between episodes. It must be the input's own state and not the studio heartbeat, which says
+ * a producer is alive and keeps saying so for the whole minute before an encoder connects.
  */
 export function StreamEmbed({
   url,
   links,
   live,
+  studioOnline = false,
   poster,
 }: {
   url: string | null;
   links: StreamLinks;
   /** Required on purpose: a caller who forgets it would default back to the blank player. */
   live: boolean;
+  /** Separates a show between episodes from one whose picture has not arrived yet. */
+  studioOnline?: boolean;
   poster: string;
 }) {
   if (url && live) {
@@ -48,32 +54,53 @@ export function StreamEmbed({
       </div>
     );
   }
-  // Two different silences, and saying the wrong one is its own kind of broken: either the
-  // stream is not built yet, or it exists and the show is simply between episodes. Reaching
-  // here at all means we are not live, so a stream we have is a stream that is off air.
+  // Three different silences, and saying the wrong one is its own kind of broken: the stream
+  // is not built yet, or it exists and the show is between episodes, or the studio is working
+  // and the picture simply has not landed. Reaching here at all means no picture is arriving.
   const offAir = !!url;
+  const warmingUp = offAir && studioOnline;
   const anywhere = !!(links.pumpfun || links.x);
   return (
     <div className="stage stream-embed">
       <img src={poster} alt="" />
       <div className="stream-poster">
         <img className="opening-mark" src="/logo.webp" alt={show.name} />
-        <p className="eyebrow">{offAir ? 'OFF AIR' : anywhere ? 'WATCH THE SHOW' : 'STREAM'}</p>
+        <p className="eyebrow">
+          {warmingUp
+            ? 'STARTING'
+            : offAir
+              ? 'OFF AIR'
+              : anywhere
+                ? 'WATCH THE SHOW'
+                : 'STREAM'}
+        </p>
         <h1>{show.headline}</h1>
         <p className="stream-soon">
-          {offAir
-            ? 'The studio is dark right now. The show picks up when it comes back.'
-            : 'Stream link coming soon.'}
+          {warmingUp
+            ? 'The studio is on. The picture lands as soon as the encoder connects.'
+            : offAir
+              ? 'The studio is dark right now. The show picks up when it comes back.'
+              : 'Stream link coming soon.'}
         </p>
         {anywhere && (
           <div className="stream-links">
             {links.pumpfun && (
-              <a className="primary" href={links.pumpfun} target="_blank" rel="noreferrer">
+              <a
+                className="primary"
+                href={links.pumpfun}
+                target="_blank"
+                rel="noreferrer"
+              >
                 Watch on pump.fun <ArrowUpRight size={16} />
               </a>
             )}
             {links.x && (
-              <a className="primary" href={links.x} target="_blank" rel="noreferrer">
+              <a
+                className="primary"
+                href={links.x}
+                target="_blank"
+                rel="noreferrer"
+              >
                 Watch on X <ArrowUpRight size={16} />
               </a>
             )}

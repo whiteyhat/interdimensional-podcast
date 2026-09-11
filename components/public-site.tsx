@@ -7,6 +7,7 @@ import { useSearchParams } from 'next/navigation';
 import { CoinCard } from '@/components/coin-card';
 import { RequestsList } from '@/components/requests-list';
 import { StreamEmbed } from '@/components/stream-embed';
+import { useStreamLive } from '@/hooks/use-stream-live';
 import { SponsorPanel } from '@/components/sponsor-panel';
 import { SponsorActivity } from '@/components/sponsor-activity';
 import { useCoin } from '@/hooks/use-coin';
@@ -59,6 +60,9 @@ export function PublicSite() {
     return () => clearTimeout(timer);
   }, []);
   const online = !!config?.studioOnline;
+  // Whether a picture is arriving is the player's question, and only the live input can
+  // answer it. A provider we cannot ask about falls back to the studio's own word.
+  const picture = useStreamLive(config?.streamEmbedUrl ?? null);
   return (
     <main className="podcast public-site">
       <header>
@@ -92,7 +96,8 @@ export function PublicSite() {
           <StreamEmbed
             url={config?.streamEmbedUrl ?? null}
             links={config?.links ?? NO_LINKS}
-            live={online}
+            live={picture ?? online}
+            studioOnline={online}
             poster={videoFrames.host.poster}
           />
           <SponsorActivity />

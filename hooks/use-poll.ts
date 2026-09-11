@@ -12,9 +12,10 @@ export type PollOptions<T> = {
   errorText: string;
 };
 /** What we hold is stamped with the url it came from, so a new subject never shows a stale answer. */
-type Held<T> = { url: string; data: T | null; error: string };
+type Held<T> = { url: string | null; data: T | null; error: string };
 export function usePoll<T>(
-  url: string,
+  /** Null when there is nothing to ask yet: the loop stays asleep rather than fetching the page itself. */
+  url: string | null,
   parse: (raw: unknown, ok: boolean) => T | null,
   { intervalMs, errorText }: PollOptions<T>,
 ): Poll<T> {
@@ -26,26 +27,36 @@ export function usePoll<T>(
     latest.current = { parse, intervalMs, errorText };
   });
   useEffect(() => {
+    if (!url) return;
+    const target = url;
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let last: T | null = null;
     async function load() {
       if (!alive) return;
-      const { parse: read, intervalMs: every, errorText: message } = latest.current;
+      const {
+        parse: read,
+        intervalMs: every,
+        errorText: message,
+      } = latest.current;
       if (document.visibilityState === 'visible') {
         try {
-          const response = await fetch(url);
+          const response = await fetch(target);
           const raw: unknown = await response.json();
           if (!alive) return;
           const data = read(raw, response.ok);
           last = data ?? last;
-          setHeld({ url, data: last, error: data ? '' : message });
+          setHeld({ url: target, data: last, error: data ? '' : message });
         } catch {
           if (!alive) return;
-          setHeld({ url, data: last, error: message });
+          setHeld({ url: target, data: last, error: message });
         }
       }
-      if (alive) timer = setTimeout(load, typeof every === 'function' ? every(last) : every);
+      if (alive)
+        timer = setTimeout(
+          load,
+          typeof every === 'function' ? every(last) : every,
+        );
     }
     void load();
     return () => {
@@ -53,5 +64,7 @@ export function usePoll<T>(
       clearTimeout(timer);
     };
   }, [url]);
-  return held.url === url ? { data: held.data, error: held.error } : { data: null, error: '' };
+  return held.url === url
+    ? { data: held.data, error: held.error }
+    : { data: null, error: '' };
 }

@@ -89,6 +89,7 @@ jobs:
           SOL_USD: ${{ vars.DEVNET_SOL_USD }}
           RPC_URL: ${{ secrets.DEVNET_SOLANA_RPC_URL }}
           REFUND_KEY: ${{ secrets.DEVNET_SPONSOR_REFUND_SECRET_KEY }}
+          STREAM_EMBED_URL: ${{ vars.DEVNET_STREAM_EMBED_URL }}
         run: |
           NAME="${WORKER:-interdimensional-podcast-staging}"
           if [ -z "$RPC_URL" ]; then
@@ -109,6 +110,13 @@ jobs:
           put SPONSOR_FLAT_PRICE_CENTS "${FLAT_CENTS:-100}"
           put SPONSOR_SOL_USD "${SOL_USD:-150}"
           put SPONSOR_ENABLED "true"
+          # Without a player the page says the stream does not exist yet, which on a
+          # rehearsal site reads as broken rather than as nobody being on camera.
+          if [ -n "$STREAM_EMBED_URL" ]; then
+            put STREAM_EMBED_URL "$STREAM_EMBED_URL"
+          else
+            echo "::warning::DEVNET_STREAM_EMBED_URL is not set; the devnet site will say the stream link is coming soon."
+          fi
 
       - name: Check the devnet site prices a placement at a dollar
         env:
