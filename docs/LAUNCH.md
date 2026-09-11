@@ -280,6 +280,29 @@ under Stream → Live Inputs → the input → events. Only SOL is payable on de
 devnet mint and a treasury token account, and the test token has no price anywhere, so both
 report themselves unavailable with a reason.
 
+### Watching a paid placement air
+
+Payment is half the product; the other half is the studio reading it on air. To see a paid
+devnet order delivered end to end, run a studio on this Mac against the devnet site:
+
+1. Stop anything holding the devnet air (`scripts/rehearsal.mjs`, `sponsorpay.mjs --hold`)
+   and wait 60 s: the producer lease belongs to one studio at a time.
+2. Run a local worker whose `.dev.vars` has the usual `FAL_KEY` and `STUDIO_TOKEN`, plus
+   `INTERACT_ORIGIN=<devnet site>` and a `STUDIO_ID` no other studio uses. Leave the shared
+   dev server alone; a copy on its own port works (`vinext dev --port 3319`), as long as its
+   `node_modules/.vite` is its own.
+3. `SITE=<devnet site> WATCH=<order id> STUDIO=http://127.0.0.1:3319 node scripts/generation-test.mjs`
+
+It records the stage, saves every exchange the writer returns, and stops once the watched
+order is fulfilled. Paid exchanges air two minutes of program apart, oldest payment first, so
+an order queued behind others waits its turn. A delivered message or spotlight shows
+`status='fulfilled'`, `intro=1`, and 4 start, 4 progress and 1 complete events. This
+generates the show for real: budget the normal cost per minute for the whole run.
+
+A cap cannot be delivered on devnet yet: it needs the media worker reachable by the devnet
+site over HTTPS (`SPONSOR_MEDIA_URL`, `SPONSOR_MEDIA_TOKEN`), a qualified logo uploaded before
+payment, and ten verified minutes on air.
+
 ## Launch day
 
 The optional [launch tool](PUMP_LAUNCH.md) prepares metadata and a wallet-approved mint
