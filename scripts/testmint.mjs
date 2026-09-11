@@ -22,6 +22,7 @@ import {
   getMintToInstruction,
   TOKEN_PROGRAM_ADDRESS,
 } from '@solana-program/token';
+import { getBase58Encoder } from '@solana/kit';
 import { ataFor, KEYS, loadKeys, submitTx } from './devnet.mjs';
 
 const RPC = process.env.DEVNET_RPC_URL ?? 'https://api.devnet.solana.com';
@@ -29,6 +30,9 @@ const WS = RPC.replace(/^http/, 'ws');
 const DECIMALS = 6;
 const SUPPLY = 1_000_000_000n; // whole tokens, before decimals
 const AIRDROP = 2_000_000_000n; // lamports
+// Devnet has no market, so a sponsorship quote needs a number to settle against. Any
+// plausible figure works; this one keeps a dollar at a readable ~0.0067 SOL.
+const SOL_USD = process.env.SPONSOR_SOL_USD ?? '150';
 
 if (!/devnet|localhost|127\.0\.0\.1/.test(RPC))
   throw Error(`Refusing to run against ${RPC}. This script is for devnet only.`);
@@ -63,10 +67,18 @@ async function main() {
     : null;
   // Seeds are written before anything can fail: the faucet is unreliable, and an operator who
   // funds the payer by hand must find the same payer waiting on the next run.
-  const { signers } = await loadKeys(['payer', 'treasury', 'mint']);
-  const { payer, treasury, mint } = signers;
+  const { signers, seeds } = await loadKeys([
+    'payer',
+    'treasury',
+    'mint',
+    'refund',
+  ]);
+  const { payer, treasury, mint, refund } = signers;
   console.log(`Payer ${payer.address}`);
   await fund(payer);
+  // Sponsorship refunds are paid from a reserve that must never be the treasury, and every
+  // quote checks its balance before issuing. An unfunded one fails checkout with REFUNDS.
+  await fund(refund);
 
   const existing = await rpc.getAccountInfo(mint.address).send();
   // The treasury must hold an initialised token account for the mint or every quote answers
@@ -135,7 +147,25 @@ async function main() {
       'Leave CLIENT_RPC_URL unset: the site hands the browser its own /api/rpc, and anything\n' +
       'set there is published to every visitor.',
   );
-  console.log('\nFund a viewer wallet:  node scripts/testmint.mjs --fund <your-phantom-address>');
+  // web3.js wants the 64-byte secret key: the 32-byte seed followed by the public key.
+  const refundSecret = JSON.stringify([
+    ...seeds.refund,
+    ...getBase58Encoder().encode(refund.address),
+  ]);
+  console.log('\nSponsorship on devnet, in addition to the above:\n');
+  console.log('  SPONSOR_ENABLED=true');
+  console.log('  SPONSOR_FLAT_PRICE_CENTS=100');
+  console.log(`  SPONSOR_SOL_USD=${SOL_USD}`);
+  console.log(`  SPONSOR_REFUND_SECRET_KEY=${refundSecret}`);
+  console.log(
+    `\nEvery placement costs a dollar, paid in SOL priced at $${SOL_USD}. Both pricing\n` +
+      'variables are refused unless SOLANA_RPC_URL is devnet or local, so they cannot follow\n' +
+      `a copied secret to production. Refund reserve ${refund.address} is funded above and is\n` +
+      'deliberately not the treasury.',
+  );
+  console.log(
+    '\nFund a viewer wallet:  node scripts/testmint.mjs --fund <your-phantom-address>',
+  );
 }
 
 main().catch((e) => {

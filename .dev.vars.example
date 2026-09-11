@@ -91,6 +91,14 @@ CF_LIVE_INPUT_ID=
 
 # ---- Sponsorships. Opt in after staging wallet, delivery, and refund rehearsal.
 SPONSOR_ENABLED=false
+# ---- Devnet rehearsal pricing. Both are refused unless SOLANA_RPC_URL is devnet or local,
+# so a copied secret cannot quietly sell a $100 placement for a dollar on mainnet.
+# One price for every placement, in cents. `node scripts/testmint.mjs` prints both.
+SPONSOR_FLAT_PRICE_CENTS=
+# Dollars per SOL. NOTE the inverted units against PRICE_FIXED above, which is tokens per
+# dollar. Devnet has no market, and Jupiter dates its prices by a mainnet block a devnet
+# RPC has never seen, so without this every SOL quote fails with code PRICE.
+SPONSOR_SOL_USD=
 # Public site origin used for immutable artwork and video URLs.
 SITE_URL=
 # Server-side Jupiter v3 price access. USDC stays available without a market quote.

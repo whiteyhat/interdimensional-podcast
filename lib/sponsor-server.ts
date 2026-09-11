@@ -6,6 +6,7 @@ import {
   sponsorProducts,
   sponsorLimits,
   sponsorPriceCents,
+  flatPriceCents,
   amountBaseForCents,
   amountUi,
   validateSponsorDraft,
@@ -46,6 +47,8 @@ export type SponsorVars = {
   SPONSOR_REFUND_SECRET_KEY?: string;
   SPONSOR_USDC_MINT?: string;
   SPONSOR_ENABLED?: string;
+  SPONSOR_FLAT_PRICE_CENTS?: string;
+  SPONSOR_SOL_USD?: string;
 };
 const response = (
   body: unknown,
@@ -82,6 +85,24 @@ const connection = (v: SponsorVars) =>
   sponsorConnection(
     v.SOLANA_RPC_URL?.trim() || 'https://api.mainnet-beta.solana.com',
   );
+/**
+ * Test pricing that reached mainnet would sell a $100 placement for a dollar and settle
+ * SOL against a number somebody typed last month. Both overrides are therefore refused
+ * outright unless this deployment talks to devnet or a local validator, the same refusal
+ * scripts/testmint.mjs makes before it mints anything.
+ */
+function devnetPricing(v: SponsorVars) {
+  const flatCents = flatPriceCents(v.SPONSOR_FLAT_PRICE_CENTS);
+  const solUsd = v.SPONSOR_SOL_USD?.trim() || undefined;
+  if (flatCents === undefined && solUsd === undefined) return {};
+  if (!/devnet|localhost|127\.0\.0\.1/.test(v.SOLANA_RPC_URL?.trim() || ''))
+    throw new SponsorError(
+      503,
+      'Devnet pricing is configured on a deployment that is not on devnet.',
+      'CONFIG',
+    );
+  return { flatCents, solUsd };
+}
 export async function hashSponsorToken(token: string) {
   const bytes = await crypto.subtle.digest(
     'SHA-256',
@@ -134,7 +155,9 @@ function capabilities(raw: unknown): SponsorCapabilities {
 }
 async function producer(d: D1Database, now: number) {
   const row = await d
-    .prepare("SELECT p.* FROM sponsor_producer p JOIN meta m ON m.key='studio_id' AND m.value=p.studio_id WHERE p.id=1")
+    .prepare(
+      "SELECT p.* FROM sponsor_producer p JOIN meta m ON m.key='studio_id' AND m.value=p.studio_id WHERE p.id=1",
+    )
     .first<{ studio_id: string; seen_at: number; capabilities: string }>();
   return {
     studioOnline: !!row && now - row.seen_at < sponsorLimits.heartbeatMs,
@@ -261,16 +284,22 @@ async function assetState(
       'TREASURY',
     );
   const c = connection(v);
+  // Jupiter prices mainnet only, and then dates its answer by a mainnet block a devnet
+  // RPC has never heard of. A pinned SOL price is what makes a devnet quote possible at
+  // all; every other asset still has to be priced for real.
+  const { solUsd } = devnetPricing(v);
   const [info, price] = await Promise.all([
     mint ? tokenInfo(c, mint) : Promise.resolve({ decimals: 9 }),
     asset === 'USDC'
       ? Promise.resolve('1')
-      : fetchSponsorPrice(
-          c,
-          mint ?? SOL_MINT,
-          v.JUPITER_API_KEY || v.JUP_API_KEY,
-          now,
-        ),
+      : asset === 'SOL' && solUsd
+        ? Promise.resolve(solUsd)
+        : fetchSponsorPrice(
+            c,
+            mint ?? SOL_MINT,
+            v.JUPITER_API_KEY || v.JUP_API_KEY,
+            now,
+          ),
   ]);
   const recipient = await spendable(c, treasury, mint);
   if (mint && !recipient.hasAta)
@@ -289,6 +318,7 @@ export async function sponsorCatalog(
     now = Date.now(),
     live = await producer(d, now);
   const enabled = v.SPONSOR_ENABLED === 'true';
+  const { flatCents } = devnetPricing(v);
   const capInventory = await db.capInventory(d);
   const assets = await Promise.all(
     (['FROGCLENCH', 'USDC', 'SOL'] as const).map(async (id) => {
@@ -303,7 +333,7 @@ export async function sponsorCatalog(
           state.mint,
           BigInt(
             amountBaseForCents(
-              sponsorPriceCents('message', id),
+              sponsorPriceCents('message', id, flatCents),
               state.priceUsd,
               state.decimals,
             ),
@@ -336,8 +366,8 @@ export async function sponsorCatalog(
     products: sponsorProducts.map((p) => ({
       id: p.id,
       title: p.title,
-      priceCents: p.priceCents,
-      frogPriceCents: sponsorPriceCents(p.id, 'FROGCLENCH'),
+      priceCents: sponsorPriceCents(p.id, 'USDC', flatCents),
+      frogPriceCents: sponsorPriceCents(p.id, 'FROGCLENCH', flatCents),
       available:
         enabled &&
         live.studioOnline &&
@@ -432,8 +462,12 @@ export async function sponsorReceipt(
     token,
     status: o.status,
     draft: JSON.parse(o.draft),
+    // What this order was actually quoted, in order of authority: the attempt that paid
+    // it, then the most recent quote. A deployment may price differently from the listed
+    // ladder, so the ladder answers only an order nobody has quoted yet.
     priceCents:
       attempts.results.find((a) => a.id === o.paid_attempt_id)?.price_cents ??
+      attempts.results[0]?.price_cents ??
       sponsorProducts.find((p) => p.id === o.product)!.priceCents,
     attempts: attempts.results.map((a) => attemptView(a, origin)),
     fulfillment: db.fulfillment(o),
@@ -688,7 +722,7 @@ async function quote(
       );
     await qualifiedSponsorAsset(d, JSON.parse(o.draft), live.capabilities);
     const state = await assetState(d, v, asset, now),
-      cents = sponsorPriceCents(o.product, asset),
+      cents = sponsorPriceCents(o.product, asset, devnetPricing(v).flatCents),
       amount = amountBaseForCents(cents, state.priceUsd, state.decimals);
     await refundFunding(d, v, asset, state.mint, BigInt(amount));
     const id = crypto.randomUUID();
@@ -1038,13 +1072,17 @@ async function studioProxy(
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(15000),
   });
-  return new Response(upstream.body, {
-    status: upstream.status,
-    headers: {
-      'content-type': 'application/json',
-      'cache-control': 'no-store',
-    },
-  });
+  let data: unknown;
+  try {
+    data = await upstream.json();
+  } catch {
+    throw new SponsorError(
+      502,
+      `The site at ${origin} answered ${upstream.status} without JSON; it may not have the sponsorship release deployed.`,
+      'SITE',
+    );
+  }
+  return response(data, upstream.status);
 }
 export async function handleSponsorship(
   request: Request,
@@ -1106,7 +1144,7 @@ export async function handleSponsorship(
       ['heartbeat', 'pull', 'event', 'context', 'console'].includes(action) &&
       v.INTERACT_ORIGIN
     )
-      return studioProxy(request, v, body);
+      return await studioProxy(request, v, body);
     const d = await sponsorDatabase(v);
     if (['heartbeat', 'pull', 'event', 'context', 'console'].includes(action)) {
       const studioId = assertSponsorStudio(request, v);

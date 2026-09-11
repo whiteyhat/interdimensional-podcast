@@ -139,12 +139,28 @@ export class SponsorError extends Error {
     super(message);
   }
 }
+/**
+ * A deployment may pin every placement to one price. Devnet rehearsals need the real
+ * chain behaviour of a purchase without the real bill, and a test that costs $100 is a
+ * test nobody runs twice. Only a devnet deployment is allowed to set it: the caller
+ * proves that before reading it (`devnetPricing` in lib/sponsor-server.ts).
+ */
+export function flatPriceCents(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const cents = Number(raw.trim());
+  // A malformed value must never quietly become a free placement.
+  if (!Number.isSafeInteger(cents) || cents <= 0)
+    throw new SponsorError(503, 'Invalid flat placement price.', 'CONFIG');
+  return cents;
+}
 export function sponsorPriceCents(
   product: SponsorProduct,
   asset: SponsorAsset,
+  flatCents?: number,
 ): number {
-  const price = sponsorProducts.find((p) => p.id === product)?.priceCents;
-  if (!price) throw new SponsorError(400, 'Unknown product.');
+  const listed = sponsorProducts.find((p) => p.id === product)?.priceCents;
+  if (!listed) throw new SponsorError(400, 'Unknown product.');
+  const price = flatCents ?? listed;
   return asset === 'FROGCLENCH' ? (price * 70) / 100 : price;
 }
 function decimalFraction(raw: string): [bigint, bigint] {

@@ -263,19 +263,35 @@ void test('both queues identify direct producers consistently with absent and no
     await t.test(name, async () => {
       const DB = database();
       await legacy.ensureSchema(DB);
-      const v = { DB, STUDIO_TOKEN: 'shared-studio-token', STUDIO_ID: 'configured-bridge-id' };
+      const v = {
+        DB,
+        STUDIO_TOKEN: 'shared-studio-token',
+        STUDIO_ID: 'configured-bridge-id',
+      };
       assert.equal(await legacy.heartbeat(DB, Date.now(), expected), true);
       const headers = {
         'x-studio-token': v.STUDIO_TOKEN,
         ...(id === undefined ? {} : { 'x-studio-id': id }),
       };
-      const heartbeat = await post(v, {
-        action: 'heartbeat',
-        capabilities: { message: true, spotlight: false, cap: false },
-      }, headers);
-      assert.equal(heartbeat.status, 200, 'the same producer must not conflict with its legacy lease');
+      const heartbeat = await post(
+        v,
+        {
+          action: 'heartbeat',
+          capabilities: { message: true, spotlight: false, cap: false },
+        },
+        headers,
+      );
+      assert.equal(
+        heartbeat.status,
+        200,
+        'the same producer must not conflict with its legacy lease',
+      );
       assert.equal((await post(v, { action: 'pull' }, headers)).status, 200);
-      assert.equal(DB.sql.prepare('SELECT studio_id FROM sponsor_producer').get().studio_id, expected);
+      assert.equal(
+        DB.sql.prepare('SELECT studio_id FROM sponsor_producer').get()
+          .studio_id,
+        expected,
+      );
     });
   }
 });
@@ -300,14 +316,57 @@ void test('the local sponsorship bridge publishes the same normalized id as the 
       const response = await server.handleSponsorship(
         new Request('http://127.0.0.1:3212/api/sponsorship', {
           method: 'POST',
-          body: JSON.stringify({ action: 'heartbeat', capabilities: { message: true } }),
+          body: JSON.stringify({
+            action: 'heartbeat',
+            capabilities: { message: true },
+          }),
         }),
         { ...remote, STUDIO_ID: id, INTERACT_ORIGIN: 'https://show.test' },
       );
-      assert.equal(response.status, 200, 'the bridged producer must retain its shared lease');
-      assert.equal(DB.sql.prepare('SELECT studio_id FROM sponsor_producer').get().studio_id, expected);
+      assert.equal(
+        response.status,
+        200,
+        'the bridged producer must retain its shared lease',
+      );
+      assert.equal(
+        DB.sql.prepare('SELECT studio_id FROM sponsor_producer').get()
+          .studio_id,
+        expected,
+      );
     });
   }
+});
+void test('the sponsorship bridge reports a site without the release as a JSON error, never as relabelled HTML', async (t) => {
+  t.mock.method(
+    globalThis,
+    'fetch',
+    async () =>
+      new Response(
+        '<!DOCTYPE html><title>404: This page could not be found.</title>',
+        {
+          status: 404,
+          headers: { 'content-type': 'text/html' },
+        },
+      ),
+  );
+  const response = await server.handleSponsorship(
+    new Request('http://127.0.0.1:3212/api/sponsorship', {
+      method: 'POST',
+      body: JSON.stringify({
+        action: 'heartbeat',
+        capabilities: { message: true },
+      }),
+    }),
+    {
+      STUDIO_TOKEN: 'shared-studio-token',
+      INTERACT_ORIGIN: 'https://show.test',
+    },
+  );
+  assert.equal(response.status, 502);
+  assert.equal(response.headers.get('content-type'), 'application/json');
+  const body = await response.json();
+  assert.equal(body.code, 'SITE');
+  assert.match(body.error, /answered 404 without JSON/);
 });
 void test('expiry requires a reference sweep begun after blockhash finality, not an old pagination cursor', async () => {
   const f = await fixture();
@@ -831,6 +890,74 @@ void test('a held builder lock prevents recovery from expiring its in-flight att
       await post(f.v, { action: 'confirm', token: receipt.token })
     ).json();
     assert.equal(closed.receipt.attempts[0].status, 'expired');
+  } finally {
+    f.restore();
+  }
+});
+
+void test('devnet pricing is refused on a deployment that is not on devnet', async () => {
+  const f = await fixture();
+  try {
+    const mainnet = {
+      ...f.v,
+      SOLANA_RPC_URL: 'https://api.mainnet-beta.solana.com',
+      SPONSOR_FLAT_PRICE_CENTS: '100',
+      SPONSOR_SOL_USD: '150',
+    };
+    const catalog = await (
+      await server.handleSponsorship(
+        new Request('https://show.test/api/sponsorship?action=catalog'),
+        mainnet,
+      )
+    ).json();
+    // Loud, not quiet: the catalog refuses outright rather than selling anything at
+    // the test price.
+    assert.equal(catalog.code, 'CONFIG');
+    assert.match(catalog.error, /not on devnet/);
+  } finally {
+    f.restore();
+  }
+});
+void test('a devnet deployment prices every placement flat and pins SOL', async () => {
+  const f = await fixture();
+  try {
+    const devnet = {
+      ...f.v,
+      // The fixture already talks to a local validator, which is what the guard allows.
+      SPONSOR_FLAT_PRICE_CENTS: '100',
+      SPONSOR_SOL_USD: '150',
+      // No price service at all: the pin is what makes the quote possible.
+      JUPITER_API_KEY: undefined,
+    };
+    const drafted = await (
+      await post(devnet, {
+        action: 'draft',
+        draft: {
+          product: 'spotlight',
+          projectName: 'Game',
+          style: 'intro',
+          name: 'Joe',
+          message: 'Hello everyone',
+        },
+      })
+    ).json();
+    assert.ok(drafted.receipt, JSON.stringify(drafted));
+    const receipt = drafted.receipt;
+    const q = await (
+      await post(devnet, {
+        action: 'quote',
+        token: receipt.token,
+        asset: 'SOL',
+        wallet: f.wallet.publicKey.toBase58(),
+      })
+    ).json();
+    assert.ok(q.attempt, JSON.stringify(q));
+    assert.equal(
+      q.attempt.priceCents,
+      100,
+      'a $25 spotlight costs a dollar on devnet',
+    );
+    assert.equal(q.attempt.amountBase, '6666667', 'a dollar of SOL at $150');
   } finally {
     f.restore();
   }

@@ -13,7 +13,6 @@ import {
   Wallet,
 } from 'lucide-react';
 import {
-  sponsorPriceCents,
   sponsorProducts,
   validateSponsorDraft,
   type SponsorAsset,
@@ -22,6 +21,7 @@ import {
   type SponsorReceipt as Receipt,
 } from '@/lib/sponsorship';
 import {
+  catalogPriceCents,
   checkoutKey,
   dollars,
   emptyDraft,
@@ -87,6 +87,7 @@ export function SponsorPanel() {
   const operation = useRef(false);
   const assetEpoch = useRef(0);
   const touchedToken = useRef<string | null>(null);
+  const chosenAsset = useRef(false);
   const updateReceipt = useCallback((next: Receipt) => {
     receiptRef.current = next;
     setReceipt(next);
@@ -169,6 +170,14 @@ export function SponsorPanel() {
         const data = await loadSponsorCatalog(controller.signal);
         if (!controller.signal.aborted) {
           setCatalog(data);
+          // Opening on an asset this deployment cannot take would dead-end checkout on a
+          // choice nobody made. Until the customer picks one, follow what is payable.
+          setAsset((current) => {
+            if (chosenAsset.current) return current;
+            if (data.assets.find((a) => a.id === current)?.available)
+              return current;
+            return data.assets.find((a) => a.available)?.id ?? current;
+          });
           setConnectionError('');
         }
       } catch {
@@ -201,7 +210,11 @@ export function SponsorPanel() {
           const attempt =
             next.attempts.find((a) => a.status === 'verified') ||
             next.attempts[0];
-          if (attempt) setAsset(attempt.asset);
+          // A payment already quoted in this asset owns the choice from here on.
+          if (attempt) {
+            chosenAsset.current = true;
+            setAsset(attempt.asset);
+          }
           touchedToken.current = token;
         }
         if (next.status === 'payment-pending') {
@@ -239,8 +252,8 @@ export function SponsorPanel() {
   const received =
     !!receipt && !['draft', 'payment-pending'].includes(receipt.status);
   const locked = step === 3 || received || signing;
-  const price = sponsorPriceCents(draft.product, asset);
-  const fullPrice = sponsorPriceCents(draft.product, 'USDC');
+  const price = catalogPriceCents(catalog, draft.product, asset);
+  const fullPrice = catalogPriceCents(catalog, draft.product, 'USDC');
   const product = catalog?.products.find((p) => p.id === draft.product);
   const assetState = catalog?.assets.find((a) => a.id === asset);
   const hostReserved =
@@ -409,6 +422,7 @@ export function SponsorPanel() {
   }
   function pickAsset(next: SponsorAsset) {
     if (next === asset || signing) return;
+    chosenAsset.current = true;
     setAsset(next);
     setMethod('wallet');
     setQr('');
@@ -507,7 +521,7 @@ export function SponsorPanel() {
                           </small>
                         </span>
                         <span className="sponsor-product-price">
-                          {dollars(sponsorPriceCents(p.id, asset))}
+                          {dollars(catalogPriceCents(catalog, p.id, asset))}
                           <small>
                             {asset === 'FROGCLENCH' ? 'with FROG' : 'USD'}
                           </small>

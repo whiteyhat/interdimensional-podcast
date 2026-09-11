@@ -1,0 +1,109 @@
+# The devnet rehearsal environment, deployed by hand and never by a push.
+#
+# Production auto-deploys from main. This one does not and must not: it prices every
+# placement at a dollar and settles SOL against a number somebody typed, which is a
+# rehearsal, not a shop. The worker itself refuses both of those settings unless its
+# SOLANA_RPC_URL is on devnet, so the damage a mistake here can do is bounded.
+#
+# It also inverts the production guard. That job refuses to ship anything but the
+# production database; this one refuses to ship the production database at all.
+
+name: Deploy devnet
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-devnet
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        env:
+          D1_DATABASE_NAME: ${{ vars.DEVNET_D1_DATABASE_NAME }}
+          D1_DATABASE_ID: ${{ vars.DEVNET_D1_DATABASE_ID }}
+          SPONSOR_ASSETS_BUCKET: ${{ vars.DEVNET_SPONSOR_ASSETS_BUCKET }}
+        run: npm run build
+
+      # Production's guard refuses anything that is not the production database.
+      # Here the danger runs the other way: a devnet deploy that carries the production
+      # database would point rehearsal traffic, and rehearsal prices, at real orders.
+      - name: Verify the build does not point at production
+        env:
+          DEVNET: ${{ vars.DEVNET_D1_DATABASE_ID }}
+          PRODUCTION: ${{ vars.D1_DATABASE_ID }}
+        run: |
+          ACTUAL=$(node -e "console.log(require('./dist/server/wrangler.json').d1_databases[0].database_id)")
+          echo "built with database: $ACTUAL"
+          if [ -z "$DEVNET" ]; then
+            echo "::error::DEVNET_D1_DATABASE_ID repository variable is not set. Refusing to deploy a placeholder database."
+            exit 1
+          fi
+          if [ "$ACTUAL" = "$PRODUCTION" ]; then
+            echo "::error::This build carries the production database. Refusing to deploy it as devnet."
+            exit 1
+          fi
+          if [ "$ACTUAL" != "$DEVNET" ]; then
+            echo "::error::Built database id $ACTUAL does not match the expected devnet id."
+            exit 1
+          fi
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WORKER: ${{ vars.DEVNET_WORKER_NAME }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is not set. Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          npx wrangler deploy --config dist/server/wrangler.json --name "${WORKER:-interdimensional-podcast-staging}"
+
+      # A deploy that leaves checkout priced by whatever was set last time is worse than
+      # no deploy: the operator would rehearse against a price nobody chose. Both values
+      # go up with the code that reads them.
+      - name: Publish the devnet pricing
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WORKER: ${{ vars.DEVNET_WORKER_NAME }}
+          FLAT_CENTS: ${{ vars.DEVNET_FLAT_PRICE_CENTS }}
+          SOL_USD: ${{ vars.DEVNET_SOL_USD }}
+        run: |
+          NAME="${WORKER:-interdimensional-podcast-staging}"
+          for pair in "SPONSOR_FLAT_PRICE_CENTS=${FLAT_CENTS:-100}" "SPONSOR_SOL_USD=${SOL_USD:-150}"; do
+            echo "${pair#*=}" | npx wrangler secret put "${pair%%=*}" \
+              --config dist/server/wrangler.json --name "$NAME"
+          done
+
+      - name: Check the devnet site prices a placement at a dollar
+        env:
+          ORIGIN: ${{ vars.DEVNET_ORIGIN }}
+        run: |
+          SITE="${ORIGIN:-https://interdimensional-podcast-staging.leonardo-chekup.workers.dev}"
+          for i in 1 2 3 4 5; do
+            CENTS=$(curl -s "$SITE/api/sponsorship?action=catalog" \
+              | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.parse(s).products.map(p=>p.priceCents).join(','))}catch{console.log('')}})" || true)
+            echo "attempt $i: placement prices $CENTS"
+            [ "$CENTS" = "100,100,100" ] && echo "devnet pricing is live" && exit 0
+            sleep 10
+          done
+          echo "::error::The devnet catalog did not report a dollar per placement."
+          exit 1

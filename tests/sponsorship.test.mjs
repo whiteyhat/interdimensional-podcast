@@ -85,3 +85,24 @@ void test('price freshness follows quote block time rather than token creation d
     /fresh/i,
   );
 });
+
+void test('a flat devnet price replaces the ladder without losing the discount', () => {
+  assert.equal(s.sponsorPriceCents('cap', 'USDC', 100), 100);
+  assert.equal(s.sponsorPriceCents('message', 'USDC', 100), 100);
+  assert.equal(s.sponsorPriceCents('cap', 'FROGCLENCH', 100), 70);
+  // Without one, the listed ladder still rules.
+  assert.equal(s.sponsorPriceCents('cap', 'USDC'), 10000);
+  // A dollar of SOL at $150, in lamports.
+  assert.equal(s.amountBaseForCents(100, '150', 9), '6666667');
+});
+void test('a flat price that cannot be trusted is refused, never treated as free', () => {
+  assert.equal(s.flatPriceCents(undefined), undefined);
+  assert.equal(s.flatPriceCents('  '), undefined);
+  assert.equal(s.flatPriceCents('100'), 100);
+  for (const bad of ['0', '-100', '1.5', 'free', '1e400', 'NaN'])
+    assert.throws(
+      () => s.flatPriceCents(bad),
+      /Invalid flat placement price/,
+      bad,
+    );
+});

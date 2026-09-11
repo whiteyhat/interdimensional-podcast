@@ -231,6 +231,36 @@ These must keep failing: underpayment, transfer to another wallet, a replayed si
 empty wallet, a message containing a link or an address, a fourth quote inside a minute, and
 any quote while the studio heartbeat is more than 60s old.
 
+### Sponsorships on devnet
+
+Sponsorship is a separate money path from the five-dollar seat, and it cannot be priced on
+devnet the way that one can. `PRICE_FIXED` does not reach it. Jupiter prices mainnet only,
+and then dates its answer by a mainnet block a devnet RPC has never seen, so every SOL quote
+fails with code `PRICE`. Two variables fix that, and both are refused unless `SOLANA_RPC_URL`
+is devnet or local:
+
+| Variable | Meaning |
+|---|---|
+| `SPONSOR_FLAT_PRICE_CENTS` | One price for every placement, in cents. `100` makes each a dollar. |
+| `SPONSOR_SOL_USD` | Dollars per SOL. Note the inverted units against `PRICE_FIXED`, which is tokens per dollar. |
+
+`node scripts/testmint.mjs` prints both, along with a funded `SPONSOR_REFUND_SECRET_KEY`.
+That reserve has to hold SOL and must not be the treasury, or every quote answers `REFUNDS`.
+Set them on the devnet worker, then:
+
+```sh
+npm run deploy:devnet             # or run the "Deploy devnet" workflow by hand
+export SITE=https://interdimensional-podcast-staging.leonardo-chekup.workers.dev
+export STUDIO_TOKEN=$(grep '^STUDIO_TOKEN=' .dev.vars | cut -d= -f2-)
+export RPC_URL='https://devnet.helius-rpc.com/?api-key=<key>'
+node scripts/sponsorpay.mjs       # catalog -> draft -> quote -> sign -> submit -> paid
+```
+
+Run the studio against the same origin first. Sponsorship quotes require a live producer
+heartbeat and answer 409 `OFFAIR` without one. Only SOL is payable on devnet: USDC needs a
+devnet mint and a treasury token account, and the test token has no price anywhere, so both
+report themselves unavailable with a reason.
+
 ## Launch day
 
 The optional [launch tool](PUMP_LAUNCH.md) prepares metadata and a wallet-approved mint

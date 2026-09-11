@@ -1,7 +1,10 @@
+import { sponsorPriceCents } from './sponsorship';
 import type {
   SponsorAsset,
+  SponsorCatalog,
   SponsorDraft,
   SponsorFulfillment,
+  SponsorProduct,
   SponsorReceipt,
 } from './sponsorship';
 
@@ -90,6 +93,21 @@ export function deliveryProgress(
   return f.intro && f.callback && f.appearances >= 6
     ? duration
     : Math.min(99, duration);
+}
+/**
+ * What a placement costs is the server's answer, not the browser's. The catalog already
+ * carries it, and a deployment may price differently from the built-in ladder, so a page
+ * that did its own arithmetic would quote one number and charge another. The ladder is
+ * only the fallback for the moment before the first catalog arrives.
+ */
+export function catalogPriceCents(
+  catalog: SponsorCatalog | null,
+  product: SponsorProduct,
+  asset: SponsorAsset,
+): number {
+  const listed = catalog?.products.find((p) => p.id === product);
+  if (!listed) return sponsorPriceCents(product, asset);
+  return asset === 'FROGCLENCH' ? listed.frogPriceCents : listed.priceCents;
 }
 export const dollars = (cents: number) =>
   new Intl.NumberFormat('en-US', {
