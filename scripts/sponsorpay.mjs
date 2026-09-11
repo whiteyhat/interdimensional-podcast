@@ -3,6 +3,10 @@
 // path, which is a different route, a different table and a different refund reserve.
 //
 //   SITE=... STUDIO_TOKEN=... RPC_URL=... node scripts/sponsorpay.mjs
+//   SITE=... STUDIO_TOKEN=...            node scripts/sponsorpay.mjs --hold
+//
+// --hold sends the studio heartbeat every twenty seconds and nothing else, so a person can
+// buy from a real browser wallet on the devnet site without running the whole show.
 //
 // Devnet only: the deployment must be priced by SPONSOR_SOL_USD, which the worker refuses
 // to read unless it is itself on devnet.
@@ -16,16 +20,17 @@ import { loadKeys, signQuote, until } from './devnet.mjs';
 const SITE = process.env.SITE;
 const STUDIO_TOKEN = process.env.STUDIO_TOKEN;
 const RPC_URL = process.env.RPC_URL;
-if (!SITE || !STUDIO_TOKEN || !RPC_URL)
-  throw Error('SITE, STUDIO_TOKEN and RPC_URL are all required.');
-if (!/devnet|localhost|127\.0\.0\.1/.test(RPC_URL))
+const HOLD = process.argv.includes('--hold');
+if (!SITE || !STUDIO_TOKEN || (!HOLD && !RPC_URL))
+  throw Error(
+    HOLD
+      ? 'SITE and STUDIO_TOKEN are required.'
+      : 'SITE, STUDIO_TOKEN and RPC_URL are all required.',
+  );
+if (!HOLD && !/devnet|localhost|127\.0\.0\.1/.test(RPC_URL))
   throw Error(
     `Refusing to run against ${RPC_URL}. This script is for devnet only.`,
   );
-
-const rpc = createSolanaRpc(RPC_URL);
-const subs = createSolanaRpcSubscriptions(RPC_URL.replace(/^http/, 'ws'));
-void sendAndConfirmTransactionFactory({ rpc, rpcSubscriptions: subs });
 
 let passed = 0;
 const failures = [];
@@ -49,6 +54,38 @@ async function catalog() {
   const r = await fetch(`${SITE}/api/sponsorship?action=catalog`);
   return r.json();
 }
+/** The heartbeat the real studio sends, with the same token, claiming the producer lease. */
+const heartbeat = () =>
+  api(
+    {
+      action: 'heartbeat',
+      capabilities: { message: true, spotlight: true, cap: false },
+    },
+    { 'x-studio-token': STUDIO_TOKEN },
+  );
+
+// Holding the air is the whole job in --hold: a person buys from a real wallet while this
+// keeps the producer lease warm. Nothing is written, generated or delivered.
+if (HOLD) {
+  const first = await heartbeat();
+  if (first.status !== 200)
+    throw Error(
+      `${SITE} refused the studio token: ${first.status} ${JSON.stringify(first.body)}`,
+    );
+  console.log(
+    `Holding the air on ${SITE}\nBuy from the browser now. Ctrl-C to let go.`,
+  );
+  setInterval(() => {
+    void heartbeat().then((r) => {
+      if (r.status !== 200) console.error(`heartbeat refused: ${r.status}`);
+    });
+  }, 20_000);
+  await new Promise(() => {});
+}
+
+const rpc = createSolanaRpc(RPC_URL);
+const subs = createSolanaRpcSubscriptions(RPC_URL.replace(/^http/, 'ws'));
+void sendAndConfirmTransactionFactory({ rpc, rpcSubscriptions: subs });
 
 const { signers } = await loadKeys(['viewer']);
 const { viewer } = signers;
@@ -65,13 +102,7 @@ check(
 // for one: the same heartbeat the real studio sends, with the same token, claiming the
 // producer lease for the thirty seconds a rehearsal needs. A studio already on air keeps
 // its lease, and the claim is refused instead.
-const onAir = await api(
-  {
-    action: 'heartbeat',
-    capabilities: { message: true, spotlight: true, cap: false },
-  },
-  { 'x-studio-token': STUDIO_TOKEN },
-);
+const onAir = await heartbeat();
 check(
   'the rehearsal can stand in for the studio',
   onAir.status === 200,

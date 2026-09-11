@@ -256,8 +256,15 @@ export RPC_URL='https://devnet.helius-rpc.com/?api-key=<key>'
 node scripts/sponsorpay.mjs       # catalog -> draft -> quote -> sign -> submit -> paid
 ```
 
-Run the studio against the same origin first. Sponsorship quotes require a live producer
-heartbeat and answer 409 `OFFAIR` without one. Only SOL is payable on devnet: USDC needs a
+Sponsorship quotes require a live producer heartbeat and answer 409 `OFFAIR` without one.
+To buy by hand from a browser wallet, hold the air instead of running the whole show:
+
+```sh
+SITE=... STUDIO_TOKEN=... node scripts/sponsorpay.mjs --hold
+```
+
+That sends the same heartbeat the studio sends and nothing else, so the site reports LIVE
+and checkout opens. A studio genuinely on air keeps its lease and the harness is refused. Only SOL is payable on devnet: USDC needs a
 devnet mint and a treasury token account, and the test token has no price anywhere, so both
 report themselves unavailable with a reason.
 
