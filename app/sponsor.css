@@ -261,6 +261,73 @@ aside.sponsor-rail {
   object-position: 50% 30%;
   height: 110px;
 }
+/* The spotlight's cover is the purchase drawn to scale: a broadcast frame with
+   the sponsor card sitting on it exactly where the live overlay puts it. */
+.sponsor-preview-stage {
+  position: relative;
+  overflow: hidden;
+}
+.sponsor-preview-stage .sponsor-preview-hosts {
+  height: 148px;
+  opacity: 0.88;
+}
+.sponsor-preview-stage .sponsor-preview-hosts img {
+  height: 170px;
+}
+.sponsor-preview-banner {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px solid #a6885155;
+  border-radius: 7px;
+  background: #1c2119ee;
+  box-shadow: 0 5px 18px #0004;
+  color: #f3ecdc;
+  animation: sponsor-banner-in var(--dur-reveal) var(--ease-cut) both;
+}
+.sponsor-preview-banner > span {
+  font: 8px/1.4 monospace;
+  letter-spacing: 1.2px;
+  color: #d4b77f;
+  flex-shrink: 0;
+}
+.sponsor-preview-banner img {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.sponsor-preview-banner > div {
+  min-width: 0;
+  flex: 1;
+}
+.sponsor-preview-banner b,
+.sponsor-preview-banner small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sponsor-preview-banner b {
+  font-size: 13px;
+}
+.sponsor-preview-banner small {
+  color: #a9b29b;
+  font-size: 9px;
+  margin-top: 3px;
+}
+.sponsor-preview-banner > svg {
+  color: #d4b77f;
+  flex-shrink: 0;
+}
+.sponsor-preview-stage + .sponsor-cue {
+  margin-top: 0;
+}
 .sponsor-cue {
   position: relative;
   padding: 15px 16px 17px;
@@ -996,6 +1063,16 @@ aside.sponsor-rail {
   margin-top: 16px;
   border-radius: 6px;
   font-size: 12px;
+}
+@keyframes sponsor-banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 @keyframes sponsor-step-in {
   from {

@@ -70,6 +70,33 @@ export function SponsorPreview({
             <small>10 live minutes · 6+ appearances</small>
           </div>
         </>
+      ) : draft.product === 'spotlight' ? (
+        <>
+          {/* The cover shows the purchase itself: the card that sits on the
+              broadcast while the hosts talk, drawn like the real one. */}
+          <div className="sponsor-preview-stage">
+            <div className="sponsor-preview-hosts" aria-hidden="true">
+              <img src="/pepe-video.webp" alt="" loading="lazy" />
+              <img src="/gigachad-video.webp" alt="" loading="lazy" />
+            </div>
+            <div className="sponsor-preview-banner">
+              <span>SPONSORED</span>
+              {artwork ? <img src={artwork} alt="" /> : null}
+              <div>
+                <b>{draft.projectName || 'Your project'}</b>
+                <small>On screen for the whole exchange</small>
+              </div>
+              <ArrowUpRight size={15} />
+            </div>
+          </div>
+          <div className="sponsor-cue">
+            <span className="sponsor-cue-label">FOUR TURNS · SPONSORED</span>
+            <p>
+              {draft.message ||
+                'A real conversation about what you’re building.'}
+            </p>
+          </div>
+        </>
       ) : (
         <>
           <div className="sponsor-preview-hosts" aria-hidden="true">
@@ -77,39 +104,14 @@ export function SponsorPreview({
             <img src="/gigachad-video.webp" alt="" loading="lazy" />
           </div>
           <div className="sponsor-cue">
-            <span className="sponsor-cue-label">
-              {draft.product === 'spotlight'
-                ? 'SPONSORED SPOTLIGHT'
-                : 'FROM THE TRENCHES'}
-            </span>
+            <span className="sponsor-cue-label">FROM THE TRENCHES</span>
             <div className="sponsor-cue-name">
-              {draft.product === 'spotlight' && artwork ? (
-                <img src={artwork} alt="Project logo" />
-              ) : null}
-              <b>
-                {draft.product === 'spotlight'
-                  ? draft.projectName || 'Your project, on the mic.'
-                  : 'Straight to the hosts.'}
-              </b>
+              <b>Straight to the hosts.</b>
             </div>
             <p>
               {draft.message ||
-                (draft.product === 'spotlight'
-                  ? 'A real conversation about what you’re building.'
-                  : '“Chad, is holding still a strategy if I forgot my password?”')}
+                '“Chad, is holding still a strategy if I forgot my password?”'}
             </p>
-            {draft.product === 'spotlight' && draft.projectUrl ? (
-              <span className="sponsor-preview-link">
-                {(() => {
-                  try {
-                    return new URL(draft.projectUrl).hostname;
-                  } catch {
-                    return 'Your project link';
-                  }
-                })()}
-                <ArrowUpRight size={12} />
-              </span>
-            ) : null}
           </div>
         </>
       )}

@@ -254,8 +254,10 @@ export function SponsorOnAir({
         <img src={sponsor.assetUrl} alt="" />
       )}
       <div>
-        <b>{sponsor.projectName || sponsor.name}</b>
-        <small>With support from {sponsor.name}</small>
+        <b>{sponsor.projectName || sponsor.name || 'An anonymous viewer'}</b>
+        {sponsor.projectName && sponsor.name && (
+          <small>With support from {sponsor.name}</small>
+        )}
       </div>
       {sponsor.projectUrl && (
         <a

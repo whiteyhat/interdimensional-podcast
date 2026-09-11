@@ -109,7 +109,7 @@ export const productCopy = {
     title: 'Project spotlight',
     short: 'Put your project in the conversation.',
     description:
-      'Four turns of sponsored banter, your project on screen, and a link the room can follow.',
+      'Four turns of sponsored banter, with your project named on screen for the whole exchange.',
     icon: 'spotlight',
   },
   cap: {
