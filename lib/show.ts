@@ -288,7 +288,12 @@ export function parseLines(
   }
   const names = [...speakerByName.keys()];
   // The label now says who is talking; without it the turn would be spoken aloud as words.
-  const label = new RegExp(`^(${names.join('|')})\\s*[:\\-\u2013]\\s*`, 'i');
+  // Writers sometimes bold it ("**GigaChad:**" or "**GigaChad**:"); missed, the markdown was
+  // stripped later and the other host read "GigaChad:" aloud in the wrong voice.
+  const label = new RegExp(
+    `^[*_\\s]*(${names.join('|')})[*_\\s]*[:\\-\u2013][*_\\s]*`,
+    'i',
+  );
   const parsed = entries.map((entry) => {
     const source =
       typeof entry === 'string' ? entry : (entry as { text?: unknown })?.text;
