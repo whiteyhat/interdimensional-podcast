@@ -15,7 +15,13 @@ import {
   createSolanaRpcSubscriptions,
   sendAndConfirmTransactionFactory,
 } from '@solana/kit';
-import { loadKeys, signQuote, until } from './devnet.mjs';
+import {
+  holdAir,
+  loadKeys,
+  signQuote,
+  studioHeartbeat,
+  until,
+} from './devnet.mjs';
 
 const SITE = process.env.SITE;
 const STUDIO_TOKEN = process.env.STUDIO_TOKEN;
@@ -54,32 +60,18 @@ async function catalog() {
   const r = await fetch(`${SITE}/api/sponsorship?action=catalog`);
   return r.json();
 }
-/** The heartbeat the real studio sends, with the same token, claiming the producer lease. */
-const heartbeat = () =>
-  api(
-    {
-      action: 'heartbeat',
-      capabilities: { message: true, spotlight: true, cap: false },
-    },
-    { 'x-studio-token': STUDIO_TOKEN },
-  );
+const heartbeat = () => studioHeartbeat(SITE, STUDIO_TOKEN);
 
 // Holding the air is the whole job in --hold: a person buys from a real wallet while this
-// keeps the producer lease warm. Nothing is written, generated or delivered.
+// keeps the producer lease warm. Nothing is written, generated or delivered. For a picture
+// as well, see scripts/rehearsal.mjs.
 if (HOLD) {
-  const first = await heartbeat();
-  if (first.status !== 200)
-    throw Error(
-      `${SITE} refused the studio token: ${first.status} ${JSON.stringify(first.body)}`,
-    );
+  await holdAir(SITE, STUDIO_TOKEN, {
+    onRefused: (status) => console.error(`heartbeat refused: ${status}`),
+  });
   console.log(
     `Holding the air on ${SITE}\nBuy from the browser now. Ctrl-C to let go.`,
   );
-  setInterval(() => {
-    void heartbeat().then((r) => {
-      if (r.status !== 200) console.error(`heartbeat refused: ${r.status}`);
-    });
-  }, 20_000);
   await new Promise(() => {});
 }
 

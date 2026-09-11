@@ -16,11 +16,15 @@ import {
   signTransaction,
   signTransactionMessageWithSigners,
 } from '@solana/kit';
-import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/token';
+import {
+  findAssociatedTokenPda,
+  TOKEN_PROGRAM_ADDRESS,
+} from '@solana-program/token';
 
 export const KEYS = '.devnet-keys.json';
 /** Thirty-two-byte seeds round-trip cleanly; the CryptoKeyPairs kit builds are not extractable. */
-export const seed = () => Array.from(crypto.getRandomValues(new Uint8Array(32)));
+export const seed = () =>
+  Array.from(crypto.getRandomValues(new Uint8Array(32)));
 
 /** Read the seed file, minting any names that are missing, and return signers by name. */
 export async function loadKeys(names, repo = process.cwd()) {
@@ -36,7 +40,10 @@ export async function loadKeys(names, repo = process.cwd()) {
   if (added) await writeFile(path, `${JSON.stringify(seeds, null, 2)}\n`);
   const signers = Object.fromEntries(
     await Promise.all(
-      names.map(async (n) => [n, await createKeyPairSignerFromPrivateKeyBytes(Uint8Array.from(seeds[n]))]),
+      names.map(async (n) => [
+        n,
+        await createKeyPairSignerFromPrivateKeyBytes(Uint8Array.from(seeds[n])),
+      ]),
     ),
   );
   return { signers, seeds, path };
@@ -44,7 +51,11 @@ export async function loadKeys(names, repo = process.cwd()) {
 
 /** The associated token account for any owner, not only the treasury. */
 export async function ataFor(mint, owner) {
-  const [ata] = await findAssociatedTokenPda({ mint, owner, tokenProgram: TOKEN_PROGRAM_ADDRESS });
+  const [ata] = await findAssociatedTokenPda({
+    mint,
+    owner,
+    tokenProgram: TOKEN_PROGRAM_ADDRESS,
+  });
   return ata;
 }
 
@@ -64,8 +75,12 @@ export async function submitTx(rpc, send, payer, instructions) {
 
 /** Sign a quote's base64 wire transaction in Node, the way a browser wallet would. */
 export async function signQuote(base64, signer) {
-  const decoded = getTransactionDecoder().decode(getBase64Encoder().encode(base64));
-  return getBase64EncodedWireTransaction(await signTransaction([signer.keyPair], decoded));
+  const decoded = getTransactionDecoder().decode(
+    getBase64Encoder().encode(base64),
+  );
+  return getBase64EncodedWireTransaction(
+    await signTransaction([signer.keyPair], decoded),
+  );
 }
 
 /** POST to a deployed site's interact route and return status plus parsed body. */
@@ -88,4 +103,41 @@ export async function until(check, { tries = 30, everyMs = 2000 } = {}) {
     await new Promise((r) => setTimeout(r, everyMs));
   }
   return null;
+}
+
+/** POST to a deployed site's sponsorship route as the studio: the heartbeat the real one sends. */
+export async function studioHeartbeat(
+  site,
+  token,
+  capabilities = { message: true, spotlight: true, cap: false },
+) {
+  const r = await fetch(`${site}/api/sponsorship`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-studio-token': token },
+    body: JSON.stringify({ action: 'heartbeat', capabilities }),
+  });
+  return { status: r.status, body: await r.json().catch(() => ({})) };
+}
+
+/**
+ * Keep the producer lease warm without running a show. The first refusal is fatal, because
+ * a wrong token would otherwise fail quietly every twenty seconds while the operator waits
+ * for a LIVE that never comes. Returns a function that lets go.
+ */
+export async function holdAir(
+  site,
+  token,
+  { everyMs = 20_000, onRefused = () => {} } = {},
+) {
+  const first = await studioHeartbeat(site, token);
+  if (first.status !== 200)
+    throw Error(
+      `${site} refused the studio token: ${first.status} ${JSON.stringify(first.body)}`,
+    );
+  const timer = setInterval(() => {
+    void studioHeartbeat(site, token).then((r) => {
+      if (r.status !== 200) onRefused(r.status);
+    });
+  }, everyMs);
+  return () => clearInterval(timer);
 }

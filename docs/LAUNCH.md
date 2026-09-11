@@ -260,11 +260,24 @@ Sponsorship quotes require a live producer heartbeat and answer 409 `OFFAIR` wit
 To buy by hand from a browser wallet, hold the air instead of running the whole show:
 
 ```sh
-SITE=... STUDIO_TOKEN=... node scripts/sponsorpay.mjs --hold
+SITE=... STUDIO_TOKEN=... node scripts/sponsorpay.mjs --hold      # LIVE, checkout open, no picture
+SITE=... STUDIO_TOKEN=... node scripts/rehearsal.mjs              # the same, plus a picture
 ```
 
-That sends the same heartbeat the studio sends and nothing else, so the site reports LIVE
-and checkout opens. A studio genuinely on air keeps its lease and the harness is refused. Only SOL is payable on devnet: USDC needs a
+Both send the heartbeat the studio sends and nothing else, so the site reports LIVE and
+checkout opens; a studio genuinely on air keeps its lease and the harness is refused.
+`rehearsal.mjs` also loops the hosts' idle footage from `public/continuity` into the live
+input named by `AIR_RTMP_INPUT` (make one with `node scripts/stream.mjs create rehearsal`;
+the devnet worker's `STREAM_EMBED_URL` should point at that same input, never the show's).
+It refuses the show's own input and any input with simulcast outputs. Nothing is generated.
+
+A picture only arrives if Cloudflare Stream accepts the ingest. On 2026-09-11 every ingest
+on this account (RTMPS, RTMP, SRT, four inputs, recording on or off, a real clip unmodified)
+was accepted at `publish` and dropped a second later, no live input had ever produced a
+recording, and `stream/storage-usage` reported a storage limit of 0 minutes. That is the
+shape of `ERR_MISSING_SUBSCRIPTION` / `ERR_STORAGE_QUOTA_EXHAUSTED` in Cloudflare's live
+input error codes: check the Stream subscription in the dashboard, and read the exact code
+under Stream → Live Inputs → the input → events. Only SOL is payable on devnet: USDC needs a
 devnet mint and a treasury token account, and the test token has no price anywhere, so both
 report themselves unavailable with a reason.
 
