@@ -92,8 +92,25 @@ export function sponsoredWriterSystem() {
 const sponsorSizes: PlannedTurn['size'][] = ['run', 'normal', 'normal', 'beat'];
 
 /** Four alternating turns, opening with whoever did not speak last. */
-export function sponsorTurnPlan(prev?: Speaker): PlannedTurn[] {
-  const opener: Speaker = prev === 'host' ? 'guest' : 'host';
+export function sponsorTurnPlan(
+  prev?: Speaker,
+  brief?: Pick<SponsorBrief, 'product' | 'mention' | 'wearingHost'>,
+): PlannedTurn[] {
+  // A cap introduction opens on the host NOT wearing it: turn 1 already carries the
+  // disclosure, the buyer and the project, and adding the cap ran it past the word cap on
+  // devnet. The wearer mentions his cap in turn 2, on his first cut, where the cap is seen.
+  // Holding the floor for a second turn in a row is within the show's run limit.
+  const wearer = (Object.keys(cast) as Speaker[]).find(
+    (speaker) => cast[speaker].name === brief?.wearingHost,
+  );
+  const opener: Speaker =
+    brief?.product === 'cap' && brief.mention !== 'callback' && wearer
+      ? wearer === 'host'
+        ? 'guest'
+        : 'host'
+      : prev === 'host'
+        ? 'guest'
+        : 'host';
   const other: Speaker = opener === 'host' ? 'guest' : 'host';
   return sponsorSizes.map((size, i) => ({
     speaker: i % 2 ? other : opener,
@@ -650,9 +667,9 @@ export function judgePrompt(
       (line, i) =>
         `${i + 1}. ${cast[line.speaker]?.name ?? line.speaker}: ${JSON.stringify(line.text)}`,
     ),
-    'TASK 1. List only statements that assert, as fact, something about the sponsor, its product, its team, or any real company, token, project or person, that the advertiser text does not support: launches, products, features, materials, games, partners, users, numbers, dates, history, posts, news or rumours. Never list what a host says about himself (what he does, owns, wears or feels, including the cap he is wearing and how it feels), a question, a joke, an opinion, a hypothetical, a paraphrase of the advertiser text, or the paid disclosure and thanks, even when it mentions the sponsor. When unsure, do not list it. Quote the exact words from the turn.',
+    'TASK 1. List only statements that assert, as fact, something about the sponsor, its product, its team, or any real company, token, project or person, that the advertiser text does not support: launches, products, features, materials, games, partners, users, numbers, dates, history, posts, news or rumours. Never list what a host says about himself (what he does, owns, wears or feels, including the cap he is wearing and how it feels), a question, a joke, an opinion, a maxim or verdict (such as "Discipline follows" or "This is the way"), praise or judgement of the sponsor by a host, including what he says it understands, knows, gets, respects or believes (such as "Frog Labs understands conviction"), a general remark about the world or about the habits of the hosts, a hypothetical, a paraphrase of the advertiser text, or the paid disclosure and thanks, even when it mentions the sponsor. When unsure, do not list it. Quote the exact words from the turn.',
     project
-      ? `TASK 2. List every turn that is not about ${JSON.stringify(project)}.`
+      ? `TASK 2. List a turn only if it has left ${JSON.stringify(project)} entirely: it talks about something with no connection to ${JSON.stringify(project)}, its product, its pitch or the cap. A turn that riffs on the pitch, reacts to it, or jokes about a host's own life in its terms is on topic. When unsure, do not list it.`
       : 'TASK 2. This is a message placement: return an empty offTopicTurns list.',
     'Return one JSON object shaped {"unsupported":[{"turn":<turn number>,"quote":"<exact words from that turn>"}],"offTopicTurns":[<turn numbers>]}. When nothing qualifies, return {"unsupported":[],"offTopicTurns":[]}.',
   ].join('\n');
@@ -830,15 +847,16 @@ export async function verifySponsoredDialogue(
     );
   });
   const project = placed(brief) ? brief.project! : undefined;
+  const drifted = verdict.offTopicTurns.filter((turn) => turn <= lines.length);
   const judged = [
     ...found.map(
       (item) =>
         `Turn ${item.turn}: "${item.quote}" is not supported by the advertiser text.`,
     ),
-    ...(project
-      ? verdict.offTopicTurns
-          .filter((turn) => turn <= lines.length)
-          .map((turn) => `Turn ${turn} is not about ${project}.`)
+    // One turn that wanders is a conversation; the deterministic check has already made
+    // both hosts name the sponsor. Only an exchange that drifts, two turns or more, is sent back.
+    ...(project && drifted.length >= 2
+      ? drifted.map((turn) => `Turn ${turn} is not about ${project}.`)
       : []),
   ];
   return { ok: !judged.length, problems: judged, judged: true };

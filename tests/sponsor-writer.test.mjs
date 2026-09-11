@@ -911,7 +911,8 @@ void test('the judge sees the advertiser text and the dialogue as data', () => {
   // talking about himself and his cap is never a claim about the sponsor.
   assert.match(prompt, /Never list what a host says about himself/);
   assert.match(prompt, /When unsure, do not list it/);
-  assert.match(prompt, /every turn that is not about "Elixir Games"/);
+  assert.match(prompt, /only if it has left "Elixir Games" entirely/);
+  assert.match(prompt, /a maxim or verdict/);
   const read = W.judgePrompt(answered, message).prompt;
   assert.match(read, /empty offTopicTurns/);
   assert.doesNotMatch(read, /PREVIOUS LINE/);
@@ -1026,9 +1027,18 @@ void test('the judge can reject what Gate A missed, and names the quote', async 
   assert.ok(asked.prompt.includes('Volatility is a test of character.'));
   assert.equal(result.ok, false);
   assert.equal(result.judged, true);
+  // One wandering turn is conversation; the invented studio is what sends it back.
   assert.deepEqual(result.problems, [
     'Turn 2: "run by the studio behind my favorite racing game" is not supported by the advertiser text.',
+  ]);
+  // Two turns off the sponsor is a drift, and that is sent back too.
+  const drift = await W.verifySponsoredDialogue(subtle, elixir, {
+    ask: async () => '{"unsupported":[],"offTopicTurns":[3,4]}',
+  });
+  assert.equal(drift.ok, false);
+  assert.deepEqual(drift.problems, [
     'Turn 3 is not about Elixir Games.',
+    'Turn 4 is not about Elixir Games.',
   ]);
   // Trimmed with an ellipsis, the quote still names words that were said.
   const trimmed = await W.verifySponsoredDialogue(subtle, elixir, {
@@ -1252,6 +1262,52 @@ void test('rejections are remembered per order: the last three, for fifteen minu
   assert.deepEqual(W.recentRejections('order-1', 302), ['problem 1', 'again']);
   W.clearRejections();
   assert.deepEqual(W.recentRejections('order-1', 302), []);
+});
+
+void test('a cap introduction opens on the host not wearing it, and the wearer mentions the cap', () => {
+  const cap = {
+    orderId: 'o',
+    product: 'cap',
+    buyer: 'an anonymous viewer',
+    project: 'Frog Labs',
+    advertiserClaim: 'Frog Labs makes caps for frogs who touch grass.',
+    tone: 'intro',
+    wearingHost: 'Pepe',
+    mention: 'intro',
+  };
+  for (const prev of [undefined, 'host', 'guest']) {
+    const plan = W.sponsorTurnPlan(prev, cap);
+    assert.deepEqual(
+      plan.map((t) => t.speaker),
+      ['guest', 'host', 'guest', 'host'],
+      `after ${prev}`,
+    );
+    assert.ok(
+      S.runsOk(
+        plan.map((t) => t.speaker),
+        prev,
+      ),
+      `runs after ${prev}`,
+    );
+  }
+  const request = W.sponsoredWriterRequest(
+    cap,
+    W.sponsorTurnPlan('guest', cap),
+  );
+  // The cap is Pepe's to mention, on his first turn, which is turn 2.
+  assert.match(
+    request,
+    /2\. Pepe[^\n]*Mention the Frog Labs cap you are wearing/,
+  );
+  // A callback and a spotlight keep the plain alternation.
+  assert.equal(
+    W.sponsorTurnPlan('guest', { ...cap, mention: 'callback' })[0].speaker,
+    'host',
+  );
+  assert.equal(
+    W.sponsorTurnPlan('host', { product: 'spotlight' })[0].speaker,
+    'guest',
+  );
 });
 
 void test('a host may ask about what the brief left out; a question never excuses a claim', () => {

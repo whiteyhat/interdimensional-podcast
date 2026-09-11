@@ -381,7 +381,7 @@ export async function POST(request: Request) {
       const writer = sponsor
         ? {
             system: sponsoredWriterSystem(),
-            prompt: `${transcript}\n${sponsoredWriterRequest(sponsor, sponsorTurnPlan(prevSpeaker), { avoid: recentRejections(sponsor.orderId) })}`,
+            prompt: `${transcript}\n${sponsoredWriterRequest(sponsor, sponsorTurnPlan(prevSpeaker, sponsor), { avoid: recentRejections(sponsor.orderId) })}`,
             // Held to the advertiser's words, it trades a little range for fidelity.
             temperature: 0.6,
           }
