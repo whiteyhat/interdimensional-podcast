@@ -5,7 +5,9 @@
 // render finishes or fails inside one deadline that sits below the site's own timeout. A busy
 // desk queues work rather than refusing it. The same take asked for twice is rendered once. A
 // renderer that outlives its deadline, or every caller waiting on it, is killed together with
-// the ffmpeg it started, and its scratch directory goes with it.
+// the ffmpeg it started, and its scratch directory goes with it. A desk being replaced stops
+// taking work but finishes the renders it is running, because each one is a take already paid
+// for.
 import http from 'node:http';
 import {
   mkdir,
@@ -32,6 +34,11 @@ const TEMPLATE_VERSION = 'caps-v1';
 const MAX_UPLOAD = 4 * 1024 * 1024,
   MAX_VIDEO = 40 * 1024 * 1024,
   MAX_RENDER_BODY = 8 * 1024 * 1024;
+// The heaviest normalized mark /render accepts. /preview holds cap artwork to this same number:
+// normalizing can make a file heavier than its upload (a noisy WebP of 1.8 MB comes out as 4.2 MB
+// of PNG), and a mark /render refuses can never be rendered, however often the studio asks. The
+// buyer has to hear that at upload, before paying.
+export const MAX_LOGO = 4 * 1024 * 1024;
 const templates = { host: 'pepe-cap-v1', guest: 'gigachad-cap-v1' };
 const HEX64 = /^[a-f0-9]{64}$/;
 // The show airs every shot 1080 lines tall, scaled by fal from the model's native frame
@@ -49,16 +56,33 @@ const DEFAULTS = {
   concurrency: 2,
   queue: 6,
   // A queued take that could only start with less than this left would die at the deadline
-  // anyway. Saying BUSY while the site still has time to retry is the kinder failure.
+  // anyway, so it is answered BUSY instead, 65 seconds after it arrived. The site does not
+  // retry that answer: its own clock then has 40 seconds at most, below its retry floor. It
+  // reports a desk fault instead, never a verdict on the take, so no new take is bought.
+  // Expiring sooner to leave the site a retry would not help the take: a new request would
+  // rejoin this same queue at the back, with less time than it had waiting at the front.
   minRunMs: 30_000,
   previewMs: 30_000,
   previewConcurrency: 2,
   cacheTtlMs: 10 * 60_000,
   cacheMax: 32,
-  toolTtlMs: 30_000,
+  // A failed boot check is run again after this long, until it passes. One that passed is not
+  // run again: the tools and the decoder cannot change inside a running container.
+  toolRetryMs: 10_000,
+  decoderRetryMs: 60_000,
+  // Railway stops a replaced deployment with SIGTERM and kills it 120 seconds later
+  // (drainingSeconds in broadcast/railway.sponsor-media.json). A running take ends by its own
+  // deadline, at most 95 seconds after the signal. The drain waits for that and 5 seconds more,
+  // for the renderer to be reaped and the answer written.
+  drainMs: 100_000,
   // The height a verified composite is scaled to before it leaves; 0 sends it as rendered.
   broadcastHeight: BROADCAST_HEIGHT,
 };
+/** The desk's clock, for anything that has to agree with it. */
+export const MEDIA_DEFAULTS = Object.freeze({ ...DEFAULTS });
+// The process stops itself this long after SIGTERM whatever is left, so it never meets
+// Railway's kill mid-answer. Nothing should be left: every take has met its deadline by then.
+export const SHUTDOWN_MS = 105_000;
 
 class MediaError extends Error {
   constructor(status, code, message, extra = {}) {
@@ -147,7 +171,7 @@ function imageKind(bytes) {
 function decodeLogo(value) {
   if (typeof value !== 'string' || !value)
     throw new MediaError(400, 'LOGO', 'A logo is required.');
-  if (value.length > Math.ceil(MAX_UPLOAD / 3) * 4)
+  if (value.length > Math.ceil(MAX_LOGO / 3) * 4)
     throw new MediaError(413, 'TOO_LARGE', 'The logo is too large.');
   if (value.length % 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value))
     throw new MediaError(400, 'LOGO', 'The logo is not valid base64.');
@@ -531,6 +555,52 @@ function spawnGroup(command, args, signal, onSpawn) {
   });
 }
 
+// What a code from scripts/wearable-render.py means for the caller, because the site acts on
+// the status. A 422 is a verdict on the take, and the studio answers it by paying for a brand
+// new generation, which only helps when the footage was the problem: the cap could not be
+// followed in every frame (tracking and cloth coverage both report TRACK_LOST), the tracked
+// print left the frame, or the clip has no picture, no audio, or timing outside what was
+// qualified. A verdict on the buyer's artwork is the buyer's answer at /preview. At /render
+// that artwork already passed /preview, so a new take cannot fix it: 409, the order's asset.
+// Everything else is this machine failing, not the take: a template or mask that no longer
+// matches its hash, ffprobe or the encoder failing (MEDIA_FAILED), the composite losing the
+// take's timing or audio in this machine's encoder (MEDIA_CHANGED), or a Python exception,
+// which the renderer also reports as MEDIA_FAILED. So is any code not listed here, because a
+// guess that a fault is a verdict costs money and a guess the other way costs a retry. Those
+// are 503: the site reports a desk fault, no new take is bought, and this one can be retried.
+const TAKE_VERDICTS = new Set([
+  'TRACK_LOST',
+  'LOGO_OUTSIDE_PANEL',
+  'INVALID_VIDEO',
+  'INVALID_AUDIO',
+  'UNSUPPORTED_TIMING',
+]);
+const ARTWORK_VERDICTS = new Set([
+  'INVALID_IMAGE',
+  'EMPTY_IMAGE',
+  'LOGO_TOO_THIN',
+  'LOGO_OUTSIDE_PANEL',
+  'INVALID_PLACEMENT',
+]);
+function verdictStatus(mode, code) {
+  if (mode === 'render') {
+    if (TAKE_VERDICTS.has(code)) return 422;
+    if (ARTWORK_VERDICTS.has(code)) return 409;
+    return null;
+  }
+  return ARTWORK_VERDICTS.has(code) ? 422 : null;
+}
+
+// Resolves once every promise has settled, or after `ms`, whichever comes first.
+async function settledWithin(promises, ms) {
+  let timer;
+  await Promise.race([
+    Promise.allSettled(promises),
+    new Promise((done) => (timer = setTimeout(done, ms))),
+  ]);
+  clearTimeout(timer);
+}
+
 /**
  * One media desk: its queue, in-flight takes, result cache and the state it measured at boot.
  * The HTTP server and the tests both drive it through `handle`.
@@ -547,88 +617,139 @@ export function createMediaService(options = {}) {
   const inflight = new Map(),
     queue = [],
     active = new Set(),
-    runs = new Set();
+    runs = new Set(),
+    previewing = new Set();
   let previews = 0,
     closing = false,
     expectedRunMs = cfg.minRunMs;
 
+  // What this machine can do, measured in the background and read by /health from memory. A
+  // render saturates the CPU, and a health probe that ran Python and ffmpeg of its own became
+  // slow exactly when the desk was busy. The tools and the decoder cannot change inside a
+  // running container, so each is measured at boot and measured again only while it fails: a
+  // first import starved of CPU at boot then heals by itself instead of at the next restart.
+  const machine = {
+    tools: {
+      python: null,
+      cv2: null,
+      numpy: null,
+      ffmpeg: null,
+      ffprobe: null,
+      node: process.versions.node,
+    },
+    toolsOk: false,
+    decoder: { mode: null },
+    templates: null,
+    version: null,
+    booted: false,
+  };
+  const checks = { tools: 0, decoder: 0 },
+    retries = new Set();
+  function again(check, ms) {
+    if (closing) return;
+    const timer = setTimeout(() => {
+      retries.delete(timer);
+      void check();
+    }, ms);
+    timer.unref();
+    retries.add(timer);
+  }
+
   // Hashing the renderer and ~2.7 MB of templates is boot work, not something to repeat for
   // every health probe. The files cannot change inside a running container.
-  const qualification = qualifiedTemplates(cfg).catch(() =>
-    Object.values(templates).map((id) => ({
-      id,
-      qualified: false,
-      sha256: null,
-    })),
-  );
-  const version = serviceVersion();
+  const qualification = qualifiedTemplates(cfg)
+    .catch(() =>
+      Object.values(templates).map((id) => ({
+        id,
+        qualified: false,
+        sha256: null,
+      })),
+    )
+    .then((states) => (machine.templates = states));
+  const version = serviceVersion().then((v) => (machine.version = v));
   const prepared = mkdir(cacheDir, { recursive: true }).then(
     () => sweep(),
     () => {},
   );
-  // Measured once, like the hashes. Tests that swap in a stand-in renderer name the mode.
-  const decoding = prepared
-    .then(() =>
-      cfg.decoder !== undefined
-        ? { mode: cfg.decoder }
-        : calibrateDecoder(cfg.python || 'python3', workdir),
-    )
-    .then((found) => {
-      log({
-        level: found.mode ? 'info' : 'warn',
-        event: 'decoder',
-        ...found,
-      });
-      return found;
-    });
 
-  let probe = null,
-    probes = 0;
-  function tools() {
-    const now = Date.now();
-    // A failed probe is retried sooner, so a slow first import does not hold readiness back.
-    if (!probe || now - probe.at > (probe.ok ? cfg.toolTtlMs : 5_000)) {
-      probes++;
-      const entry = { at: now, ok: false };
-      entry.value = probeTools(cfg.python || 'python3').then((found) => {
-        entry.ok = !!(
-          found.python &&
-          found.cv2 &&
-          found.numpy &&
-          found.ffmpeg &&
-          found.ffprobe
-        );
-        return found;
-      });
-      probe = entry;
-    }
-    return probe;
+  // Tests measure a stand-in machine through `probeTools` and `calibrate`, or name the decoder
+  // outright when their stand-in renderer has no OpenCV to measure.
+  const python = cfg.python || 'python3';
+  const measureTools = cfg.probeTools || (() => probeTools(python));
+  const measureDecoder =
+    cfg.decoder !== undefined
+      ? async () => ({ mode: cfg.decoder })
+      : cfg.calibrate || (() => calibrateDecoder(python, workdir));
+  async function checkTools() {
+    checks.tools++;
+    const found = await Promise.resolve()
+      .then(measureTools)
+      .catch(() => ({}));
+    machine.tools = { ...machine.tools, ...found };
+    machine.toolsOk = !!(
+      found.python &&
+      found.cv2 &&
+      found.numpy &&
+      found.ffmpeg &&
+      found.ffprobe
+    );
+    if (!machine.toolsOk) again(checkTools, cfg.toolRetryMs);
   }
-  tools();
+  async function checkDecoder() {
+    checks.decoder++;
+    const found = await Promise.resolve()
+      .then(measureDecoder)
+      .catch((error) => ({
+        mode: null,
+        error: String(error?.message || error).slice(0, 200),
+      }));
+    machine.decoder = found;
+    log({
+      level: found.mode ? 'info' : 'warn',
+      event: 'decoder',
+      attempt: checks.decoder,
+      ...found,
+    });
+    // A mode named by the caller is not a measurement, so there is nothing to measure again.
+    if (!found.mode && cfg.decoder === undefined)
+      again(checkDecoder, cfg.decoderRetryMs);
+  }
+  const toolsChecked = checkTools();
+  const decoding = prepared.then(checkDecoder);
+  const booted = Promise.all([
+    prepared,
+    qualification,
+    version,
+    toolsChecked,
+    decoding,
+  ]).then(() => {
+    machine.booted = true;
+  });
 
-  async function health() {
-    const entry = tools();
-    const [states, found, running, decode] = await Promise.all([
-      qualification,
-      entry.value,
-      version,
-      decoding,
-    ]);
+  function health() {
+    // A desk that cannot decode the way the caps were qualified cannot sell the one thing it is
+    // for, so it is not ready: Railway then keeps the deployment it has instead of switching to
+    // this one, and the site takes the cap off sale.
     const ready =
       !closing &&
       typeof cfg.token === 'string' &&
       cfg.token.length >= 24 &&
-      entry.ok;
+      machine.toolsOk &&
+      !!machine.decoder.mode;
+    const states = machine.templates ?? [];
     return {
       ready,
       // No refunds means no selling a cap this desk cannot deliver: the qualification holds
       // only where the renderer sees the pixels it was qualified on.
-      capQualified: ready && !!decode.mode && states.every((t) => t.qualified),
+      capQualified:
+        ready && states.length > 0 && states.every((t) => t.qualified),
       templateVersion: TEMPLATE_VERSION,
       templates: states,
-      tools: found,
-      decoder: decode.mode,
-      version: running,
+      tools: machine.tools,
+      decoder: machine.decoder.mode,
+      version: machine.version,
+      starting: !machine.booted,
+      draining: closing,
     };
   }
 
@@ -729,8 +850,11 @@ export function createMediaService(options = {}) {
         'DEADLINE',
         'The wardrobe take ran out of time.',
       );
-    // A restart hands the take to the replacement desk: BUSY is the answer the site retries.
+    // A restart hands a take that has not started to the replacement desk: BUSY, which the
+    // site retries while 40 seconds of its budget remain.
     if (reason === 'shutdown') return busy(2_000);
+    // Too late to start. Still BUSY, but the site has too little time left to retry it (see
+    // minRunMs).
     if (reason === 'expired') return busy();
     return new MediaError(503, 'CANCELLED', 'The wardrobe take was cancelled.');
   }
@@ -793,6 +917,8 @@ export function createMediaService(options = {}) {
     const deadlineAt = arrivedAt + cfg.deadlineMs,
       startBy = deadlineAt - cfg.minRunMs,
       now = Date.now();
+    // A request that was still uploading when the drain began starts nothing on this desk.
+    if (closing) throw busy(2_000);
     const free = active.size < cfg.concurrency && !queue.length;
     if (!free && (queue.length >= cfg.queue || now >= startBy)) throw busy();
     const job = {
@@ -911,23 +1037,29 @@ export function createMediaService(options = {}) {
       /* No report: the renderer died before it could explain itself. */
     }
     if (outcome.code === 0 && result) return result;
-    if (outcome.code && result && result.accepted === false)
+    const code =
+      outcome.code &&
+      result?.accepted === false &&
+      typeof result.code === 'string'
+        ? result.code
+        : null;
+    const status = code && verdictStatus(args[0], code);
+    if (status)
       throw new MediaError(
-        422,
-        String(result.code || 'INVALID_WEARABLE'),
-        // An encoder failure carries ffmpeg's stderr and scratch paths; the buyer needs neither.
-        result.code === 'MEDIA_FAILED'
-          ? 'The wardrobe take could not be encoded.'
-          : String(
-              result.error || result.code || 'Artwork could not be verified.',
-            ).slice(0, 300),
+        status,
+        code,
+        String(result.error || code).slice(0, 300),
       );
+    // A fault's own words carry ffmpeg's stderr, scratch paths or a Python traceback. They go
+    // to the log for whoever fixes the machine; the caller hears only that it failed.
     log({
       level: 'error',
       event: 'renderer',
       mode: args[0],
       exit: outcome.code,
       signal: outcome.signal,
+      code: code || undefined,
+      error: code ? String(result.error || '').slice(-600) : undefined,
       stderr: outcome.stderr.slice(-600) || undefined,
     });
     throw new MediaError(
@@ -940,7 +1072,7 @@ export function createMediaService(options = {}) {
   // Hand the renderer the take as the qualified decoder would see it: unchanged where OpenCV
   // already decodes that way, otherwise converted first.
   async function decodable(video, dir, signal) {
-    if ((await decoding).mode !== 'convert') return video;
+    if (machine.decoder.mode !== 'convert') return video;
     const target = join(dir, 'decoded.mov');
     const outcome = await spawnGroup(
       'ffmpeg',
@@ -949,18 +1081,20 @@ export function createMediaService(options = {}) {
       (pid) => cfg.onSpawn?.({ pid, mode: 'convert', dir }),
     );
     if (signal.aborted) throw stopped(String(signal.reason));
+    // The take has not been looked at yet: this is this machine's ffmpeg failing, so it is not
+    // a verdict on the footage, and must not send the studio off to buy a new one.
     if (outcome.code !== 0) {
       log({
-        level: 'warn',
+        level: 'error',
         event: 'convert',
         exit: outcome.code,
         signal: outcome.signal,
         stderr: outcome.stderr.slice(-600) || undefined,
       });
       throw new MediaError(
-        422,
-        'INVALID_VIDEO',
-        'The rendered take could not be decoded.',
+        503,
+        'CONVERT',
+        'The wardrobe desk could not decode this take.',
       );
     }
     return target;
@@ -1017,7 +1151,7 @@ export function createMediaService(options = {}) {
         download(job.videoUrl, video, MAX_VIDEO, fetching, signal),
         job.logo
           ? writeFile(logo, job.logo)
-          : download(job.logoUrl, logo, MAX_UPLOAD, fetching, signal),
+          : download(job.logoUrl, logo, MAX_LOGO, fetching, signal),
       ]).catch((error) => {
         halt.abort();
         throw error;
@@ -1155,7 +1289,10 @@ export function createMediaService(options = {}) {
         'NOT_QUALIFIED',
         'This cap has not passed broadcast qualification.',
       );
-    if (!(await decoding).mode)
+    // The first measurement is waited for; after that, what the desk knows now. A failed one is
+    // being measured again in the background, and a take arriving meanwhile is refused.
+    await decoding;
+    if (!machine.decoder.mode)
       throw new MediaError(
         409,
         'NOT_QUALIFIED',
@@ -1166,7 +1303,7 @@ export function createMediaService(options = {}) {
     if (payload.logo !== undefined) {
       // The site hands over the stored bytes; they must be exactly what the buyer approved.
       logo = decodeLogo(payload.logo);
-      if (logo.length > MAX_UPLOAD)
+      if (logo.length > MAX_LOGO)
         throw new MediaError(413, 'TOO_LARGE', 'The logo is too large.');
       if (hash(logo) !== payload.logoSha256)
         throw new MediaError(409, 'LOGO_HASH', 'Artwork hash changed.');
@@ -1285,6 +1422,15 @@ export function createMediaService(options = {}) {
         signal,
         dir,
       );
+      const logo = await readFile(normalized);
+      // A cap is rendered from exactly this mark, and /render takes no more than MAX_LOGO of it.
+      // A spotlight logo is only ever shown, never rendered, so it is not held to that.
+      if (kind === 'cap' && logo.length > MAX_LOGO)
+        throw new MediaError(
+          422,
+          'LOGO_TOO_LARGE',
+          `This artwork is too detailed to print on a cap; use a simpler PNG under ${MAX_LOGO / 1024 / 1024} MB.`,
+        );
       let template = null;
       if (kind === 'cap') {
         const manifest = `public/wearables/${templates[target]}.json`;
@@ -1306,8 +1452,7 @@ export function createMediaService(options = {}) {
           dir,
         );
       }
-      const logo = await readFile(normalized),
-        preview = kind === 'cap' ? await readFile(output) : logo;
+      const preview = kind === 'cap' ? await readFile(output) : logo;
       const qualified =
         template &&
         (await qualification).find((t) => t.id === template.id)?.qualified;
@@ -1342,7 +1487,7 @@ export function createMediaService(options = {}) {
       url = new URL(request.url);
     try {
       if (request.method === 'GET' && url.pathname === '/health') {
-        const body = await health();
+        const body = health();
         return reply(body, body.ready ? 200 : 503);
       }
       if (!authorized(request, cfg.token))
@@ -1355,10 +1500,17 @@ export function createMediaService(options = {}) {
         request.method === 'POST' &&
         (url.pathname === '/preview' || url.pathname === '/render');
       if (!known) throw new MediaError(404, 'NOT_FOUND', 'Unknown operation.');
+      // A draining desk takes nothing new. BUSY is what the site retries, and by then Railway
+      // routes the retry to the replacement.
       if (closing) throw busy(2_000);
-      return url.pathname === '/render'
-        ? await handleRender(request, url, meta, arrivedAt)
-        : await handlePreview(request, url);
+      if (url.pathname === '/render')
+        return await handleRender(request, url, meta, arrivedAt);
+      // A preview in progress is a buyer choosing artwork; a drain lets it finish too.
+      const work = handlePreview(request, url);
+      previewing.add(work);
+      const done = () => previewing.delete(work);
+      void work.then(done, done);
+      return await work;
     } catch (error) {
       let known = error;
       // A caller that hung up mid-upload is not an internal fault.
@@ -1382,27 +1534,40 @@ export function createMediaService(options = {}) {
     }
   }
 
+  /**
+   * Stop taking work and finish what is running. A queued take has cost nothing yet, so it is
+   * answered BUSY at once and the site sends it to the replacement desk. A running take is a
+   * paid take: it finishes, by its own deadline at the latest, so the drain ends when the last
+   * one does. `drainMs` only bounds a deadline that never fired.
+   */
   async function close() {
-    closing = true;
-    clearInterval(sweeper);
-    for (const job of [...queue, ...active]) abort(job, 'shutdown');
-    await Promise.race([
-      Promise.allSettled(runs),
-      new Promise((done) => setTimeout(done, 5_000).unref()),
-    ]);
+    if (!closing) {
+      closing = true;
+      clearInterval(sweeper);
+      for (const timer of retries) clearTimeout(timer);
+      retries.clear();
+      // A copy, because settling a job takes it out of the queue.
+      for (const job of queue.slice()) abort(job, 'shutdown');
+    }
+    await settledWithin([...runs, ...previewing], cfg.drainMs);
+    for (const job of Array.from(active)) abort(job, 'shutdown');
+    await settledWithin([...runs], 2_000);
   }
 
   return {
     handle,
     health,
     close,
-    booted: prepared,
+    // Scratch swept, templates hashed, and the tools and decoder measured once.
+    booted,
     status: () => ({
       running: active.size,
       queued: queue.length,
       inflight: inflight.size,
       previews,
-      toolProbes: probes,
+      toolProbes: checks.tools,
+      decoderProbes: checks.decoder,
+      draining: closing,
     }),
   };
 }
@@ -1498,9 +1663,14 @@ export function startMediaServer(
 ) {
   const service = createMediaService(options);
   const log = typeof options.log === 'function' ? options.log : () => {};
-  const server = http.createServer(
-    (req, res) => void serve(service, log, req, res),
-  );
+  // Every request until its answer has left, or its caller has gone.
+  const open = new Set();
+  const server = http.createServer((req, res) => {
+    const answered = new Promise((done) => res.once('close', done));
+    open.add(answered);
+    void answered.then(() => open.delete(answered));
+    void serve(service, log, req, res);
+  });
   // An 8 MiB body from the site arrives in seconds; a client that trickles one is not the site.
   server.requestTimeout = 60_000;
   server.headersTimeout = 20_000;
@@ -1514,12 +1684,19 @@ export function startMediaServer(
         service,
         port: bound,
         url: `http://${host.includes(':') ? `[${host}]` : host}:${bound}`,
+        /**
+         * Drain, then stop listening. The desk keeps answering while its running takes finish:
+         * /health says 503 and new work hears BUSY, instead of a refused connection. BUSY comes
+         * before the request body is read, so connections stay open until the end: closing one
+         * right after that answer cut off callers still sending, who then heard a reset.
+         */
         async close() {
           await service.close();
+          // The last takes have settled; give their answers a moment to leave.
+          await settledWithin([...open], 2_000);
           await new Promise((done) => {
             server.close(() => done());
-            server.closeIdleConnections();
-            setTimeout(() => server.closeAllConnections(), 2_000).unref();
+            server.closeAllConnections();
           });
         },
       });
@@ -1545,26 +1722,36 @@ if (
   }
   const media = await startMediaServer(config, { port, host });
   log({ event: 'listening', port: media.port, host });
-  void media.service.health().then((state) =>
+  void media.service.booted.then(() => {
+    const state = media.service.health();
     log({
       level: state.ready ? 'info' : 'warn',
       event: 'boot',
       ready: state.ready,
       capQualified: state.capQualified,
+      decoder: state.decoder,
       version: state.version,
       tools: state.tools,
       concurrency: config.concurrency,
       queue: config.queue,
       legacyLogoUrl: !!config.siteOrigin,
-    }),
-  );
+    });
+  });
+  // A line written just before exit can be lost on a pipe; wait for it to leave.
+  const flushed = () => new Promise((done) => process.stdout.write('', done));
   let stopping = false;
   const stop = async (signal) => {
     if (stopping) return;
     stopping = true;
-    log({ event: 'shutdown', signal });
-    setTimeout(() => process.exit(0), 8_000).unref();
+    const { running, queued } = media.service.status();
+    log({ event: 'shutdown', signal, running, queued });
+    setTimeout(() => {
+      log({ level: 'error', event: 'hard-stop', ...media.service.status() });
+      void flushed().then(() => process.exit(1));
+    }, SHUTDOWN_MS).unref();
     await media.close();
+    log({ event: 'stopped' });
+    await flushed();
     process.exit(0);
   };
   process.once('SIGTERM', () => void stop('SIGTERM'));

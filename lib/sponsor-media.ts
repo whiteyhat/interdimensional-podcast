@@ -13,8 +13,9 @@ const MAX_VIDEO = 40 * 1024 * 1024;
 // The media service refuses a logo over 4 MiB, and would do it with a status that reads here
 // as the desk failing, so the order would retry into a pause. Held to the same 4 MiB, such an
 // order stops at once on its artwork instead. 4 MiB grows to under 5.4 MiB as base64, inside
-// the service's 8 MiB /render body, and is more than a normalized mark can weigh anyway: the
-// normalizer holds it to 1024 pixels a side.
+// the service's 8 MiB /render body. A normalized mark can weigh more (noisy transparency at
+// 1024 pixels a side reached 4.2 MB), which is why /preview refuses such artwork at upload,
+// before anyone pays for it; this check only catches a design stored before that rule.
 const MAX_LOGO = 4 * 1024 * 1024;
 // What the studio sends is an order id, a lease token and one fal URL: a few KB at most.
 const MAX_RENDER_REQUEST = 8 * 1024;

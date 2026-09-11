@@ -21,8 +21,11 @@ import http from 'node:http';
 import {
   createMediaService,
   handleMediaRequest,
+  MAX_LOGO,
+  MEDIA_DEFAULTS,
   qualifiedTemplates,
   renderKey,
+  SHUTDOWN_MS,
   startMediaServer,
 } from '../broadcast/sponsor-media.mjs';
 // The desk only fetches takes from fal.media. These tests serve takes from loopback instead,
@@ -43,10 +46,11 @@ const config = {
 // and inside the broadcast container, and absent on a stock CI runner, where the worker answers
 // 503 rather than doing the work. Ask the worker itself instead of guessing, and skip rather
 // than fail: a missing vision runtime is not a broken build, but silently dropping the checks
-// would hide one.
-const health = await (
-  await handleMediaRequest(new Request('http://worker/health'), config)
-).json();
+// would hide one. /health answers from what the worker measured at boot, so wait for that.
+const probe = createMediaService(config);
+await probe.booted;
+const health = probe.health();
+await probe.close();
 const needsRuntime = health.ready
   ? false
   : `no wearable vision runtime on ${config.python} (needs cv2 and numpy)`;
@@ -104,14 +108,16 @@ void test('qualification requires matching trial proof and a working runtime, no
         (t) => !t.qualified,
       ),
     );
-    const unavailable = await (
-      await handleMediaRequest(new Request('http://worker/health'), {
-        ...config,
-        python: '/missing/python',
-      })
-    ).json();
+    const missing = createMediaService({
+      ...config,
+      python: '/missing/python',
+    });
+    await missing.booted;
+    const unavailable = missing.health();
+    await missing.close();
     assert.equal(unavailable.ready, false);
     assert.equal(unavailable.capQualified, false);
+    assert.equal(unavailable.decoder, null);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -184,40 +190,66 @@ function take(bytes = Buffer.from(`take-${++takes}-${Date.now()}`)) {
 }
 
 // Stands in for scripts/wearable-render.py: waits, then writes an output and a report the way
-// the real one does, or hangs holding a child of its own, or fails in one of two ways.
+// the real one does for each of its three modes, or hangs holding a child of its own, or
+// crashes, or reports a code. The code (plan.codeFile) and the size of a normalized mark
+// (plan.sizeFile) are read from files at run time, so one desk can be made to answer many ways.
 async function fakeRenderer(name, plan = {}) {
   const path = join(scratch, `${name}.cjs`);
-  const source = [
-    '#!/usr/bin/env node',
-    "const fs = require('node:fs');",
-    "const { createHash } = require('node:crypto');",
-    "const { spawn } = require('node:child_process');",
-    `const plan = ${JSON.stringify(plan)};`,
-    'const argv = process.argv.slice(2);',
-    "if (argv[0] !== 'scripts/wearable-render.py') process.exit(3);",
-    'const arg = (name) => argv[argv.indexOf(name) + 1];',
-    'if (plan.hang) {',
-    "  const child = spawn('sleep', ['30'], { stdio: 'ignore' });",
-    '  fs.writeFileSync(plan.pids, JSON.stringify([process.pid, child.pid]));',
-    '  setInterval(() => {}, 1000);',
-    '} else',
-    '  setTimeout(() => {',
-    '    if (plan.crash) process.exit(1);',
-    '    if (plan.reject) {',
-    "      fs.writeFileSync(arg('--report'), JSON.stringify({ accepted: false, code: 'TRACK_LOST', error: 'The cap surface could not be verified.' }));",
-    '      process.exit(2);',
-    '    }',
-    "    const bytes = Buffer.concat([Buffer.from('fake-mp4:'), fs.readFileSync(arg('--video')), fs.readFileSync(arg('--asset'))]);",
-    "    fs.writeFileSync(arg('--output'), bytes);",
-    "    const outputSha256 = createHash('sha256').update(bytes).digest('hex');",
-    "    fs.writeFileSync(arg('--report'), JSON.stringify({ accepted: true, version: 1, frames: 10, fps: 10, durationMs: 1000, audioVerified: true, outputSha256, tracking: [{}] }));",
-    '  }, plan.delayMs || 0);',
-    '',
-  ].join('\n');
+  const source = `#!/usr/bin/env node
+const fs = require('node:fs');
+const { createHash } = require('node:crypto');
+const { spawn } = require('node:child_process');
+const plan = ${JSON.stringify(plan)};
+const argv = process.argv.slice(2);
+if (argv[0] !== 'scripts/wearable-render.py') process.exit(3);
+const mode = argv[1];
+const arg = (name) => argv[argv.indexOf(name) + 1];
+const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const report = (value) => fs.writeFileSync(arg('--report'), JSON.stringify(value));
+const told = (file) => (file && fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim() : '');
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+function finish() {
+  if (plan.crash) process.exit(1);
+  const code = plan.reject ? 'TRACK_LOST' : told(plan.codeFile);
+  if (code && (!plan.codeMode || plan.codeMode === mode)) {
+    report({ accepted: false, code, error: plan.error || 'The cap surface could not be verified.' });
+    process.exit(2);
+  }
+  if (mode === 'normalize') {
+    const size = Number(told(plan.sizeFile));
+    const bytes = size ? Buffer.concat([PNG, Buffer.alloc(size - PNG.length)]) : fs.readFileSync(arg('--asset'));
+    fs.writeFileSync(arg('--output'), bytes);
+    report({ accepted: true, sha256: sha(bytes) });
+    return;
+  }
+  if (mode === 'preview') {
+    const bytes = Buffer.concat([Buffer.from('cap:'), fs.readFileSync(arg('--asset'))]);
+    fs.writeFileSync(arg('--output'), bytes);
+    report({ accepted: true, sha256: sha(bytes) });
+    return;
+  }
+  const bytes = Buffer.concat([Buffer.from('fake-mp4:'), fs.readFileSync(arg('--video')), fs.readFileSync(arg('--asset'))]);
+  fs.writeFileSync(arg('--output'), bytes);
+  report({ accepted: true, version: 1, frames: 10, fps: 10, durationMs: 1000, audioVerified: true, outputSha256: sha(bytes), tracking: [{}] });
+}
+if (plan.hang) {
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  fs.writeFileSync(plan.pids, JSON.stringify([process.pid, child.pid]));
+  setInterval(() => {}, 1000);
+} else setTimeout(finish, plan.delayMs || 0);
+`;
   await writeFile(path, source);
   await chmod(path, 0o755);
   return path;
 }
+// What a machine with the vision runtime reports, for desks whose tools are stood in for.
+const TOOLS = {
+  python: '3.12.0',
+  cv2: '5.0.0',
+  numpy: '2.5.3',
+  ffmpeg: '7.1',
+  ffprobe: '7.1',
+};
 
 async function desk(t, options = {}) {
   const workdir = await mkdtemp(join(scratch, 'desk-'));
@@ -233,11 +265,15 @@ async function desk(t, options = {}) {
     videoOriginForTests: FAL,
     log: (line) => logs.push(line),
     onSpawn: (spawned) => spawns.push(spawned),
+    // A test's desk must not hold the run up for a minute and a half if a take outlives it.
+    drainMs: 3_000,
     // Nor does it write a real MP4 for ffmpeg to scale up for broadcast.
     ...(standIn ? { decoder: 'direct', broadcastHeight: 0 } : {}),
     ...options,
   });
   t.after(() => media.close());
+  // /health answers from what the desk measured at boot, so let it measure first.
+  await media.service.booted;
   return {
     ...media,
     workdir,
@@ -337,6 +373,8 @@ void test('the desk listens on the port Railway injects and says it is not ready
   const listening = lines.find((l) => l.event === 'listening');
   assert.equal(listening.port, port);
   assert.equal(listening.host, '0.0.0.0');
+  // /health answers from memory; the boot line says the measuring is done.
+  assert.ok(await waitFor('boot'), 'the desk never finished its boot checks');
   const response = await fetch(`http://127.0.0.1:${port}/health`);
   const state = await response.json();
   assert.equal(response.status, 503);
@@ -351,12 +389,15 @@ void test('the desk listens on the port Railway injects and says it is not ready
   assert.equal(logged.status, 503);
   assert.equal(typeof logged.ms, 'number');
   const exited = new Promise((done) => child.once('exit', done));
+  const signalled = Date.now();
   child.kill('SIGTERM');
   assert.equal(await exited, 0);
+  // With nothing running, a drain has nothing to wait for.
+  assert.ok(Date.now() - signalled < 5_000, 'an idle desk was slow to stop');
   assert.ok(lines.some((l) => l.event === 'shutdown'));
 });
 
-void test('health hashes the templates once at boot and reuses its tool probe', async () => {
+void test('health answers from what the desk measured at boot, and never measures on request', async () => {
   const dir = await mkdtemp(join(scratch, 'proof-'));
   const qualificationPath = join(dir, 'proof.json');
   await writeFile(
@@ -370,12 +411,19 @@ void test('health hashes the templates once at boot and reuses its tool probe', 
     workdir: join(dir, 'work'),
     qualificationPath,
   });
+  // Asked before it has measured anything, the desk says so, and is not ready.
+  const early = service.health();
+  assert.equal(early.ready, false);
+  assert.equal(early.starting, true);
+  await service.booted;
   const first = await service.handle(new Request('http://desk/health'));
   const state = await first.json();
   // No OpenCV behind this interpreter, so the desk must not claim it can render.
   assert.equal(first.status, 503);
   assert.equal(state.ready, false);
+  assert.equal(state.starting, false);
   assert.equal(state.tools.cv2, null);
+  assert.equal(state.tools.node, process.versions.node);
   assert.equal(state.decoder, null);
   assert.ok(state.templates.every((t) => t.qualified));
   // The proof changing on disk after boot does not change what this desk measured at boot.
@@ -386,7 +434,10 @@ void test('health hashes the templates once at boot and reuses its tool probe', 
     ).json();
     assert.ok(again.templates.every((t) => t.qualified));
   }
+  // Both checks failed here, and each is retried on its own clock (10 s for the tools, 60 s for
+  // the decoder), never because /health was asked.
   assert.equal(service.status().toolProbes, 1);
+  assert.equal(service.status().decoderProbes, 1);
   await service.close();
   const rebooted = createMediaService({
     token: TOKEN,
@@ -394,9 +445,89 @@ void test('health hashes the templates once at boot and reuses its tool probe', 
     workdir: join(dir, 'work'),
     qualificationPath,
   });
-  const fresh = (await rebooted.health()).templates;
-  assert.ok(fresh.every((t) => !t.qualified));
+  await rebooted.booted;
+  assert.ok(rebooted.health().templates.every((t) => !t.qualified));
   await rebooted.close();
+});
+
+void test('the tools are measured at boot and again only while they fail', async () => {
+  let probes = 0;
+  const service = createMediaService({
+    token: TOKEN,
+    workdir: await mkdtemp(join(scratch, 'tools-')),
+    decoder: 'direct',
+    toolRetryMs: 50,
+    // Missing OpenCV twice, the way a first import starved of CPU at boot times out.
+    probeTools: async () => (++probes < 3 ? { ...TOOLS, cv2: null } : TOOLS),
+  });
+  await service.booted;
+  assert.equal(service.health().ready, false);
+  assert.ok(
+    await until(() => service.health().ready),
+    'the tools never passed',
+  );
+  for (let i = 0; i < 20; i++)
+    assert.equal(
+      (await service.handle(new Request('http://desk/health'))).status,
+      200,
+    );
+  await pause(300);
+  assert.equal(probes, 3, 'tools that passed were measured again');
+  await service.close();
+});
+
+void test('a desk is not ready until it decodes the way caps were qualified, and a failed decoder probe heals by itself', async (t) => {
+  let calls = 0,
+    release;
+  const retried = new Promise((done) => (release = done));
+  const media = await desk(t, {
+    python: await fakeRenderer('recalibrated'),
+    probeTools: async () => TOOLS,
+    decoder: undefined,
+    // The boot measurement fails, as one starved of CPU might; the next runs until released.
+    calibrate: async () => {
+      if (++calls === 1) return { mode: null, error: 'timed out' };
+      await retried;
+      return { mode: 'direct' };
+    },
+    decoderRetryMs: 100,
+  });
+  const broken = await fetch(`${media.url}/health`);
+  const state = await broken.json();
+  // Railway's healthcheck reads this 503 and keeps the deployment it has.
+  assert.equal(broken.status, 503);
+  assert.equal(state.ready, false);
+  assert.equal(state.capQualified, false);
+  assert.equal(state.decoder, null);
+  assert.equal(state.tools.cv2, TOOLS.cv2);
+  const refused = await post(media, order(take()));
+  assert.equal(refused.status, 409);
+  assert.equal(refused.json().code, 'NOT_QUALIFIED');
+  assert.ok(
+    await until(() => calls === 2),
+    'the failed decoder probe never ran again',
+  );
+  // The probe is out and has not answered; /health still answers at once, from memory.
+  const asked = performance.now();
+  const during = await fetch(`${media.url}/health`);
+  assert.equal(during.status, 503);
+  assert.ok(performance.now() - asked < 250, 'health waited on a probe');
+  release();
+  assert.ok(
+    await until(
+      async () => (await fetch(`${media.url}/health`)).status === 200,
+    ),
+    'the desk never became ready',
+  );
+  const healed = await (await fetch(`${media.url}/health`)).json();
+  assert.equal(healed.ready, true);
+  assert.equal(healed.capQualified, true);
+  assert.equal(healed.decoder, 'direct');
+  // A measurement that passed is not taken again.
+  await pause(300);
+  assert.equal(calls, 2);
+  assert.equal(media.service.status().decoderProbes, 2);
+  assert.equal((await post(media, order(take()))).status, 200);
 });
 
 void test(
@@ -671,6 +802,73 @@ void test('a caller hanging up while queued cancels the take before it starts', 
   assert.equal(media.service.status().inflight, 0);
 });
 
+// What SIGTERM does on Railway: the desk is being replaced, and a take it is rendering has been
+// paid for.
+void test('a desk told to stop finishes the take it is running, and turns new and queued work away', async (t) => {
+  const media = await desk(t, {
+    python: await fakeRenderer('drain', { delayMs: 1500 }),
+    concurrency: 1,
+    drainMs: 10_000,
+  });
+  const running = post(media, order(take()));
+  assert.ok(await until(() => media.renders().length === 1));
+  const queued = post(media, order(take()));
+  assert.ok(await until(() => media.service.status().queued === 1));
+  let closed = false;
+  const closing = media.close().then(() => (closed = true));
+  // The queued take has cost nothing yet: BUSY, so the site sends it to the replacement.
+  const waited = await queued;
+  assert.equal(waited.status, 503);
+  assert.equal(waited.json().code, 'BUSY');
+  assert.ok(waited.json().retryAfterMs >= 1000);
+  assert.ok(Number(waited.headers.get('retry-after')) >= 1);
+  // Railway reads a draining desk as not ready.
+  const health = await fetch(`${media.url}/health`);
+  const state = await health.json();
+  assert.equal(health.status, 503);
+  assert.equal(state.ready, false);
+  assert.equal(state.draining, true);
+  // New work hears BUSY too, rather than a refused connection.
+  const fresh = await post(media, order(take()));
+  assert.equal(fresh.status, 503);
+  assert.equal(fresh.json().code, 'BUSY');
+  assert.ok(fresh.json().retryAfterMs >= 1000);
+  assert.equal(closed, false, 'the desk stopped with a take still running');
+  const r = await running;
+  assert.equal(r.status, 200, r.bytes.toString().slice(0, 200));
+  assert.equal(quality(r).outputSha256, sha(r.bytes));
+  await closing;
+  assert.equal(media.renders().length, 1, 'a take started during the drain');
+  await assert.rejects(
+    fetch(`${media.url}/health`),
+    'still listening after the drain',
+  );
+});
+
+void test('a drain waits for a running take only until that take’s own deadline', async (t) => {
+  const pids = join(scratch, 'drain-pids.json');
+  const media = await desk(t, {
+    python: await fakeRenderer('drain-deadline', { hang: true, pids }),
+    deadlineMs: 1500,
+    minRunMs: 0,
+    drainMs: 60_000,
+  });
+  const pending = post(media, order(take()));
+  assert.ok(await until(() => existsSync(pids)), 'the renderer never started');
+  const signalled = Date.now();
+  await media.close();
+  const drained = Date.now() - signalled;
+  assert.ok(drained < 4_000, `the drain took ${drained}ms`);
+  const r = await pending;
+  assert.equal(r.status, 503);
+  assert.equal(r.json().code, 'DEADLINE');
+  const [renderer, child] = JSON.parse(await readFile(pids, 'utf8'));
+  assert.ok(
+    await until(() => !alive(renderer) && !alive(child)),
+    'renderer group survived',
+  );
+});
+
 void test('renderer verdicts keep their status codes and leave no scratch behind', async (t) => {
   const rejecting = await desk(t, {
     python: await fakeRenderer('reject', { reject: true }),
@@ -692,6 +890,112 @@ void test('renderer verdicts keep their status codes and leave no scratch behind
         (await readdir(media.workdir)).every((name) => name === 'cache'),
       ),
     );
+});
+
+// The site maps a 422 to INVALID_WEARABLE, and the studio pays fal for up to two new takes
+// because of it. Only a verdict on the footage may say 422.
+void test('at /render only a verdict on the take is a 422: artwork verdicts are 409 and faults of this machine 503', async (t) => {
+  const codeFile = join(scratch, 'render-code.txt');
+  const media = await desk(t, {
+    python: await fakeRenderer('render-codes', {
+      codeFile,
+      codeMode: 'render',
+      error:
+        'ffmpeg exited 1: /app/work/sponsor-media/job-x/input.mp4: Invalid data',
+    }),
+  });
+  const cases = [
+    // What the footage did. A new take may pass.
+    ['TRACK_LOST', 422, 'TRACK_LOST'],
+    ['LOGO_OUTSIDE_PANEL', 422, 'LOGO_OUTSIDE_PANEL'],
+    ['INVALID_VIDEO', 422, 'INVALID_VIDEO'],
+    ['INVALID_AUDIO', 422, 'INVALID_AUDIO'],
+    ['UNSUPPORTED_TIMING', 422, 'UNSUPPORTED_TIMING'],
+    // The artwork, which already passed /preview. A new take cannot fix it.
+    ['LOGO_TOO_THIN', 409, 'LOGO_TOO_THIN'],
+    ['INVALID_IMAGE', 409, 'INVALID_IMAGE'],
+    // This machine. The same take, tried again, may pass; a new one fails the same way.
+    ['MEDIA_FAILED', 503, 'RENDERER'],
+    ['MEDIA_CHANGED', 503, 'RENDERER'],
+    ['TEMPLATE_CHANGED', 503, 'RENDERER'],
+    ['GEOMETRY_CHANGED', 503, 'RENDERER'],
+    ['TEMPLATE_UNTRACKABLE', 503, 'RENDERER'],
+    ['MISSING_MASK', 503, 'RENDERER'],
+    ['A_CODE_FROM_A_NEWER_RENDERER', 503, 'RENDERER'],
+  ];
+  for (const [said, status, code] of cases) {
+    await writeFile(codeFile, said);
+    const r = await post(media, order(take()));
+    const failure = r.json();
+    assert.equal(r.status, status, `${said}: ${JSON.stringify(failure)}`);
+    assert.equal(failure.code, code, said);
+    if (status === 503)
+      assert.ok(
+        !failure.error.includes('/app/work'),
+        `${said} handed the caller the renderer's own words`,
+      );
+  }
+  // A fault's details go to the log, for whoever fixes the machine.
+  assert.ok(
+    media.logs.some(
+      (l) =>
+        l.event === 'renderer' &&
+        l.code === 'MEDIA_FAILED' &&
+        l.error.includes('Invalid data'),
+    ),
+  );
+});
+
+void test('at /preview an artwork verdict is the buyer’s answer, and anything else is this machine failing', async (t) => {
+  const codeFile = join(scratch, 'preview-code.txt');
+  const media = await desk(t, {
+    python: await fakeRenderer('preview-codes', {
+      codeFile,
+      error: 'Use artwork between 8 and 4096 pixels per side.',
+    }),
+  });
+  const cases = [
+    ['INVALID_IMAGE', 422, 'INVALID_IMAGE'],
+    ['EMPTY_IMAGE', 422, 'EMPTY_IMAGE'],
+    ['LOGO_TOO_THIN', 422, 'LOGO_TOO_THIN'],
+    ['LOGO_OUTSIDE_PANEL', 422, 'LOGO_OUTSIDE_PANEL'],
+    ['MEDIA_FAILED', 503, 'RENDERER'],
+    ['TEMPLATE_CHANGED', 503, 'RENDERER'],
+    // A verdict on footage means nothing for a still image.
+    ['TRACK_LOST', 503, 'RENDERER'],
+    ['A_CODE_FROM_A_NEWER_RENDERER', 503, 'RENDERER'],
+  ];
+  for (const [said, status, code] of cases) {
+    await writeFile(codeFile, said);
+    const r = await post(media, LOGO, {
+      path: '/preview?kind=cap&target=host',
+      type: 'image/png',
+    });
+    const failure = r.json();
+    assert.equal(r.status, status, `${said}: ${JSON.stringify(failure)}`);
+    assert.equal(failure.code, code, said);
+    if (status === 422)
+      assert.equal(
+        failure.error,
+        'Use artwork between 8 and 4096 pixels per side.',
+      );
+  }
+});
+
+void test('a take this machine’s ffmpeg cannot convert is a fault of the desk, not a verdict on the take', async (t) => {
+  const media = await desk(t, {
+    python: await fakeRenderer('never-reached'),
+    decoder: 'convert',
+  });
+  const r = await post(media, order(take(Buffer.from('not a video'))));
+  assert.equal(r.status, 503, JSON.stringify(r.json()));
+  assert.equal(r.json().code, 'CONVERT');
+  assert.equal(media.renders().length, 0);
+  assert.ok(
+    await until(async () =>
+      (await readdir(media.workdir)).every((name) => name === 'cache'),
+    ),
+  );
 });
 
 void test('the legacy logoUrl form still renders, and still checks the logo hash', async (t) => {
@@ -758,6 +1062,77 @@ void test('previews refuse files that are not PNG, JPEG or WebP before decoding 
   assert.equal(placement.status, 400);
   assert.equal(media.spawns.length, 0);
 });
+
+void test('/preview refuses cap artwork /render could not take, at the one limit both use', async (t) => {
+  const sizeFile = join(scratch, 'normalized-size.txt');
+  const media = await desk(t, {
+    python: await fakeRenderer('heavy', { sizeFile }),
+  });
+  const upload = (kind) =>
+    post(media, LOGO, {
+      path: `/preview?kind=${kind}&target=host`,
+      type: 'image/png',
+    });
+  const composites = () =>
+    media.spawns.filter((s) => s.mode === 'preview').length;
+
+  await writeFile(sizeFile, String(MAX_LOGO));
+  const heaviest = await upload('cap');
+  assert.equal(heaviest.status, 200, heaviest.bytes.toString().slice(0, 200));
+  const logo = Buffer.from(heaviest.json().logo, 'base64');
+  assert.equal(logo.length, MAX_LOGO);
+  // Whatever /preview lets a buyer pay for, /render takes.
+  const rendered = await post(media, order(take(), logo));
+  assert.equal(rendered.status, 200, rendered.bytes.toString().slice(0, 200));
+
+  await writeFile(sizeFile, String(MAX_LOGO + 1));
+  const before = composites();
+  const heavy = await upload('cap');
+  assert.equal(heavy.status, 422);
+  const refusal = heavy.json();
+  assert.equal(refusal.code, 'LOGO_TOO_LARGE');
+  assert.equal(
+    refusal.error,
+    'This artwork is too detailed to print on a cap; use a simpler PNG under 4 MB.',
+  );
+  assert.equal(
+    composites(),
+    before,
+    'a cap was composited from artwork it cannot carry',
+  );
+  // A spotlight logo is only ever shown, so the same mark passes as one. As a cap, /render
+  // refuses it at exactly that byte.
+  const shown = await upload('logo');
+  assert.equal(shown.status, 200);
+  const refused = await post(
+    media,
+    order(take(), Buffer.from(shown.json().logo, 'base64')),
+  );
+  assert.equal(refused.status, 413);
+  assert.equal(refused.json().code, 'TOO_LARGE');
+});
+
+void test(
+  'a real mark that normalizes past the limit is refused at upload, before anyone pays',
+  { skip: needsRuntime },
+  async (t) => {
+    const media = await desk(t);
+    // Noise with an alpha channel: 1.8 MB as WebP, 4.2 MB once normalized to PNG.
+    const noisy = join(scratch, 'noisy.webp');
+    await run(config.python, [
+      '-c',
+      `import cv2, numpy as np; cv2.imwrite(${JSON.stringify(noisy)}, np.random.default_rng(7).integers(0, 256, (1024, 1024, 4), dtype=np.uint8), [cv2.IMWRITE_WEBP_QUALITY, 80])`,
+    ]);
+    const upload = await readFile(noisy);
+    assert.ok(upload.length < 4 * 1024 * 1024, 'the upload itself fits');
+    const r = await post(media, upload, {
+      path: '/preview?kind=cap&target=host',
+      type: 'image/webp',
+    });
+    assert.equal(r.status, 422, r.bytes.toString().slice(0, 300));
+    assert.equal(r.json().code, 'LOGO_TOO_LARGE');
+  },
+);
 
 void test(
   '/preview over HTTP returns the qualified cap for the logo on file',
@@ -942,3 +1317,116 @@ void test(
     );
   },
 );
+
+void test(
+  'SIGTERM lets the paid render in progress finish, turns new work away, then exits',
+  { skip: needsRuntime },
+  async (t) => {
+    const port = await freePort();
+    const workdir = await mkdtemp(join(scratch, 'sigterm-'));
+    const child = spawn(process.execPath, ['broadcast/sponsor-media.mjs'], {
+      env: {
+        PATH: process.env.PATH,
+        PORT: String(port),
+        SPONSOR_MEDIA_WORKDIR: workdir,
+        SPONSOR_MEDIA_TOKEN: TOKEN,
+        WEARABLE_PYTHON: config.python,
+        // The take comes from this test's loopback stand-in for fal.
+        NODE_ENV: 'test',
+        SPONSOR_MEDIA_TEST_VIDEO_HOST: FAL,
+      },
+      stdio: ['ignore', 'pipe', 'inherit'],
+    });
+    t.after(() => child.kill('SIGKILL'));
+    const lines = [];
+    createInterface({ input: child.stdout }).on('line', (line) =>
+      lines.push(JSON.parse(line)),
+    );
+    // 'close' rather than 'exit', so every line the desk wrote has been read.
+    const exited = new Promise((done) => child.once('close', done));
+    assert.ok(
+      await until(() => lines.some((l) => l.event === 'boot'), 20_000),
+      'the desk never booted',
+    );
+    assert.equal(lines.find((l) => l.event === 'boot').ready, true);
+    const media = { url: `http://127.0.0.1:${port}` };
+    const logo = Buffer.from(
+      (
+        await post(media, LOGO, {
+          path: '/preview?kind=logo&target=host',
+          type: 'image/png',
+        })
+      ).json().logo,
+      'base64',
+    );
+    const footage = await realTake();
+    const rendering = post(media, order(take(footage.bytes), logo));
+    // Railway's SIGTERM lands while the renderer has the take.
+    assert.ok(
+      await until(
+        async () =>
+          (await readdir(workdir)).some(
+            (name) => name.startsWith('job-') && !name.startsWith('job-probe-'),
+          ),
+        10_000,
+      ),
+      'the render never started',
+    );
+    child.kill('SIGTERM');
+    assert.ok(await until(() => lines.some((l) => l.event === 'shutdown')));
+    assert.equal(lines.find((l) => l.event === 'shutdown').running, 1);
+    const health = await fetch(`${media.url}/health`);
+    assert.equal(health.status, 503);
+    assert.equal((await health.json()).draining, true);
+    const turnedAway = await post(media, order(take(footage.bytes), logo));
+    assert.equal(turnedAway.status, 503);
+    assert.equal(turnedAway.json().code, 'BUSY');
+    assert.ok(turnedAway.json().retryAfterMs >= 1000);
+    const r = await rendering;
+    assert.equal(r.status, 200, r.bytes.toString().slice(0, 300));
+    const summary = quality(r);
+    assert.equal(summary.accepted, true);
+    assert.equal(summary.outputSha256, sha(r.bytes));
+    assert.equal(await exited, 0);
+    // In the desk's own words: it answered the paid take, then stopped.
+    const answered = lines.findIndex(
+      (l) => l.event === 'request' && l.path === '/render' && l.status === 200,
+    );
+    const stopped = lines.findIndex((l) => l.event === 'stopped');
+    assert.ok(answered >= 0 && stopped > answered, 'stopped before answering');
+    t.diagnostic(`rendered through a drain in ${r.ms}ms`);
+  },
+);
+
+// These numbers live in three places: this desk, the site (lib/sponsor-media.ts) and Railway's
+// settings. Each promise below is one the docs make, and one broke when a side moved.
+void test('the desk’s clock agrees with the site’s retry and with Railway’s shutdown window', async () => {
+  const site = await readFile('lib/sponsor-media.ts', 'utf8');
+  const constant = (name) =>
+    Number(site.match(new RegExp(`const ${name} = (\\d+);`))?.[1]);
+  const budget = constant('RENDER_BUDGET_MS'),
+    floor = constant('RETRY_FLOOR_MS');
+  assert.ok(budget > 0 && floor > 0, 'the site’s budget and retry floor moved');
+  // Before its one retry the site waits what the desk asked, 1 s at least and 5 s at most, plus
+  // up to half a second of jitter, and it retries only while `floor` of its budget remains.
+  const shortestWait = 1_000,
+    longestWait = 5_500;
+  const { deadlineMs, minRunMs, drainMs } = MEDIA_DEFAULTS;
+  // Every answer, DEADLINE included, reaches the site before its own timeout does.
+  assert.ok(deadlineMs + 5_000 <= budget);
+  // A take turned away on arrival, because the queue is full or the desk is draining, is retried.
+  assert.ok(budget - longestWait >= floor);
+  // A take that waited in the queue until it could no longer finish hears BUSY with at most
+  // budget - (deadlineMs - minRunMs) of the site's clock left, under its floor even after the
+  // shortest wait. So the site does not retry it, as the docs and minRunMs's comment say. If this
+  // fails, the site now does: say so there.
+  assert.ok(budget - (deadlineMs - minRunMs) - shortestWait < floor);
+  // A drain lasts until the last running take meets its deadline. The process then stops itself
+  // well inside the window Railway gives a replaced deployment.
+  const railway = JSON.parse(
+    await readFile('broadcast/railway.sponsor-media.json', 'utf8'),
+  );
+  assert.ok(drainMs >= deadlineMs);
+  assert.ok(SHUTDOWN_MS > drainMs);
+  assert.ok(SHUTDOWN_MS <= railway.deploy.drainingSeconds * 1000 - 10_000);
+});
