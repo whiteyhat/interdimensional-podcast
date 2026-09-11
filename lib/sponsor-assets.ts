@@ -13,11 +13,10 @@ export type SponsorMediaVars = SponsorVars & {
 const MAX_UPLOAD = 4 * 1024 * 1024;
 const json = (body: unknown, status = 200) =>
   Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
-async function hash(bytes: Uint8Array) {
+/** Hex SHA-256, the identity every stored artwork and take is filed and checked under. */
+export async function sha256Hex(bytes: Uint8Array<ArrayBuffer>) {
   return Array.from(
-    new Uint8Array(
-      await crypto.subtle.digest('SHA-256', new Uint8Array(bytes).buffer),
-    ),
+    new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)),
     (n) => n.toString(16).padStart(2, '0'),
   ).join('');
 }
@@ -26,18 +25,28 @@ function decode(base64: string) {
     throw new SponsorError(502, 'Artwork response is too large.');
   return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
 }
+/**
+ * Where the media service lives and the secret its /preview and /render calls carry. Those
+ * two are all this side needs: the logo now travels inside each render request, so nothing
+ * here depends on the service being able to reach this site.
+ */
 export function sponsorMediaConfig(v: SponsorMediaVars) {
-  if (
-    !v.SPONSOR_MEDIA_URL ||
-    !v.SPONSOR_MEDIA_TOKEN ||
-    v.SPONSOR_MEDIA_TOKEN.length < 24
-  )
+  let url: URL | undefined;
+  try {
+    url = v.SPONSOR_MEDIA_URL ? new URL(v.SPONSOR_MEDIA_URL) : undefined;
+  } catch {
+    throw new SponsorError(
+      503,
+      'The wardrobe service URL is invalid.',
+      'MEDIA',
+    );
+  }
+  if (!url || !v.SPONSOR_MEDIA_TOKEN || v.SPONSOR_MEDIA_TOKEN.length < 24)
     throw new SponsorError(
       503,
       'The wardrobe desk is not connected yet.',
       'MEDIA',
     );
-  const url = new URL(v.SPONSOR_MEDIA_URL);
   if (
     url.username ||
     url.password ||
@@ -54,32 +63,83 @@ export function sponsorMediaConfig(v: SponsorMediaVars) {
     );
   return { url, token: v.SPONSOR_MEDIA_TOKEN };
 }
-export async function sponsorMediaHealth(v: SponsorMediaVars): Promise<{
+type MediaHealth = {
   ready: boolean;
   capQualified: boolean;
   templateVersion?: string;
-}> {
+};
+const notReady = (): MediaHealth => ({ ready: false, capQualified: false });
+// GET /api/sponsorship/assets is public. Without a memory here every hit on it would make
+// the media service run its readiness checks, so a crowd refreshing the page would be a
+// crowd of probes. An answer is reused by this isolate for 15 seconds, and callers who
+// arrive while a probe is still out wait on that same probe instead of starting another.
+const HEALTH_TTL_MS = 15000;
+let healthProbe:
+  | { url: string; expires: number; result: Promise<MediaHealth> }
+  | undefined;
+async function probeMediaHealth(url: URL): Promise<MediaHealth> {
   try {
-    const { url, token } = sponsorMediaConfig(v);
+    // /health is unauthenticated, so the render secret stays off this request.
     const r = await fetch(new URL('/health', url), {
-      headers: { authorization: `Bearer ${token}` },
       redirect: 'error',
       signal: AbortSignal.timeout(5000),
     });
-    if (!r.ok) return { ready: false, capQualified: false };
+    // A 503 is the service saying it is not ready, whatever its body goes on to claim.
+    if (!r.ok) {
+      await r.body?.cancel().catch(() => {});
+      return notReady();
+    }
     const data = (await r.json()) as {
-      ready?: boolean;
-      capQualified?: boolean;
-      templateVersion?: string;
+      ready?: unknown;
+      capQualified?: unknown;
+      templateVersion?: unknown;
     };
     return {
-      ready: data.ready === true && !!v.SPONSOR_ASSETS,
-      capQualified: data.capQualified === true && !!v.SPONSOR_ASSETS,
-      templateVersion: data.templateVersion,
+      ready: data.ready === true,
+      capQualified: data.capQualified === true,
+      templateVersion:
+        typeof data.templateVersion === 'string'
+          ? data.templateVersion
+          : undefined,
     };
   } catch {
-    return { ready: false, capQualified: false };
+    return notReady();
   }
+}
+/**
+ * Whether this site can carry a cap order through to broadcast. The service being up is not
+ * enough: without the storage bucket or the render secret on this side, a buyer could pay
+ * for a cap the site has no way to render, so either one missing means not ready, and
+ * nothing is probed.
+ */
+export async function sponsorMediaHealth(
+  v: SponsorMediaVars,
+): Promise<MediaHealth> {
+  let url: URL;
+  try {
+    url = sponsorMediaConfig(v).url;
+  } catch {
+    return notReady();
+  }
+  if (!v.SPONSOR_ASSETS) return notReady();
+  if (
+    !healthProbe ||
+    healthProbe.url !== url.href ||
+    Date.now() >= healthProbe.expires
+  ) {
+    // The 15 seconds start when the answer arrives, not when the question was asked, so a
+    // slow probe still buys the full quiet period afterwards.
+    const probe = {
+      url: url.href,
+      expires: Infinity,
+      result: probeMediaHealth(url),
+    };
+    healthProbe = probe;
+    void probe.result.then(() => {
+      probe.expires = Date.now() + HEALTH_TTL_MS;
+    });
+  }
+  return healthProbe.result;
 }
 export async function sponsorAssetHealth(
   request: Request,
@@ -108,11 +168,16 @@ export async function sponsorAssetHealth(
   }
   return json(await sponsorMediaHealth(v));
 }
-async function boundedBody(request: Request, max: number) {
-  if (Number(request.headers.get('content-length')) > max)
-    throw new SponsorError(413, 'Use an image under 4 MB.');
-  const reader = request.body?.getReader();
-  if (!reader) throw new SponsorError(400, 'Choose an image.');
+/**
+ * Read a body into memory, refusing it the moment it passes max bytes. Checking the size
+ * only after buffering would let one oversized answer claim the isolate's memory first.
+ */
+export async function readBounded(
+  body: ReadableStream<Uint8Array>,
+  max: number,
+  tooLarge: string,
+) {
+  const reader = body.getReader();
   const parts: Uint8Array[] = [];
   let size = 0;
   try {
@@ -120,7 +185,7 @@ async function boundedBody(request: Request, max: number) {
       const r = await reader.read();
       if (r.done) break;
       size += r.value.length;
-      if (size > max) throw new SponsorError(413, 'Use an image under 4 MB.');
+      if (size > max) throw new SponsorError(413, tooLarge);
       parts.push(r.value);
     }
   } finally {
@@ -133,6 +198,12 @@ async function boundedBody(request: Request, max: number) {
     offset += part.length;
   }
   return bytes;
+}
+async function boundedBody(request: Request, max: number) {
+  if (Number(request.headers.get('content-length')) > max)
+    throw new SponsorError(413, 'Use an image under 4 MB.');
+  if (!request.body) throw new SponsorError(400, 'Choose an image.');
+  return readBounded(request.body, max, 'Use an image under 4 MB.');
 }
 export async function uploadSponsorAsset(
   request: Request,
@@ -211,14 +282,14 @@ export async function uploadSponsorAsset(
     const preview = decode(result.preview),
       logo = decode(result.logo);
     const [previewHash, logoHash] = await Promise.all([
-      hash(preview),
-      hash(logo),
+      sha256Hex(preview),
+      sha256Hex(logo),
     ]);
     if (previewHash !== result.sha256 || logoHash !== result.logoSha256)
       throw new SponsorError(502, 'Artwork integrity check failed.');
     // Bind the canonical image, original normalized mark, target and qualification revision.
     // A later upload or qualification must never rewrite an already purchased design.
-    const id = await hash(
+    const id = await sha256Hex(
       new TextEncoder().encode(
         JSON.stringify([
           previewHash,
