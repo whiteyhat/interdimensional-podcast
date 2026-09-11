@@ -79,13 +79,13 @@ async function readConfig(role) {
   return JSON.parse(await readFile(join(ROOT, ROLES[checkRole(role)]), 'utf8'));
 }
 
-/** The Railway service settings a role's config file asks for. */
+/**
+ * The Railway service settings a role's config file asks for. Railway no longer reads a
+ * service's config file itself, so the file is the source and these are what reach Railway.
+ */
 export async function instanceSettings(role) {
   const { build = {}, deploy = {} } = await readConfig(role);
-  const settings = {
-    railwayConfigFile: ROLES[role],
-    dockerfilePath: build.dockerfilePath,
-  };
+  const settings = { dockerfilePath: build.dockerfilePath };
   for (const key of MIRRORED)
     if (deploy[key] !== undefined) settings[key] = deploy[key];
   return settings;
@@ -396,7 +396,7 @@ export async function status(env) {
     const address = info.domains?.serviceDomains?.[0];
     console.log(`\n${name}  (${ids.serviceId.slice(0, 8)})`);
     console.log(
-      `  config     ${info.railwayConfigFile ?? "none, so Railway would read the box's railway.json"}`,
+      `  build      ${info.dockerfilePath ? `${info.dockerfilePath}, health ${info.healthcheckPath ?? 'none'}` : 'no Dockerfile set: run setup'}`,
     );
     console.log(
       `  deployed   ${found ? `${found.status.toLowerCase()}, ${found.createdAt}` : 'never'}`,

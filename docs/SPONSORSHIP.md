@@ -35,7 +35,7 @@ Each site has its own pair of services on Railway, in the broadcast box's projec
 | devnet | `sponsor-media-devnet` | `sponsor-reconcile-devnet` | `https://interdimensional-podcast-staging.leonardo-chekup.workers.dev` |
 | production | `sponsor-media-production` | `sponsor-reconcile-production` | `https://frogclench.fun` |
 
-`node scripts/media.mjs setup|deploy|status|health <devnet|production>` creates, configures, deploys and checks both; [the launch runbook](LAUNCH.md#sponsorship-services) has the steps. The script finds each service by name and never reuses the broadcast box's ids. It points each service at its own config file (`broadcast/railway.sponsor-media.json`, `broadcast/railway.sponsor-reconcile.json`), so the repository's `railway.json`, which describes the box, is never read for them. It uploads only the files each Dockerfile copies: about 2.6 MB for the media service and three files for the reconciler. It merges variables into a service and never replaces them.
+`node scripts/media.mjs setup|deploy|status|health <devnet|production>` creates, configures, deploys and checks both; [the launch runbook](LAUNCH.md#sponsorship-services) has the steps. The script finds each service by name and never reuses the broadcast box's ids. Each service's settings live in its own file (`broadcast/railway.sponsor-media.json`, `broadcast/railway.sponsor-reconcile.json`). Railway no longer lets a service point at such a file, so setup writes the file's Dockerfile path and deploy settings onto the service itself, and the upload never carries the repository's `railway.json`, which describes the box. It uploads only the files each Dockerfile copies: about 2.6 MB for the media service and three files for the reconciler. It merges variables into a service and never replaces them.
 
 Settings on each side:
 
@@ -52,7 +52,7 @@ Settings on each side:
 | | `SPONSOR_RECONCILE_TOKEN` | The reconciler's token (the worker requires 16 or more characters) |
 | | `SITE_URL` | The site's public origin. Rendered takes and stored artwork are addressed from it |
 
-The media service's config file sets a `/health` healthcheck with a 120-second timeout, always restarts, never sleeps, keeps one replica, and gives a replaced deployment 120 seconds to finish in-flight renders before it is killed. The reconciler's config has no healthcheck, because it has no HTTP port. It always restarts and never sleeps.
+The media service's settings set a `/health` healthcheck with a 120-second timeout, always restarts, never sleeps, keeps one replica, and gives a replaced deployment 120 seconds to finish in-flight renders before it is killed. The reconciler's have no healthcheck, because it has no HTTP port. It always restarts and never sleeps.
 
 How the site uses the media service. The site sends `Authorization: Bearer <SPONSOR_MEDIA_TOKEN>` on every call and refuses redirects; only `/health` answers without the token:
 

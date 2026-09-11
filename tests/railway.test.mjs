@@ -272,17 +272,17 @@ void test('the box still has its variables replaced outright, as air.mjs expects
   assert.equal(upsert.variables.input.serviceId, 'box-1');
 });
 
-void test('configure sends the service its own config file, from the root, and a draining time', async () => {
+void test('configure sends the service its own settings and a draining time, never a config file', async () => {
   await fresh();
   await railway.configure(mediaIds, {
-    railwayConfigFile: 'broadcast/railway.sponsor-media.json',
+    dockerfilePath: 'broadcast/Dockerfile.sponsor-media',
     drainingSeconds: 120,
     healthcheckPath: '/health',
   });
   const [update] = gqlCalls(/serviceInstanceUpdate/);
   assert.equal(update.variables.serviceId, 'media-1');
   assert.deepEqual(update.variables.input, {
-    railwayConfigFile: '/broadcast/railway.sponsor-media.json',
+    dockerfilePath: 'broadcast/Dockerfile.sponsor-media',
     drainingSeconds: 120,
     healthcheckPath: '/health',
   });
@@ -290,13 +290,13 @@ void test('configure sends the service its own config file, from the root, and a
     railway.configure(mediaIds, { drainingSeconds: 1.5 }),
     /whole number/,
   );
+  // Railway refuses config-as-code for a service now; saying so offline beats a half-set-up
+  // service.
   await assert.rejects(
-    railway.configure(mediaIds, { railwayConfigFile: '../railway.json' }),
-    /not a Railway config file/,
-  );
-  await assert.rejects(
-    railway.configure(mediaIds, { railwayConfigFile: 'broadcast/Dockerfile' }),
-    /not a Railway config file/,
+    railway.configure(mediaIds, {
+      railwayConfigFile: 'broadcast/railway.sponsor-media.json',
+    }),
+    /no longer accepts a config file/,
   );
 });
 
@@ -553,10 +553,7 @@ void test('setup gives both devnet services their own tokens, config and address
   );
 
   const [mediaUpdate, reconcileUpdate] = gqlCalls(/serviceInstanceUpdate/);
-  assert.equal(
-    mediaUpdate.variables.input.railwayConfigFile,
-    '/broadcast/railway.sponsor-media.json',
-  );
+  assert.equal('railwayConfigFile' in mediaUpdate.variables.input, false);
   assert.equal(
     mediaUpdate.variables.input.dockerfilePath,
     'broadcast/Dockerfile.sponsor-media',
@@ -564,8 +561,8 @@ void test('setup gives both devnet services their own tokens, config and address
   assert.equal(mediaUpdate.variables.input.healthcheckPath, '/health');
   assert.equal(mediaUpdate.variables.input.drainingSeconds, 120);
   assert.equal(
-    reconcileUpdate.variables.input.railwayConfigFile,
-    '/broadcast/railway.sponsor-reconcile.json',
+    reconcileUpdate.variables.input.dockerfilePath,
+    'broadcast/Dockerfile.sponsor-reconcile',
   );
   assert.equal('healthcheckPath' in reconcileUpdate.variables.input, false);
   const [address] = gqlCalls(/serviceDomainCreate/);

@@ -235,29 +235,18 @@ export async function variables(ids) {
 }
 
 /**
- * Railway looks for a config file at an absolute path inside the uploaded source, and a
- * relative one does not follow the service's root directory, so the path is always sent from
- * the root with a leading slash.
- */
-function configFilePath(path) {
-  const raw = String(path);
-  // Checked before normalizing: posix.normalize('/../railway.json') is '/railway.json', which
-  // is the box's config, not a refusal.
-  if (raw.split(/[\\/]/).includes('..') || !/\.(json|toml)$/.test(raw))
-    throw Error(`${path} is not a Railway config file inside the repository.`);
-  return posix.normalize(`/${raw.replace(/^\/+/, '')}`);
-}
-
-/**
- * Change a service's settings. `railwayConfigFile` points the service at its own
- * config-as-code file, so the repository's railway.json (which describes the box) is never
- * read for it. `drainingSeconds` is how long a replaced deployment keeps running after
- * SIGTERM, which is what lets an in-flight render finish across a redeploy.
+ * Change a service's settings. Railway no longer lets a service point at a config-as-code file
+ * (it refuses `railwayConfigFile` outright), so a service's build and deploy settings are sent
+ * here themselves, and its upload never carries the repository's railway.json, which describes
+ * the box. `drainingSeconds` is how long a replaced deployment keeps running after SIGTERM,
+ * which is what lets an in-flight render finish across a redeploy.
  */
 export async function configure(ids, input) {
   const settings = { ...input };
   if (settings.railwayConfigFile !== undefined)
-    settings.railwayConfigFile = configFilePath(settings.railwayConfigFile);
+    throw Error(
+      'Railway no longer accepts a config file; send the settings themselves.',
+    );
   if (
     settings.drainingSeconds !== undefined &&
     !(

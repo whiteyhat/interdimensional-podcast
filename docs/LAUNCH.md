@@ -359,12 +359,13 @@ Worth knowing:
 - These commands never touch the box. Each service is found by name, remembered in `.dev.vars`
   as `RAILWAY_SERVICE_ID_SPONSOR_MEDIA_DEVNET` and so on, and refused outright if it ever
   resolves to the box's id. The box's own `RAILWAY_SERVICE_ID` is never written.
-- Each service reads its own config file (`broadcast/railway.sponsor-*.json`) and receives only
+- Each service gets the settings in its own file (`broadcast/railway.sponsor-*.json`), written
+  onto the service by setup because Railway no longer reads such a file itself, and receives only
   the files its Dockerfile copies, never the repository's `railway.json`, which describes the box.
 - Running `setup` again is safe. It keeps the tokens, sends the settings again, and removes
   nothing, including anything added by hand in Railway's dashboard. To rotate a token, delete
   its line from `.dev.vars`, run `setup` and `deploy`, then give the worker the new value.
-- `status` shows each service's config file, latest deployment, address and variable names, and
+- `status` shows each service's Dockerfile and healthcheck, latest deployment, address and variable names, and
   whether its token still matches `.dev.vars`.
 
 ## Launch day
