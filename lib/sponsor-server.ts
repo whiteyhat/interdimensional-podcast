@@ -1,5 +1,3 @@
-import { Transaction } from '@solana/web3.js';
-import { getBase58Decoder } from '@solana/kit';
 import { readStudioId } from './interact';
 import {
   SponsorError,
@@ -22,7 +20,6 @@ import {
   sponsorConnection,
   validWallet,
   randomPayReference,
-  refundSigner,
   fetchSponsorPrice,
   tokenInfo,
   spendable,
@@ -44,7 +41,6 @@ export type SponsorVars = {
   STUDIO_ID?: string;
   INTERACT_ORIGIN?: string;
   SPONSOR_RECONCILE_TOKEN?: string;
-  SPONSOR_REFUND_SECRET_KEY?: string;
   SPONSOR_USDC_MINT?: string;
   SPONSOR_ENABLED?: string;
   SPONSOR_FLAT_PRICE_CENTS?: string;
@@ -215,54 +211,6 @@ function mintFor(v: SponsorVars, asset: SponsorAsset) {
       ? v.SPONSOR_USDC_MINT?.trim() || USDC_MINT
       : v.COIN_MINT?.trim() || null;
 }
-async function liabilities(d: D1Database, asset: SponsorAsset) {
-  const rows = await d
-    .prepare(
-      `SELECT a.amount_base FROM sponsor_orders o JOIN sponsor_payment_attempts a ON a.id=o.paid_attempt_id WHERE a.asset=? AND o.status NOT IN ('fulfilled','refunded') UNION ALL SELECT a.amount_base FROM sponsor_payment_attempts a WHERE a.asset=? AND a.status IN ('issued','submitted') AND NOT EXISTS(SELECT 1 FROM sponsor_orders o WHERE o.paid_attempt_id=a.id) UNION ALL SELECT r.amount_base FROM sponsor_refunds r JOIN sponsor_payments p ON p.signature=r.payment_signature WHERE r.asset=? AND p.is_late=1 AND r.status!='confirmed'`,
-    )
-    .bind(asset, asset, asset)
-    .all<{ amount_base: string }>();
-  return rows.results.reduce(
-    (sum, r) => sum + BigInt(r.amount_base),
-    BigInt(0),
-  );
-}
-async function refundFunding(
-  d: D1Database,
-  v: SponsorVars,
-  asset: SponsorAsset,
-  mint: string | null,
-  additional: bigint,
-) {
-  const signer = refundSigner(v.SPONSOR_REFUND_SECRET_KEY);
-  if (!signer || signer.publicKey.toBase58() === v.TREASURY_WALLET?.trim())
-    throw new SponsorError(
-      503,
-      'Refund service is not configured with a dedicated wallet.',
-      'REFUNDS',
-    );
-  const c = connection(v);
-  const [balance, owed, solOwed, count] = await Promise.all([
-    spendable(c, signer.publicKey.toBase58(), mint),
-    liabilities(d, asset),
-    asset === 'SOL' ? Promise.resolve(BigInt(0)) : liabilities(d, 'SOL'),
-    d
-      .prepare(
-        `SELECT (SELECT count(*) FROM sponsor_orders WHERE paid_attempt_id IS NOT NULL AND status NOT IN ('fulfilled','refunded'))+(SELECT count(*) FROM sponsor_payment_attempts a WHERE a.status IN ('issued','submitted') AND NOT EXISTS(SELECT 1 FROM sponsor_orders o WHERE o.paid_attempt_id=a.id))+(SELECT count(*) FROM sponsor_refunds r JOIN sponsor_payments p ON p.signature=r.payment_signature WHERE p.is_late=1 AND r.status!='confirmed') AS n`,
-      )
-      .first<{ n: number }>(),
-  ]);
-  const feeReserve = BigInt(3000000) * BigInt((count?.n ?? 0) + 1);
-  if (
-    balance.tokens < owed + additional ||
-    balance.sol < (asset === 'SOL' ? owed + additional : solOwed) + feeReserve
-  )
-    throw new SponsorError(
-      503,
-      'Refund reserves for this asset are temporarily unavailable.',
-      'REFUNDS',
-    );
-}
 async function assetState(
   d: D1Database,
   v: SponsorVars,
@@ -326,19 +274,6 @@ export async function sponsorCatalog(
         if (!enabled)
           throw new SponsorError(503, 'Sponsorship checkout is not enabled.');
         const state = await assetState(d, v, id, now);
-        await refundFunding(
-          d,
-          v,
-          id,
-          state.mint,
-          BigInt(
-            amountBaseForCents(
-              sponsorPriceCents('message', id, flatCents),
-              state.priceUsd,
-              state.decimals,
-            ),
-          ),
-        );
         return {
           id,
           mint: state.mint,
@@ -383,7 +318,7 @@ export async function sponsorCatalog(
             : p.id === 'cap' && !capInventory.host && !capInventory.guest
               ? 'Both hosts’ caps are reserved. New places open after delivery.'
               : !assets.some((a) => a.available)
-                ? 'Payment and refund services are unavailable.'
+                ? 'Payment services are unavailable.'
                 : null,
     })),
     assets,
@@ -422,31 +357,17 @@ export async function sponsorReceipt(
   token: string,
   origin: string,
 ): Promise<SponsorReceipt> {
-  const [attempts, refunds, asset] = await Promise.all([
+  const [attempts, asset] = await Promise.all([
     d
       .prepare(
         'SELECT * FROM sponsor_payment_attempts WHERE order_id=? ORDER BY issued_at DESC',
       )
       .bind(o.id)
       .all<db.AttemptRow>(),
-    d
-      .prepare(
-        'SELECT * FROM sponsor_refunds WHERE order_id=? ORDER BY created_at DESC',
-      )
-      .bind(o.id)
-      .all<db.RefundRow>(),
     JSON.parse(o.draft).assetId
       ? db.getAsset(d, JSON.parse(o.draft).assetId)
       : Promise.resolve(null),
   ]);
-  const refundViews = refunds.results.map((r) => ({
-    id: r.id,
-    asset: r.asset,
-    amountBase: r.amount_base,
-    status: r.status,
-    signature: r.signature,
-    error: r.error,
-  }));
   const queuePosition = ['paid', 'leased', 'prepared'].includes(o.status)
     ? ((
         await d
@@ -471,14 +392,8 @@ export async function sponsorReceipt(
       sponsorProducts.find((p) => p.id === o.product)!.priceCents,
     attempts: attempts.results.map((a) => attemptView(a, origin)),
     fulfillment: db.fulfillment(o),
-    refund: refundViews[0] ?? null,
-    refunds: refundViews,
     paidAt: o.paid_at,
     payer: o.payer,
-    canRefund:
-      !!o.paid_attempt_id &&
-      (['paid', 'paused'].includes(o.status) ||
-        (['leased', 'prepared'].includes(o.status) && !o.started_at)),
     canReschedule: o.status === 'paused',
     assetUrl: asset?.url ?? null,
     queuePosition,
@@ -724,7 +639,6 @@ async function quote(
     const state = await assetState(d, v, asset, now),
       cents = sponsorPriceCents(o.product, asset, devnetPricing(v).flatCents),
       amount = amountBaseForCents(cents, state.priceUsd, state.decimals);
-    await refundFunding(d, v, asset, state.mint, BigInt(amount));
     const id = crypto.randomUUID();
     await db.insertAttempt(
       d,
@@ -798,162 +712,13 @@ async function submit(
     /* Always reconcile this immutable signature, including ambiguous RPC errors. */
   }
 }
-async function refundWork(d: D1Database, v: SponsorVars, r: db.RefundRow) {
-  const now = Date.now(),
-    lock = await db.acquireLock(d, `refund:${r.id}`, now, 60000);
-  if (!lock) return;
-  const c = connection(v);
-  try {
-    r = (await d
-      .prepare('SELECT * FROM sponsor_refunds WHERE id=?')
-      .bind(r.id)
-      .first<db.RefundRow>())!;
-    if (r.status === 'confirmed') return;
-    if (r.signature) {
-      const statuses = await c.getSignatureStatuses([r.signature], {
-        searchTransactionHistory: true,
-      });
-      const status = statuses.value[0];
-      if (status && status.confirmationStatus === 'finalized' && !status.err) {
-        await d.batch([
-          d
-            .prepare(
-              "UPDATE sponsor_refunds SET status='confirmed',error=NULL,updated_at=? WHERE id=? AND signature=?",
-            )
-            .bind(now, r.id, r.signature),
-          d
-            .prepare(
-              "UPDATE sponsor_orders SET status='refunded',updated_at=? WHERE id=? AND status='refund-pending' AND paid_signature=?",
-            )
-            .bind(now, r.order_id, r.payment_signature),
-        ]);
-        return;
-      }
-      if (status && !status.err) {
-        return;
-      }
-      if (
-        r.last_valid_block_height !== null &&
-        (await c.getBlockHeight('finalized')) > r.last_valid_block_height
-      ) {
-        const tx = await c.getTransaction(r.signature, {
-          commitment: 'finalized',
-          maxSupportedTransactionVersion: 0,
-        });
-        if (tx && tx.meta && !tx.meta.err) {
-          await d.batch([
-            d
-              .prepare(
-                "UPDATE sponsor_refunds SET status='confirmed',error=NULL,updated_at=? WHERE id=? AND signature=?",
-              )
-              .bind(now, r.id, r.signature),
-            d
-              .prepare(
-                "UPDATE sponsor_orders SET status='refunded',updated_at=? WHERE id=? AND status='refund-pending' AND paid_signature=?",
-              )
-              .bind(now, r.order_id, r.payment_signature),
-          ]);
-          return;
-        }
-        if (
-          !(status?.confirmationStatus === 'finalized' && status.err) &&
-          !tx?.meta?.err
-        ) {
-          await d
-            .prepare(
-              "UPDATE sponsor_refunds SET status='blocked',error=?,updated_at=? WHERE id=? AND signature=?",
-            )
-            .bind(
-              'The previous refund needs archival confirmation before another transfer can be signed.',
-              now,
-              r.id,
-              r.signature,
-            )
-            .run();
-          return;
-        }
-        await d
-          .prepare(
-            "UPDATE sponsor_refunds SET status='queued',signed_tx=NULL,signature=NULL,last_valid_block_height=NULL,updated_at=? WHERE id=? AND signature=?",
-          )
-          .bind(now, r.id, r.signature)
-          .run();
-        r = { ...r, signed_tx: null, signature: null };
-      }
-    }
-    if (!r.signed_tx) {
-      const signer = refundSigner(v.SPONSOR_REFUND_SECRET_KEY);
-      if (!signer) throw new SponsorError(503, 'Refund signer is unavailable.');
-      const built = await buildSponsorTransaction(c, {
-        wallet: signer.publicKey.toBase58(),
-        recipient: r.recipient,
-        mint: r.mint,
-        amountBase: r.amount_base,
-        decimals: r.decimals,
-        reference: randomPayReference(),
-        refund: true,
-      });
-      const tx = Transaction.from(Buffer.from(built.transaction, 'base64'));
-      tx.partialSign(signer);
-      const signed = tx.serialize().toString('base64'),
-        sig = getBase58Decoder().decode(tx.signature!);
-      await d
-        .prepare(
-          `UPDATE sponsor_refunds SET status='signed',signed_tx=?,signature=?,last_valid_block_height=?,error=NULL,updated_at=? WHERE id=? AND signed_tx IS NULL AND EXISTS(SELECT 1 FROM sponsor_locks WHERE id=? AND token=? AND until_at>?)`,
-        )
-        .bind(
-          signed,
-          sig,
-          built.lastValidBlockHeight,
-          now,
-          r.id,
-          `refund:${r.id}`,
-          lock,
-          Date.now(),
-        )
-        .run();
-      r = (await d
-        .prepare('SELECT * FROM sponsor_refunds WHERE id=?')
-        .bind(r.id)
-        .first<db.RefundRow>())!;
-    }
-    if (r.signed_tx) {
-      await c.sendRawTransaction(Buffer.from(r.signed_tx, 'base64'), {
-        skipPreflight: false,
-        maxRetries: 3,
-      });
-      await d
-        .prepare(
-          "UPDATE sponsor_refunds SET status='submitted',error=NULL,updated_at=? WHERE id=? AND signature=?",
-        )
-        .bind(Date.now(), r.id, r.signature)
-        .run();
-    }
-  } catch (e) {
-    await d
-      .prepare(
-        "UPDATE sponsor_refunds SET error=?,updated_at=? WHERE id=? AND status!='confirmed'",
-      )
-      .bind(
-        e instanceof SponsorError
-          ? e.message
-          : 'Refund is still queued while the network or reserve service recovers.',
-        Date.now(),
-        r.id,
-      )
-      .run();
-  } finally {
-    await db.releaseLock(d, `refund:${r.id}`, lock);
-  }
-}
 export async function reconcileSponsorships(v: SponsorVars) {
   const d = await sponsorDatabase(v),
     now = Date.now(),
     lock = await db.acquireLock(d, 'reconcile', now, 90000);
   if (!lock) return { ok: true, busy: true };
   let checked = 0,
-    errors = 0,
-    refunded = 0;
+    errors = 0;
   try {
     await db.pauseExpired(d, now);
     await db.resumeDue(d, now);
@@ -961,17 +726,6 @@ export async function reconcileSponsorships(v: SponsorVars) {
       .prepare('DELETE FROM sponsor_rate_limits WHERE window_at<?')
       .bind(now - 3600000)
       .run();
-    // Refunds get the first work budget so expensive reference history cannot starve them.
-    const refunds = await d
-      .prepare(
-        "SELECT * FROM sponsor_refunds WHERE status!='confirmed' ORDER BY updated_at ASC LIMIT 3",
-      )
-      .all<db.RefundRow>();
-    for (const r of refunds.results) {
-      if (Date.now() - now > 25000) break;
-      await refundWork(d, v, r);
-      refunded++;
-    }
     const attempts = await d
       .prepare(
         `SELECT * FROM sponsor_payment_attempts ORDER BY CASE WHEN status IN ('issued','submitted') THEN 0 WHEN issued_at>? THEN 1 ELSE 2 END,last_checked_at ASC LIMIT 10`,
@@ -999,7 +753,7 @@ export async function reconcileSponsorships(v: SponsorVars) {
           .run();
       }
     }
-    return { ok: true, checked, errors, refunds: refunded };
+    return { ok: true, checked, errors };
   } finally {
     await db.releaseLock(d, 'reconcile', lock);
   }
@@ -1021,11 +775,7 @@ export async function sponsorContext(
     o.lease_until < Date.now() ||
     !['leased', 'prepared', 'playing', 'fulfilled'].includes(o.status)
   )
-    throw new SponsorError(
-      409,
-      'The delivery lease ended or a refund cancelled delivery.',
-      'LEASE',
-    );
+    throw new SponsorError(409, 'The delivery lease ended.', 'LEASE');
   if (!caps[o.product])
     throw new SponsorError(
       409,
@@ -1108,7 +858,7 @@ export async function handleSponsorship(
       if (action === 'activity') {
         const rows = await d
           .prepare(
-            `SELECT o.*,a.url AS asset_url FROM sponsor_orders o LEFT JOIN sponsor_assets a ON a.id=json_extract(o.draft,'$.assetId') WHERE o.paid_attempt_id IS NOT NULL AND o.status NOT IN ('refund-pending','refunded') ORDER BY o.paid_at DESC LIMIT 12`,
+            `SELECT o.*,a.url AS asset_url FROM sponsor_orders o LEFT JOIN sponsor_assets a ON a.id=json_extract(o.draft,'$.assetId') WHERE o.paid_attempt_id IS NOT NULL ORDER BY o.paid_at DESC LIMIT 12`,
           )
           .all<db.OrderRow & { asset_url: string | null }>();
         return response({
@@ -1151,16 +901,15 @@ export async function handleSponsorship(
       if (action === 'console') {
         const rows = await d
           .prepare(
-            "SELECT o.*,(SELECT json_group_array(json_object('status',r.status,'error',r.error)) FROM sponsor_refunds r WHERE r.order_id=o.id) AS refund_views FROM sponsor_orders o WHERE paid_attempt_id IS NOT NULL ORDER BY CASE WHEN status IN ('paid','leased','prepared','playing','paused','refund-pending') THEN 0 ELSE 1 END,paid_at DESC LIMIT 30",
+            "SELECT o.* FROM sponsor_orders o WHERE paid_attempt_id IS NOT NULL ORDER BY CASE WHEN status IN ('paid','leased','prepared','playing','paused') THEN 0 ELSE 1 END,paid_at DESC LIMIT 30",
           )
-          .all<db.OrderRow & { refund_views: string }>();
+          .all<db.OrderRow>();
         return response({
           orders: rows.results.map((o) => ({
             id: o.id,
             draft: JSON.parse(o.draft),
             status: o.status,
             fulfillment: db.fulfillment(o),
-            refunds: JSON.parse(o.refund_views || '[]'),
           })),
         });
       }
@@ -1325,9 +1074,7 @@ export async function handleSponsorship(
       if (action === 'submit')
         await submit(d, v, a, string(body.signedTx, 6001));
       else await recoverAttempt(d, v, a, string(body.signature) || undefined);
-    } else if (action === 'refund')
-      await db.requestRefund(d, order.id, Date.now());
-    else if (action === 'reschedule') {
+    } else if (action === 'reschedule') {
       const live = await producer(d, Date.now());
       if (!live.studioOnline || !live.capabilities[order.product])
         throw new SponsorError(

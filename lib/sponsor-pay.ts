@@ -59,21 +59,6 @@ export function ata(owner: string, mint: string): PublicKey {
 export function randomPayReference(): string {
   return Keypair.generate().publicKey.toBase58();
 }
-export function refundSigner(raw: string | undefined): Keypair | null {
-  if (!raw) return null;
-  try {
-    const value = JSON.parse(raw);
-    if (
-      !Array.isArray(value) ||
-      value.length !== 64 ||
-      value.some((n) => !Number.isInteger(n) || n < 0 || n > 255)
-    )
-      return null;
-    return Keypair.fromSecretKey(Uint8Array.from(value));
-  } catch {
-    return null;
-  }
-}
 export async function fetchSponsorPrice(
   c: Connection,
   mint: string,
@@ -168,20 +153,6 @@ function tokenTransfer(
     data,
   });
 }
-function createAta(payer: string, owner: string, mint: string) {
-  return new TransactionInstruction({
-    programId: ATA_PROGRAM,
-    keys: [
-      { pubkey: new PublicKey(payer), isSigner: true, isWritable: true },
-      { pubkey: ata(owner, mint), isSigner: false, isWritable: true },
-      { pubkey: new PublicKey(owner), isSigner: false, isWritable: false },
-      { pubkey: new PublicKey(mint), isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: TOKEN_PROGRAM, isSigner: false, isWritable: false },
-    ],
-    data: Buffer.from([1]),
-  });
-}
 export async function buildSponsorTransaction(
   c: Connection,
   v: {
@@ -191,7 +162,6 @@ export async function buildSponsorTransaction(
     amountBase: string;
     decimals: number;
     reference: string;
-    refund?: boolean;
   },
 ): Promise<{
   transaction: string;
@@ -229,18 +199,13 @@ export async function buildSponsorTransaction(
     ComputeBudgetProgram.setComputeUnitLimit({ units: 60000 }),
     ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 100000 }),
   );
-  let rent = BigInt(0);
   if (v.mint) {
-    if (!destination.hasAta) {
-      if (!v.refund)
-        throw new SponsorError(
-          503,
-          'The treasury token account is not ready.',
-          'TREASURY',
-        );
-      rent = BigInt(await c.getMinimumBalanceForRentExemption(165));
-      tx.add(createAta(v.wallet, v.recipient, v.mint));
-    }
+    if (!destination.hasAta)
+      throw new SponsorError(
+        503,
+        'The treasury token account is not ready.',
+        'TREASURY',
+      );
     tx.add(
       tokenTransfer(
         v.wallet,
@@ -280,7 +245,7 @@ export async function buildSponsorTransaction(
     .value;
   if (fee === null)
     throw new SponsorError(503, 'Network fees are unavailable.', 'FEE');
-  const required = BigInt(fee) + rent + (v.mint ? BigInt(0) : amount);
+  const required = BigInt(fee) + (v.mint ? BigInt(0) : amount);
   if (balance.sol < required)
     throw new SponsorError(
       409,
@@ -293,7 +258,7 @@ export async function buildSponsorTransaction(
       .serialize({ requireAllSignatures: false, verifySignatures: false })
       .toString('base64'),
     lastValidBlockHeight: latest.lastValidBlockHeight,
-    feeLamports: (BigInt(fee) + rent).toString(),
+    feeLamports: BigInt(fee).toString(),
   };
 }
 export function inspectSponsorSigned(

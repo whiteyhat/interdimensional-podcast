@@ -57,21 +57,12 @@ export function SponsorConsole({
       {
         ...order,
         displayStatus: order.phase as string,
-        refunds: [] as SponsorConsoleOrder['refunds'],
       },
     ]),
   );
   for (const row of remote) {
     const local = combined.get(row.id);
-    if (
-      local &&
-      !['fulfilled', 'refunded', 'refund-pending', 'paused'].includes(
-        row.status,
-      )
-    ) {
-      local.refunds = row.refunds;
-      continue;
-    }
+    if (local && !['fulfilled', 'paused'].includes(row.status)) continue;
     combined.set(row.id, {
       id: row.id,
       draft: row.draft,
@@ -79,13 +70,12 @@ export function SponsorConsole({
       phase:
         row.status === 'playing'
           ? 'playing'
-          : row.status === 'fulfilled' || row.status === 'refunded'
+          : row.status === 'fulfilled'
             ? 'fulfilled'
             : row.status === 'paused'
               ? 'paused'
               : 'queued',
       displayStatus: row.status,
-      refunds: row.refunds,
       leaseToken: '',
       leaseUntil: 0,
       assetUrl: null,
@@ -206,15 +196,6 @@ export function SponsorConsole({
               {order.error && (
                 <small className="sponsor-console-alert">{order.error}</small>
               )}
-              {order.refunds.map((refund, i) => (
-                <small
-                  key={i}
-                  className={refund.error ? 'sponsor-console-alert' : undefined}
-                >
-                  Refund {refund.status}
-                  {refund.error ? ` · ${refund.error}` : ''}
-                </small>
-              ))}
             </li>
           ))}
       </ol>
@@ -233,8 +214,8 @@ export function SponsorConsole({
         </details>
       )}
       <p className="sponsor-console-policy">
-        Interrupted placements resume with their verified progress. Refund
-        status stays on each buyer’s receipt.
+        Interrupted placements resume with their verified progress. Every
+        placement is final once paid.
       </p>
     </section>
   );

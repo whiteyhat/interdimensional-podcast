@@ -14,7 +14,6 @@ const labels = {
   'on-air': 'Your sponsorship is on air',
   paused: 'Saved for the next live slot',
   delivered: 'That was your moment.',
-  refund: 'Your refund',
 };
 export function SponsorReceipt({
   receipt,
@@ -24,7 +23,7 @@ export function SponsorReceipt({
 }: {
   receipt: Receipt;
   busy: boolean;
-  onAction: (action: 'reschedule' | 'refund') => void;
+  onAction: (action: 'reschedule') => void;
   onNew: () => void;
 }) {
   const stage = receiptStage(receipt);
@@ -60,12 +59,10 @@ export function SponsorReceipt({
       </h3>
       <p>
         {stage === 'paused'
-          ? 'Your remaining placement is safe. Resume it in the next live slot, or request a refund.'
+          ? 'Your remaining placement is safe. It resumes in the next live slot.'
           : stage === 'delivered'
             ? 'From your wallet to the conversation. Thanks for being part of the show.'
-            : stage === 'refund'
-              ? 'The amount you paid returns in the original asset. The studio covers the refund network fee.'
-              : 'Keep watching. This receipt follows your placement through the studio.'}
+            : 'Keep watching. This receipt follows your placement through the studio.'}
       </p>
       <div className="sponsor-receipt-details">
         <span>{productCopy[receipt.draft.product].title}</span>
@@ -90,33 +87,20 @@ export function SponsorReceipt({
           </span>
         </div>
       )}
-      {stage !== 'refund' && (
-        <ol className="sponsor-receipt-steps">
-          {steps.map((label, i) => (
-            <li key={label} className={i <= current ? 'reached' : ''}>
-              <span>
-                {i < current || stage === 'delivered' ? (
-                  <Check size={11} />
-                ) : (
-                  i + 1
-                )}
-              </span>
-              {label}
-            </li>
-          ))}
-        </ol>
-      )}
-      {receipt.refund && (
-        <p className="sponsor-refund-state">
-          Refund{' '}
-          {receipt.refund.status === 'confirmed'
-            ? 'confirmed'
-            : receipt.refund.status === 'blocked'
-              ? 'waiting for the studio to resolve'
-              : 'in progress'}
-          {receipt.refund.error ? `. ${receipt.refund.error}` : '.'}
-        </p>
-      )}
+      <ol className="sponsor-receipt-steps">
+        {steps.map((label, i) => (
+          <li key={label} className={i <= current ? 'reached' : ''}>
+            <span>
+              {i < current || stage === 'delivered' ? (
+                <Check size={11} />
+              ) : (
+                i + 1
+              )}
+            </span>
+            {label}
+          </li>
+        ))}
+      </ol>
       <div className="sponsor-receipt-links">
         <a href={`/?receipt=${encodeURIComponent(receipt.token)}`}>
           Open receipt <ExternalLink size={12} />
@@ -130,15 +114,6 @@ export function SponsorReceipt({
             Payment on Solana <ExternalLink size={12} />
           </a>
         )}
-        {receipt.refund?.signature && (
-          <a
-            href={`https://solscan.io/tx/${encodeURIComponent(receipt.refund.signature)}`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            Refund on Solana <ExternalLink size={12} />
-          </a>
-        )}
       </div>
       {receipt.canReschedule && (
         <button
@@ -150,18 +125,8 @@ export function SponsorReceipt({
           Use the next live slot →
         </button>
       )}
-      {receipt.canRefund && (
-        <button
-          type="button"
-          className="sponsor-text-button"
-          disabled={busy}
-          onClick={() => onAction('refund')}
-        >
-          Request a full refund
-        </button>
-      )}
-      {!['payment', 'refund'].includes(stage) ||
-      receipt.status === 'refunded' ? (
+      {/* Every paid pass leads somewhere: a way back to the placements is always one tap. */}
+      {stage !== 'payment' ? (
         <button
           type="button"
           className="sponsor-button secondary"

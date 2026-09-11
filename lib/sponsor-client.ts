@@ -78,9 +78,6 @@ export function receiptStage(receipt: Pick<SponsorReceipt, 'status'>) {
       return 'paused';
     case 'fulfilled':
       return 'delivered';
-    case 'refund-pending':
-    case 'refunded':
-      return 'refund';
   }
 }
 export function deliveryProgress(

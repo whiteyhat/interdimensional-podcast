@@ -22,9 +22,7 @@ export type SponsorStatus =
   | 'prepared'
   | 'playing'
   | 'paused'
-  | 'fulfilled'
-  | 'refund-pending'
-  | 'refunded';
+  | 'fulfilled';
 export type SponsorFulfillment = {
   visibleMs: number;
   appearances: number;
@@ -53,14 +51,6 @@ export type SponsorAttempt = {
   verifiedSignature: string | null;
   solanaPayUrl: string;
 };
-export type SponsorRefund = {
-  id: string;
-  asset: SponsorAsset;
-  amountBase: string;
-  status: 'queued' | 'signed' | 'submitted' | 'confirmed' | 'blocked';
-  signature: string | null;
-  error: string | null;
-};
 export type SponsorReceipt = {
   id: string;
   token: string;
@@ -69,11 +59,8 @@ export type SponsorReceipt = {
   priceCents: number;
   attempts: SponsorAttempt[];
   fulfillment: SponsorFulfillment;
-  refund: SponsorRefund | null;
-  refunds: SponsorRefund[];
   paidAt: number | null;
   payer: string | null;
-  canRefund: boolean;
   canReschedule: boolean;
   assetUrl: string | null;
   queuePosition?: number | null;

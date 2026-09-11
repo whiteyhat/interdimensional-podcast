@@ -89,7 +89,7 @@ CF_STREAM_TOKEN=
 CF_LIVE_INPUT_ID=
 # Build time only (.env.production, not here): D1_DATABASE_ID from `wrangler d1 create`.
 
-# ---- Sponsorships. Opt in after staging wallet, delivery, and refund rehearsal.
+# ---- Sponsorships. Opt in after the staging wallet and delivery rehearsal. There are no refunds.
 SPONSOR_ENABLED=false
 # ---- Devnet rehearsal pricing. Both are refused unless SOLANA_RPC_URL is devnet or local,
 # so a copied secret cannot quietly sell a $100 placement for a dollar on mainnet.
@@ -103,9 +103,6 @@ SPONSOR_SOL_USD=
 SITE_URL=
 # Server-side Jupiter v3 price access. USDC stays available without a market quote.
 JUPITER_API_KEY=
-# Dedicated refund reserve wallet: JSON array of 64 secret-key bytes. Server only.
-# Fund it with every enabled asset and SOL for refund fees; never use the treasury key.
-SPONSOR_REFUND_SECRET_KEY=
 SPONSOR_RECONCILE_TOKEN=
 # Authenticated CPU worker from broadcast/Dockerfile.sponsor-media (HTTPS in production).
 SPONSOR_MEDIA_URL=

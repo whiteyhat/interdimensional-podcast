@@ -134,11 +134,8 @@ try {
             startedAt: null,
             completedAt: null,
           },
-          refund: null,
-          refunds: [],
           paidAt: null,
           payer: null,
-          canRefund: false,
           canReschedule: false,
           assetUrl: null,
         };

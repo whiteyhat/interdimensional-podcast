@@ -426,7 +426,7 @@ export class SponsorProgram {
       this.changed();
     });
   }
-  /** Pause relinquishes delivery before refunds become eligible; a new lease resumes unfinished work. */
+  /** Pause relinquishes delivery; a new lease resumes the unfinished work where it stopped. */
   failedRender(line: Line, error: unknown) {
     this.queuePauses(this.references(line).values(), line.id, error);
     return this.enqueue(() => this.drainPauses());
@@ -449,7 +449,7 @@ export class SponsorProgram {
     this.queuePauses([reference], shot, error);
     return this.enqueue(() => this.drainPauses());
   }
-  /** Pause relinquishes delivery before refunds become eligible; a new lease resumes unfinished work. */
+  /** Pause relinquishes delivery; a new lease resumes the unfinished work where it stopped. */
   stop() {
     ++this.epoch;
     this.queuePauses(

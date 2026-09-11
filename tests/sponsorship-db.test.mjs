@@ -146,15 +146,9 @@ void test('cap inventory reserves one host through ambiguous payments and preser
   assert.equal(
     (await db.getOrder(d, 'cap1')).status,
     'paid',
-    'late evidence is preserved for queued delivery/refund',
+    'late evidence is preserved for queued delivery',
   );
   assert.equal((await db.capInventory(d)).host, false);
-  await db.requestRefund(d, 'cap1', 1010);
-  assert.equal(
-    (await db.capInventory(d)).host,
-    false,
-    'the other buyer still owns a reservation',
-  );
   d.sql
     .prepare(
       "UPDATE sponsor_payment_attempts SET status='expired' WHERE id='cap-a2'",
@@ -162,8 +156,16 @@ void test('cap inventory reserves one host through ambiguous payments and preser
     .run();
   assert.equal(
     (await db.capInventory(d)).host,
+    false,
+    'a paid cap keeps its host until it is delivered; nothing refunds it away',
+  );
+  d.sql
+    .prepare("UPDATE sponsor_orders SET status='fulfilled' WHERE id='cap1'")
+    .run();
+  assert.equal(
+    (await db.capInventory(d)).host,
     true,
-    'refund cancellation releases future inventory atomically',
+    'delivery releases the host for the next buyer',
   );
 });
 void test('settlement is exactly once and a late second payment is recorded separately', async () => {
@@ -202,33 +204,6 @@ void test('settlement is exactly once and a late second payment is recorded sepa
     1,
   );
 });
-void test('refund cancels delivery before a stale producer can start', async () => {
-  const d = await fixture();
-  await db.settlePayment(
-    d,
-    'a1',
-    { signature: 'sig1', payer: 'payer', blockTime: 150 },
-    300,
-  );
-  const [lease] = await db.leaseOrders(d, 'studio', 400, 1);
-  assert.ok(lease.lease_token);
-  await db.requestRefund(d, 'order', 450);
-  await assert.rejects(
-    db.applyEvent(
-      d,
-      {
-        orderId: 'order',
-        studioId: 'studio',
-        leaseToken: lease.lease_token,
-        eventId: 'ev',
-        type: 'start',
-      },
-      460,
-    ),
-    /lease|refund|delivery/i,
-  );
-  assert.equal((await db.getOrder(d, 'order')).status, 'refund-pending');
-});
 void test('two studios cannot claim the same order', async () => {
   const d = await fixture();
   await db.settlePayment(
@@ -240,7 +215,7 @@ void test('two studios cannot claim the same order', async () => {
   assert.equal((await db.leaseOrders(d, 'one', 400, 1)).length, 1);
   assert.equal((await db.leaseOrders(d, 'two', 400, 1)).length, 0);
 });
-void test('replayed start acknowledgement cannot authorize playback after cancellation', async () => {
+void test('replayed start acknowledgement cannot authorize playback after the lease is relinquished', async () => {
   const d = await fixture();
   await db.settlePayment(
     d,
@@ -253,10 +228,9 @@ void test('replayed start acknowledgement cannot authorize playback after cancel
   await db.applyEvent(d, { ...base, eventId: 'prep', type: 'prepare' }, 410);
   await db.applyEvent(d, { ...base, eventId: 'start', type: 'start' }, 420);
   await db.applyEvent(d, { ...base, eventId: 'pause', type: 'paused' }, 430);
-  await db.requestRefund(d, o.id, 440);
   await assert.rejects(
     db.applyEvent(d, { ...base, eventId: 'start', type: 'start' }, 450),
-    /lease|refund|delivery/i,
+    /lease|delivery/i,
   );
 });
 void test('progress is idempotent and cannot complete an undelivered cap', async () => {

@@ -987,19 +987,7 @@ aside.sponsor-rail {
   font-size: 10px;
   color: #b6c0a8;
   margin-top: 5px;
-}
-.sponsor-refund-confirm {
-  padding: 16px;
-  border: 1px solid #d1aa7270;
-  border-radius: 6px;
-  margin-top: 16px;
-  font-size: 12px;
-}
-.sponsor-refund-confirm p {
-  color: #b6c0a8;
-  line-height: 1.6;
-}
-.sponsor-explainer {
+}.sponsor-explainer {
   margin-top: 20px;
   padding-top: 16px;
   border-top: 1px solid var(--sponsor-line);

@@ -41,10 +41,6 @@ void test('an ambiguous wallet response stays attached to its receipt and must n
     C.receiptStage({ ...receipt, status: 'fulfilled' }),
     'delivered',
   );
-  assert.equal(
-    C.receiptStage({ ...receipt, status: 'refund-pending' }),
-    'refund',
-  );
 });
 void test('receipt progress reflects delivery evidence rather than generation', () => {
   assert.equal(

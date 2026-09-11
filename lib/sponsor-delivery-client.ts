@@ -11,7 +11,6 @@ export type SponsorConsoleOrder = {
   draft: SponsorDraft;
   status: SponsorStatus;
   fulfillment: SponsorFulfillment;
-  refunds: { status: string; error: string | null }[];
 };
 
 async function call<T>(body: unknown) {

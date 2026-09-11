@@ -36,6 +36,7 @@ import {
 import { SponsorPreview } from './sponsor-preview';
 import { SponsorStepper } from './sponsor-stepper';
 import { SponsorReceipt } from './sponsor-receipt';
+import { celebratePayment } from '@/lib/celebrate';
 const SponsorWallet = dynamic(
   () => import('./sponsor-wallet').then((m) => m.SponsorWallet),
   {
@@ -77,7 +78,6 @@ export function SponsorPanel() {
   const [connectionError, setConnectionError] = useState('');
   const [artwork, setArtwork] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [showRefund, setShowRefund] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const form = useRef<HTMLFormElement>(null);
   const stepPanel = useRef<HTMLDivElement>(null);
@@ -237,10 +237,7 @@ export function SponsorPanel() {
       if (!controller.signal.aborted)
         timer = setTimeout(
           poll,
-          receiptRef.current?.status === 'fulfilled' ||
-            receiptRef.current?.status === 'refunded'
-            ? 30000
-            : 4000,
+          receiptRef.current?.status === 'fulfilled' ? 30000 : 4000,
         );
     }
     void poll();
@@ -251,6 +248,20 @@ export function SponsorPanel() {
   }, [token, updateReceipt]);
   const received =
     !!receipt && !['draft', 'payment-pending'].includes(receipt.status);
+  // Celebrate the payment the viewer watched confirm, once, and only that: a receipt that
+  // was already paid when the page opened is a return visit, not a moment.
+  const seenStatus = useRef<{ id: string; status: string } | null>(null);
+  useEffect(() => {
+    if (!receipt) return;
+    const before = seenStatus.current;
+    seenStatus.current = { id: receipt.id, status: receipt.status };
+    if (
+      received &&
+      before?.id === receipt.id &&
+      ['draft', 'payment-pending'].includes(before.status)
+    )
+      void celebratePayment(document.querySelector('.sponsor-receipt'));
+  }, [receipt, received]);
   const locked = step === 3 || received || signing;
   const price = catalogPriceCents(catalog, draft.product, asset);
   const fullPrice = catalogPriceCents(catalog, draft.product, 'USDC');
@@ -392,19 +403,14 @@ export function SponsorPanel() {
       setBusy(false);
     }
   }
-  async function act(action: 'reschedule' | 'refund') {
+  async function act(action: 'reschedule') {
     if (!receipt || operation.current) return;
-    if (action === 'refund' && !showRefund) {
-      setShowRefund(true);
-      return;
-    }
     operation.current = true;
     setBusy(true);
     setError('');
     try {
       const result = await sponsorAction({ action, token: receipt.token });
       if (result.receipt) updateReceipt(result.receipt);
-      setShowRefund(false);
     } catch (e) {
       setError(
         e instanceof Error
@@ -438,7 +444,6 @@ export function SponsorPanel() {
     setStep(back);
     setMethod('wallet');
     setError('');
-    setShowRefund(false);
     touchedToken.current = null;
     const url = new URL(location.href);
     url.searchParams.delete('receipt');
@@ -801,33 +806,6 @@ export function SponsorPanel() {
         artwork={artwork || receipt?.assetUrl}
         paid={received}
       />
-      {showRefund && (
-        <fieldset
-          className="sponsor-refund-confirm"
-          aria-label="Confirm refund"
-        >
-          <b>Cancel this placement and return your payment?</b>
-          <p>
-            Your remaining delivery will stop before the refund is sent to the
-            wallet that paid.
-          </p>
-          <button
-            className="sponsor-button"
-            type="button"
-            disabled={busy}
-            onClick={() => void act('refund')}
-          >
-            {busy ? 'Requesting refund…' : 'Confirm full refund'}
-          </button>
-          <button
-            className="sponsor-text-button"
-            type="button"
-            onClick={() => setShowRefund(false)}
-          >
-            Keep my placement
-          </button>
-        </fieldset>
-      )}
       <p className="sponsor-error" role="alert">
         {error}
       </p>
@@ -841,9 +819,8 @@ export function SponsorPanel() {
           Your receipt updates when the placement actually airs.
         </p>
         <p>
-          If the stream pauses, we keep your unfinished placement for the next
-          slot. You can request a refund before it starts or while delivery is
-          paused.
+          If the stream pauses, we keep your unfinished placement and it resumes
+          in the next live slot. Every placement is final once paid.
         </p>
       </details>
     </section>

@@ -66,7 +66,6 @@ const post = (v, body, headers = {}) =>
 async function fixture() {
   const DB = database(),
     treasury = Keypair.generate(),
-    signer = Keypair.generate(),
     wallet = Keypair.generate();
   const v = {
     DB,
@@ -74,7 +73,6 @@ async function fixture() {
     SPONSOR_ENABLED: 'true',
     SOLANA_RPC_URL: 'http://127.0.0.1:65534/' + crypto.randomUUID(),
     JUPITER_API_KEY: 'test',
-    SPONSOR_REFUND_SECRET_KEY: JSON.stringify([...signer.secretKey]),
     STUDIO_TOKEN: 'studio-token-0123456789',
   };
   await db.ensureSponsorSchema(DB);
@@ -190,52 +188,6 @@ void test('ambiguous broadcasts persist deterministic signature and cannot issue
         .n,
       1,
     );
-  } finally {
-    f.restore();
-  }
-});
-void test('refund wire is durable before broadcast and retries the same signature', async () => {
-  const f = await fixture();
-  try {
-    const { receipt } = await (
-      await post(f.v, {
-        action: 'draft',
-        draft: { product: 'message', name: 'Joe', message: 'Hello everyone' },
-      })
-    ).json();
-    const q = await (
-      await post(f.v, { action: 'quote', token: receipt.token, asset: 'SOL' })
-    ).json();
-    await db.settlePayment(
-      f.DB,
-      q.attempt.id,
-      {
-        signature: 'original',
-        payer: f.wallet.publicKey.toBase58(),
-        blockTime: Math.floor(Date.now() / 1000),
-      },
-      Date.now(),
-    );
-    assert.equal(
-      (await post(f.v, { action: 'refund', token: receipt.token })).status,
-      200,
-    );
-    const wires = [];
-    f.c.sendRawTransaction = async (wire) => {
-      const row = f.DB.sql.prepare('SELECT * FROM sponsor_refunds').get();
-      assert.ok(row.signed_tx);
-      wires.push(Buffer.from(wire).toString('base64'));
-      throw Error('network timeout');
-    };
-    await server.reconcileSponsorships(f.v);
-    await server.reconcileSponsorships(f.v);
-    assert.equal(wires.length, 2);
-    assert.equal(wires[0], wires[1]);
-    f.c.getSignatureStatuses = async () => ({
-      value: [{ confirmationStatus: 'finalized', err: null }],
-    });
-    await server.reconcileSponsorships(f.v);
-    assert.equal((await db.getOrder(f.DB, receipt.id)).status, 'refunded');
   } finally {
     f.restore();
   }
@@ -458,12 +410,7 @@ void test('USDC remains exactly five tokens without a Jupiter service', async ()
     globalThis.fetch = async () => {
       throw Error('oracle offline');
     };
-    const owners = [
-      f.v.TREASURY_WALLET,
-      Keypair.fromSecretKey(
-        Uint8Array.from(JSON.parse(f.v.SPONSOR_REFUND_SECRET_KEY)),
-      ).publicKey.toBase58(),
-    ];
+    const owners = [f.v.TREASURY_WALLET];
     f.c.getAccountInfo = async (key) => {
       if (key.toBase58() === pay.USDC_MINT) {
         const data = Buffer.alloc(82);
@@ -503,7 +450,7 @@ void test('USDC remains exactly five tokens without a Jupiter service', async ()
     f.restore();
   }
 });
-void test('studio context resolves immutable draft and rejects canceled leases', async () => {
+void test('studio context resolves immutable draft and rejects relinquished leases', async () => {
   const f = await fixture();
   try {
     const { receipt } = await (
@@ -537,7 +484,17 @@ void test('studio context resolves immutable draft and rejects canceled leases',
     );
     assert.equal(context.status, 200);
     assert.equal((await context.json()).order.draft.message, 'Hello everyone');
-    await db.requestRefund(f.DB, o.id, Date.now());
+    await db.applyEvent(
+      f.DB,
+      {
+        orderId: o.id,
+        studioId: 'studio',
+        leaseToken: o.lease_token,
+        eventId: 'pause',
+        type: 'paused',
+      },
+      Date.now(),
+    );
     assert.equal(
       (
         await post(
@@ -736,48 +693,6 @@ void test('an ambiguous pause acknowledgment remains recoverable after heartbeat
         .studio_id,
       'replacement',
     );
-  } finally {
-    f.restore();
-  }
-});
-void test('refund history loss never creates a second transfer after blockhash expiry', async () => {
-  const f = await fixture();
-  try {
-    const { receipt } = await (
-      await post(f.v, {
-        action: 'draft',
-        draft: { product: 'message', name: 'Joe', message: 'Hello everyone' },
-      })
-    ).json();
-    const q = await (
-      await post(f.v, { action: 'quote', token: receipt.token, asset: 'SOL' })
-    ).json();
-    await db.settlePayment(
-      f.DB,
-      q.attempt.id,
-      {
-        signature: 'original',
-        payer: f.wallet.publicKey.toBase58(),
-        blockTime: 100,
-      },
-      Date.now(),
-    );
-    await db.requestRefund(f.DB, receipt.id, Date.now());
-    const wires = [];
-    f.c.sendRawTransaction = async (wire) => {
-      wires.push(Buffer.from(wire).toString('base64'));
-      throw Error('accepted but timed out');
-    };
-    await server.reconcileSponsorships(f.v);
-    const first = f.DB.sql
-      .prepare('SELECT signature FROM sponsor_refunds')
-      .get().signature;
-    f.c.getBlockHeight = async () => 1000;
-    await server.reconcileSponsorships(f.v);
-    const row = f.DB.sql.prepare('SELECT * FROM sponsor_refunds').get();
-    assert.equal(row.signature, first);
-    assert.equal(row.status, 'blocked');
-    assert.equal(wires.length, 1);
   } finally {
     f.restore();
   }

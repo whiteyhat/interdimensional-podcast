@@ -96,9 +96,9 @@ void test('a failed authorization prevents the next sponsored clip from playing'
   const cue = h.program.nextCue(0);
   const batch = h.program.written(cue, lines());
   h.service.event = async () => {
-    throw Error('A refund cancelled delivery.');
+    throw Error('The delivery lease ended.');
   };
-  await assert.rejects(h.program.before(batch[0]), /cancelled/);
+  await assert.rejects(h.program.before(batch[0]), /lease ended/);
   assert.equal(h.program.snapshot()[0].phase, 'paused');
 });
 void test('caps count only played footage, require both mentions and six separate appearances', async () => {
@@ -380,7 +380,7 @@ void test('a cancellation during preparation removes every buffered sponsored tu
   const h = harness();
   h.service.event = async (event) => {
     h.events.push(event);
-    if (event.type === 'prepare') throw Error('A refund cancelled delivery.');
+    if (event.type === 'prepare') throw Error('The delivery lease ended.');
     return {};
   };
   const { engine } = engineHarness(h);
@@ -516,7 +516,7 @@ void test('rapid pause and resume cannot commit an authorization gate from befor
     assert.ok(h.events.some((e) => e.type === 'paused'));
     assert.ok(
       engine.getSnapshot().history.every((l) => !l.sponsorship),
-      'the old gate never admits refundable media',
+      'the old gate never admits media from a lost lease',
     );
   } finally {
     engine.dispose();

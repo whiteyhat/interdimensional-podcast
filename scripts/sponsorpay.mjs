@@ -1,6 +1,6 @@
 // End-to-end exercise of a SPONSORSHIP purchase against the DEPLOYED devnet worker.
 // scripts/paytest.mjs covers the five-dollar seat; nothing covered the sponsorship money
-// path, which is a different route, a different table and a different refund reserve.
+// path, which is a different route and a different table.
 //
 //   SITE=... STUDIO_TOKEN=... RPC_URL=... node scripts/sponsorpay.mjs
 //   SITE=... STUDIO_TOKEN=...            node scripts/sponsorpay.mjs --hold

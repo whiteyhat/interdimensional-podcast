@@ -38,12 +38,6 @@ export const sponsorSchema = [
  stage TEXT, appearance_id TEXT, visible_ms INTEGER NOT NULL DEFAULT 0, at INTEGER NOT NULL
 )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS sponsor_unique_appearance ON sponsor_fulfillment_events(order_id,appearance_id) WHERE appearance_id IS NOT NULL`,
-  `CREATE TABLE IF NOT EXISTS sponsor_refunds (
- id TEXT PRIMARY KEY, order_id TEXT NOT NULL, payment_signature TEXT NOT NULL UNIQUE, asset TEXT NOT NULL,
- mint TEXT, decimals INTEGER NOT NULL, amount_base TEXT NOT NULL, recipient TEXT NOT NULL,
- status TEXT NOT NULL DEFAULT 'queued', signed_tx TEXT, signature TEXT UNIQUE, last_valid_block_height INTEGER,
- error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, lock_token TEXT, lock_until INTEGER
-)`,
   `CREATE TABLE IF NOT EXISTS sponsor_assets (id TEXT PRIMARY KEY, status TEXT NOT NULL, url TEXT NOT NULL, mime TEXT NOT NULL, created_at INTEGER NOT NULL, metadata TEXT NOT NULL DEFAULT '{}')`,
   ...producerSchema,
   `CREATE TABLE IF NOT EXISTS sponsor_rate_limits (id TEXT PRIMARY KEY, count INTEGER NOT NULL, window_at INTEGER NOT NULL)`,
@@ -150,25 +144,6 @@ export type AttemptRow = {
   build_lock: string | null;
   build_until: number | null;
 };
-export type RefundRow = {
-  id: string;
-  order_id: string;
-  payment_signature: string;
-  asset: SponsorAsset;
-  mint: string | null;
-  decimals: number;
-  amount_base: string;
-  recipient: string;
-  status: 'queued' | 'signed' | 'submitted' | 'confirmed' | 'blocked';
-  signed_tx: string | null;
-  signature: string | null;
-  last_valid_block_height: number | null;
-  error: string | null;
-  created_at: number;
-  updated_at: number;
-  lock_token: string | null;
-  lock_until: number | null;
-};
 export type AssetRow = {
   id: string;
   status: string;
@@ -221,7 +196,7 @@ export async function createOrder(
     )
     .run();
 }
-// Released only by verified chain expiry or an atomic fulfillment/refund transition.
+// Released only by verified chain expiry or an atomic fulfillment transition.
 // A frontend quote timer is not evidence that a transfer cannot still arrive.
 const capObligation = `(c.product='cap' AND ((c.paid_attempt_id IS NOT NULL AND c.status IN ('paid','leased','prepared','playing','paused')) OR (c.paid_attempt_id IS NULL AND EXISTS(SELECT 1 FROM sponsor_payment_attempts a WHERE a.order_id=c.id AND a.status IN ('issued','submitted')))))`;
 export async function capInventory(
@@ -341,12 +316,9 @@ export async function settlePayment(
         `UPDATE sponsor_payment_attempts SET status='verified',verified_signature=COALESCE(verified_signature,?) WHERE id=? AND EXISTS(SELECT 1 FROM sponsor_payments WHERE signature=? AND attempt_id=?)`,
       )
       .bind(p.signature, attemptId, p.signature, attemptId),
-    // Extra transfers are always separate refund obligations; they never deliver another sponsorship.
-    d
-      .prepare(
-        `INSERT OR IGNORE INTO sponsor_refunds(id,order_id,payment_signature,asset,mint,decimals,amount_base,recipient,created_at,updated_at) SELECT p.signature,p.order_id,p.signature,a.asset,a.mint,a.decimals,a.amount_base,p.payer,?,? FROM sponsor_payments p JOIN sponsor_payment_attempts a ON a.id=p.attempt_id WHERE p.signature=? AND p.attempt_id=? AND p.is_late=1`,
-      )
-      .bind(now, now, p.signature, attemptId),
+    // A second transfer to an order that is already paid never delivers a second placement,
+    // and there are no refunds: it stays recorded in sponsor_payments with is_late=1, which is
+    // the whole record of it.
   ]);
 }
 export function fulfillment(row: OrderRow): SponsorFulfillment {
@@ -471,11 +443,7 @@ export async function applyEvent(
         ...(e.type === 'paused' ? ['paused'] : []),
       ].includes(current.status)
     )
-      throw new SponsorError(
-        409,
-        'The delivery lease ended or a refund cancelled delivery.',
-        'LEASE',
-      );
+      throw new SponsorError(409, 'The delivery lease ended.', 'LEASE');
     return current;
   }
   const order = await getOrder(d, e.orderId);
@@ -487,11 +455,7 @@ export async function applyEvent(
     order.lease_until < now ||
     !['leased', 'prepared', 'playing'].includes(order.status)
   )
-    throw new SponsorError(
-      409,
-      'The delivery lease ended or a refund cancelled delivery.',
-      'LEASE',
-    );
+    throw new SponsorError(409, 'The delivery lease ended.', 'LEASE');
   if ((e.stage || e.appearanceId) && e.type !== 'progress')
     throw new SponsorError(
       400,
@@ -602,31 +566,6 @@ export async function applyEvent(
       'LEASE',
     );
   return result;
-}
-export async function requestRefund(
-  d: D1Database,
-  orderId: string,
-  now: number,
-) {
-  await d.batch([
-    d
-      .prepare(
-        `UPDATE sponsor_orders SET status='refund-pending',lease_token=NULL,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE id=? AND paid_attempt_id IS NOT NULL AND (status IN ('paid','paused') OR (status IN ('leased','prepared') AND started_at IS NULL))`,
-      )
-      .bind(now, orderId),
-    d
-      .prepare(
-        `INSERT OR IGNORE INTO sponsor_refunds(id,order_id,payment_signature,asset,mint,decimals,amount_base,recipient,created_at,updated_at) SELECT o.id,o.id,o.paid_signature,a.asset,a.mint,a.decimals,a.amount_base,o.payer,?,? FROM sponsor_orders o JOIN sponsor_payment_attempts a ON a.id=o.paid_attempt_id WHERE o.id=? AND o.status='refund-pending'`,
-      )
-      .bind(now, now, orderId),
-  ]);
-  const order = await getOrder(d, orderId);
-  if (!order || !['refund-pending', 'refunded'].includes(order.status))
-    throw new SponsorError(
-      409,
-      'Pause active playback before requesting a refund. Completed sponsorships cannot be refunded.',
-      'REFUND',
-    );
 }
 export async function reschedule(d: D1Database, id: string, now: number) {
   await d

@@ -11,8 +11,7 @@ const browser = await chromium.launch({
 });
 let online = true,
   receipt = null,
-  quotes = 0,
-  refunds = 0;
+  quotes = 0;
 const assetList = ['USDC', 'SOL', 'FROGCLENCH'];
 const catalog = () => ({
   products: [
@@ -98,11 +97,8 @@ async function setup(viewport, reducedMotion = 'no-preference') {
             startedAt: null,
             completedAt: null,
           },
-          refund: null,
-          refunds: [],
           paidAt: null,
           payer: null,
-          canRefund: false,
           canReschedule: false,
           assetUrl: null,
           queuePosition: null,
@@ -136,20 +132,6 @@ async function setup(viewport, reducedMotion = 'no-preference') {
         };
         receipt.attempts = [attempt];
         result = { receipt, attempt, solanaPayUrl: attempt.solanaPayUrl };
-      } else if (body.action === 'refund') {
-        refunds++;
-        receipt.status = 'refund-pending';
-        receipt.canRefund = false;
-        receipt.canReschedule = false;
-        receipt.refund = {
-          id: 'refund-one',
-          asset: 'FROGCLENCH',
-          amountBase: '17500000',
-          status: 'queued',
-          signature: null,
-          error: null,
-        };
-        result = { receipt };
       } else result = { receipt };
     }
     return route.fulfill({ json: result });
@@ -273,28 +255,47 @@ try {
   );
   receipt.status = 'paid';
   receipt.paidAt = Date.now();
-  receipt.canRefund = true;
   receipt.queuePosition = 2;
   receipt.attempts[0].status = 'verified';
   receipt.attempts[0].verifiedSignature = '2'.repeat(88);
   await panel
     .getByRole('heading', { name: 'You’re in the queue' })
     .waitFor({ timeout: 10000 });
+  // The payment the viewer just watched confirm is celebrated, once.
+  await page.waitForFunction(
+    () =>
+      [...document.querySelectorAll('canvas')].some(
+        (c) => c.style.zIndex === '1000' && c.style.pointerEvents === 'none',
+      ),
+    null,
+    { timeout: 3000 },
+  );
   assert.match(await panel.locator('.sponsor-queue-position').innerText(), /2/);
   receipt.status = 'paused';
   receipt.canReschedule = true;
   await panel
     .getByRole('heading', { name: 'Saved for the next live slot' })
     .waitFor({ timeout: 10000 });
-  await panel.getByRole('button', { name: 'Request a full refund' }).click();
-  assert.equal(refunds, 0, 'refund needs the explicit final click');
-  await panel.getByRole('button', { name: 'Confirm full refund' }).click();
-  assert.equal(refunds, 1);
+  assert.equal(
+    await panel.getByRole('button', { name: /refund/i }).count(),
+    0,
+    'every placement is final once paid',
+  );
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
   await page.screenshot({
     path: 'work/sponsor-browser/desktop-receipt.png',
     fullPage: true,
   });
+  // A paid pass is never a dead end: the placements are always one tap away.
+  await panel.getByRole('button', { name: 'Create another moment' }).click();
+  await panel
+    .locator('input[name="sponsor-product"]')
+    .first()
+    .waitFor({ state: 'attached', timeout: 5000 });
+  assert.match(
+    await panel.locator('.sponsor-stepper-item.active').innerText(),
+    /choose/i,
+  );
   await context.close();
   online = false;
   receipt = null;
@@ -361,7 +362,7 @@ try {
   });
   await mobile.context.close();
   console.log(
-    'Browser rehearsal passed: three steps with no typing on the first, a layout that never moves when a product is chosen, value badges, draft reload, discount, validation focus, QR recovery, receipt/refund, 320px reflow, 16px inputs, native keyboard, reduced motion.',
+    'Browser rehearsal passed: three steps with no typing on the first, a layout that never moves when a product is chosen, value badges, draft reload, discount, validation focus, QR recovery, payment confetti, receipts that always lead back, no refunds, 320px reflow, 16px inputs, native keyboard, reduced motion.',
   );
 } catch (e) {
   for (const context of browser.contexts())

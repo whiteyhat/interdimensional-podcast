@@ -244,8 +244,7 @@ is devnet or local:
 | `SPONSOR_FLAT_PRICE_CENTS` | One price for every placement, in cents. `100` makes each a dollar. |
 | `SPONSOR_SOL_USD` | Dollars per SOL. Note the inverted units against `PRICE_FIXED`, which is tokens per dollar. |
 
-`node scripts/testmint.mjs` prints both, along with a funded `SPONSOR_REFUND_SECRET_KEY`.
-That reserve has to hold SOL and must not be the treasury, or every quote answers `REFUNDS`.
+`node scripts/testmint.mjs` prints both. There are no refunds, so no refund reserve either.
 Set them on the devnet worker, then:
 
 ```sh
