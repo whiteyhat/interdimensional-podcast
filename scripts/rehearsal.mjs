@@ -9,6 +9,7 @@
 // outputs: a rehearsal that reached pump.fun or X would be the expensive kind of mistake,
 // and nothing else in the pipeline blocks a wrong key.
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -42,68 +43,48 @@ if (Array.isArray(outputs) && outputs.length)
   );
 const target = await ingest(creds, uid);
 
-// ---- the picture: every clip with an audio track, in a fixed order, forever
+// ---- the picture: the plain idle clips, in a fixed order, forever. Their audio variants
+// carry the show's foley layer (a sip of tea, a beard scratch, headphone rustle over room
+// tone), which is meant to sit under conversation; looped with no conversation on top it is
+// just strange noise. So the picture goes out silent.
 const clips = (await readdir(FOOTAGE))
-  .filter((f) => f.endsWith('-audio-v1.mp4'))
+  .filter((f) => /^(host|guest)-[a-z-]+-v1\.mp4$/.test(f))
   .sort();
-if (!clips.length) throw Error(`No *-audio-v1.mp4 footage in ${FOOTAGE}.`);
+if (!clips.length) throw Error(`No idle footage in ${FOOTAGE}.`);
 const list = join(tmpdir(), 'pepe-chad-rehearsal.txt');
 await writeFile(
   list,
   clips.map((f) => `file '${join(FOOTAGE, f)}'`).join('\n') + '\n',
 );
 
+// A rehearsal says so on screen. Anyone who opens the devnet site mid-test should read
+// "rehearsal", not wonder why the hosts never speak. The label is skipped, not fatal, on a
+// machine without a usable font.
+const FONTS = [
+  '/System/Library/Fonts/Supplemental/Courier New Bold.ttf',
+  '/System/Library/Fonts/Menlo.ttc',
+  '/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf',
+];
+const font = FONTS.find((path) => existsSync(path));
+const label = font
+  ? `,drawtext=fontfile='${font}':text='DEVNET REHEARSAL - NOT THE SHOW':fontsize=26:fontcolor=0xefece4:x=40:y=40:box=1:boxcolor=0x171918@0.72:boxborderw=14`
+  : '';
+
 // The same shape the broadcast box sends: H.264 high, keyframe every two seconds, AAC 48k.
+// Cloudflare Stream Live takes H.264 and AAC only, so the silence is still an AAC track.
 // `-re` paces the file at real time; without it ffmpeg would push minutes of video a second.
+// prettier-ignore
 const args = [
-  '-hide_banner',
-  '-loglevel',
-  'warning',
-  '-nostats',
-  '-re',
-  '-stream_loop',
-  '-1',
-  '-f',
-  'concat',
-  '-safe',
-  '0',
-  '-i',
-  list,
-  '-vf',
-  'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=24,format=yuv420p',
-  '-c:v',
-  'libx264',
-  '-preset',
-  'veryfast',
-  '-tune',
-  'zerolatency',
-  '-profile:v',
-  'high',
-  '-b:v',
-  '3000k',
-  '-maxrate',
-  '3000k',
-  '-bufsize',
-  '6000k',
-  '-g',
-  '48',
-  '-keyint_min',
-  '48',
-  '-sc_threshold',
-  '0',
-  '-c:a',
-  'aac',
-  '-b:a',
-  '128k',
-  '-ar',
-  '48000',
-  '-ac',
-  '2',
-  '-af',
-  'aresample=async=1',
-  '-f',
-  'flv',
-  `${target.url}${target.key}`,
+  '-hide_banner', '-loglevel', 'warning', '-nostats',
+  '-re', '-stream_loop', '-1', '-f', 'concat', '-safe', '0', '-i', list,
+  '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
+  '-map', '0:v:0', '-map', '1:a:0',
+  '-vf', `scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=24,format=yuv420p${label}`,
+  '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency', '-profile:v', 'high',
+  '-b:v', '3000k', '-maxrate', '3000k', '-bufsize', '6000k',
+  '-g', '48', '-keyint_min', '48', '-sc_threshold', '0',
+  '-c:a', 'aac', '-b:a', '96k', '-ar', '48000', '-ac', '2',
+  '-f', 'flv', `${target.url}${target.key}`,
 ];
 
 let encoder = null;
@@ -131,7 +112,7 @@ const letGo = await holdAir(SITE, STUDIO_TOKEN, {
 });
 push();
 console.log(
-  `Rehearsal on air\n  site     ${SITE}\n  picture  ${clips.length} clips of the hosts, looping, into live input ${uid}\n  nothing is generated, delivered, or simulcast. Ctrl-C to stop.`,
+  `Rehearsal on air\n  site     ${SITE}\n  picture  ${clips.length} clips of the hosts, looping, silent${font ? ', labelled' : ''}, into live input ${uid}\n  nothing is generated, delivered, or simulcast. Ctrl-C to stop.`,
 );
 for (const signal of ['SIGINT', 'SIGTERM'])
   process.on(signal, () => {

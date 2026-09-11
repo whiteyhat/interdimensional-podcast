@@ -198,8 +198,9 @@ try {
     .locator('input[name="sponsor-asset"][value="SOL"]')
     .check({ force: true });
   await page.getByRole('button', { name: 'Select Wallet' }).click();
+  // Choosing the wallet is the whole gesture. A second "Connect" click used to be required,
+  // and a viewer who did not know it saw a checkout where nothing happened.
   await page.getByRole('button', { name: /Phantom/ }).click();
-  await page.locator('.sponsor-wallet-connect .wallet-adapter-button').click();
   await page.getByRole('button', { name: 'Review wallet payment' }).click();
   await page.getByRole('button', { name: 'Approve and pay' }).click();
   await page.waitForFunction(() =>
