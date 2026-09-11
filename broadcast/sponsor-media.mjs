@@ -34,6 +34,13 @@ const MAX_UPLOAD = 4 * 1024 * 1024,
   MAX_RENDER_BODY = 8 * 1024 * 1024;
 const templates = { host: 'pepe-cap-v1', guest: 'gigachad-cap-v1' };
 const HEX64 = /^[a-f0-9]{64}$/;
+// The show airs every shot 1080 lines tall, scaled by fal from the model's native frame
+// (scaleInput in lib/show.ts: libx264, crf 18, preset fast). A cap is tracked and composited on
+// that native frame, the only one the qualification proof covers: on the scaled frame every
+// tracking error grows by the scale factor and the work doubles, which made real takes lose
+// tracking or run out the deadline. Only the verified composite is scaled up, here, with the
+// show's own encoder settings, so a cap shot matches its neighbours on air.
+export const BROADCAST_HEIGHT = 1080;
 const DEFAULTS = {
   // The site gives a render 105 seconds and retries once while 40 of them remain. Answering
   // inside 95 leaves it room to hear the answer: 15 for fetching the take, the rest to render.
@@ -49,6 +56,8 @@ const DEFAULTS = {
   cacheTtlMs: 10 * 60_000,
   cacheMax: 32,
   toolTtlMs: 30_000,
+  // The height a verified composite is scaled to before it leaves; 0 sends it as rendered.
+  broadcastHeight: BROADCAST_HEIGHT,
 };
 
 class MediaError extends Error {
@@ -342,6 +351,33 @@ function probeFrame() {
   }
   return frame;
 }
+const broadcastArgs = (source, target, height) => [
+  '-v',
+  'error',
+  '-y',
+  '-nostdin',
+  '-i',
+  source,
+  '-map',
+  '0:v:0',
+  '-map',
+  '0:a:0?',
+  '-vf',
+  `scale=-2:${height}:flags=lanczos`,
+  '-c:v',
+  'libx264',
+  '-crf',
+  '18',
+  '-preset',
+  'fast',
+  '-pix_fmt',
+  'yuv420p',
+  '-c:a',
+  'copy',
+  '-movflags',
+  '+faststart',
+  target,
+];
 // When OpenCV's own decode is not the qualified one, ffmpeg does the colour conversion instead,
 // with SIMD off so it is the C reference on any CPU, into a lossless planar RGB take. OpenCV
 // then only reorders bytes, which every build does exactly. Audio is copied untouched.
@@ -930,6 +966,33 @@ export function createMediaService(options = {}) {
     return target;
   }
 
+  // The verified composite at the height the show airs every other shot.
+  async function broadcastCut(source, dir, signal) {
+    const target = join(dir, 'broadcast.mp4');
+    const outcome = await spawnGroup(
+      'ffmpeg',
+      broadcastArgs(source, target, cfg.broadcastHeight),
+      signal,
+      (pid) => cfg.onSpawn?.({ pid, mode: 'scale', dir }),
+    );
+    if (signal.aborted) throw stopped(String(signal.reason));
+    if (outcome.code !== 0) {
+      log({
+        level: 'error',
+        event: 'scale',
+        exit: outcome.code,
+        signal: outcome.signal,
+        stderr: outcome.stderr.slice(-600) || undefined,
+      });
+      throw new MediaError(
+        503,
+        'RENDERER',
+        'The wardrobe take could not be prepared for broadcast.',
+      );
+    }
+    return readFile(target);
+  }
+
   async function render(job) {
     const signal = job.controller.signal;
     await prepared;
@@ -993,15 +1056,28 @@ export function createMediaService(options = {}) {
           'QUALITY',
           'The wardrobe take could not be verified.',
         );
-      const bytes = await readFile(out);
-      if (hash(bytes) !== quality.outputSha256)
+      const rendered = await readFile(out);
+      if (hash(rendered) !== quality.outputSha256)
         throw new MediaError(
           503,
           'RENDERER',
           'The wardrobe take failed its integrity check.',
         );
+      const scaling = Date.now();
+      const bytes = cfg.broadcastHeight
+        ? await broadcastCut(out, dir, signal)
+        : rendered;
+      lap('scaleMs', scaling);
       // The renderer hashed whatever it read; the take the site sent is what this output is of.
-      const summary = { ...quality, inputSha256: takeSha256 };
+      // What leaves is the broadcast cut, so its hash is the one the site checks the body
+      // against; the renderer's own output stays on record beside it.
+      const summary = {
+        ...quality,
+        inputSha256: takeSha256,
+        renderedSha256: quality.outputSha256,
+        outputSha256: hash(bytes),
+        ...(cfg.broadcastHeight ? { height: cfg.broadcastHeight } : {}),
+      };
       delete summary.tracking;
       await remember(job.key, bytes, summary).catch((error) =>
         log({

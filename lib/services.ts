@@ -152,8 +152,14 @@ export function createServices(): Services {
         }
         throw error;
       };
+      // A cap shot is composited on the take as the model made it, the only frame the cap's
+      // qualification covers, and the media desk scales the verified composite to 1080 itself.
+      // Fal's scaler would hand the tracker a frame it was never proven on: twice the pixels,
+      // every tracking error grown by the scale, and real takes lost or out of time.
       const [result, speech] = await Promise.all([
-        job(scaleKey, { action: 'scale', url: native.url }),
+        line.wardrobe
+          ? ({ url: native.url } as Result)
+          : job(scaleKey, { action: 'scale', url: native.url }),
         job(speechKey, { action: 'speech', url: native.url, line }),
       ]).catch(rejectSpeech);
       if (

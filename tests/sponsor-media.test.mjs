@@ -233,7 +233,8 @@ async function desk(t, options = {}) {
     videoOriginForTests: FAL,
     log: (line) => logs.push(line),
     onSpawn: (spawned) => spawns.push(spawned),
-    ...(standIn ? { decoder: 'direct' } : {}),
+    // Nor does it write a real MP4 for ffmpeg to scale up for broadcast.
+    ...(standIn ? { decoder: 'direct', broadcastHeight: 0 } : {}),
     ...options,
   });
   t.after(() => media.close());
@@ -850,6 +851,11 @@ void test(
     assert.ok(summary.frames >= 10);
     assert.equal(summary.outputSha256, sha(a.bytes));
     assert.equal(summary.inputSha256, sha(footage.bytes));
+    // Composited on the take as the model made it, then scaled to the show's 1080 lines:
+    // what leaves is the broadcast cut, and the renderer's own output is on record beside it.
+    assert.equal(summary.height, 1080);
+    assert.match(summary.renderedSha256, /^[a-f0-9]{64}$/);
+    assert.notEqual(summary.renderedSha256, summary.outputSha256);
     const file = join(scratch, 'branded.mp4');
     await writeFile(file, a.bytes);
     const probe = JSON.parse(
@@ -868,6 +874,9 @@ void test(
       new Set(probe.streams.map((s) => s.codec_type)),
       new Set(['audio', 'video']),
     );
+    const picture = probe.streams.find((s) => s.codec_type === 'video');
+    assert.equal(picture.height, 1080);
+    assert.equal(picture.codec_name, 'h264');
     const again = await post(media, body);
     assert.equal(again.headers.get('x-sponsor-cache'), 'hit');
     assert.deepEqual(again.bytes, a.bytes);
