@@ -548,7 +548,7 @@ export async function applyEvent(
         now,
         e.type,
         e.type,
-        now + Math.min(300000, 30000 * 2 ** order.pause_count),
+        now + pauseCooldownMs(order.pause_count),
         e.orderId,
         e.leaseToken,
         e.studioId,
@@ -576,6 +576,11 @@ export async function reschedule(d: D1Database, id: string, now: number) {
     .run();
   return getOrder(d, id);
 }
+/**
+ * A lease that lapses mid-delivery is the studio's failure, not the order's: it is back a minute
+ * later, whatever `pauseCooldownMs` says. The pause still counts, so an order whose studio keeps
+ * dying under it backs off like any other once it pauses for a reason of its own.
+ */
 export async function pauseExpired(d: D1Database, now: number) {
   await d
     .prepare(
@@ -621,10 +626,20 @@ export async function allowSponsorRequest(
   return row.results.length > 0;
 }
 
+/**
+ * How long a paused order waits before the studio may try it again: 30 s after the first pause,
+ * doubling to half an hour, then six hours once it has failed eight times. There is no last try.
+ * The order is paid and there are no refunds, so giving up left it paused until the buyer
+ * happened to press a button, while the receipt promised the next live slot. A transient outage
+ * clears inside the first hour of tries; a placement that fails for good costs four tries a day
+ * (each a script, a check and a few renders) rather than one every half hour.
+ */
+export const pauseCooldownMs = (pauses: number) =>
+  pauses >= 8 ? 21600000 : Math.min(1800000, 30000 * 2 ** pauses);
 export async function resumeDue(d: D1Database, now: number) {
   await d
     .prepare(
-      `UPDATE sponsor_orders SET status='paid',lease_token=NULL,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE status='paused' AND pause_count<=3 AND retry_after<=? AND EXISTS(SELECT 1 FROM sponsor_producer p JOIN meta m ON m.key='studio_id' AND m.value=p.studio_id WHERE p.id=1 AND p.seen_at>? AND json_extract(p.capabilities,'$.'||sponsor_orders.product)=1)`,
+      `UPDATE sponsor_orders SET status='paid',lease_token=NULL,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE status='paused' AND retry_after<=? AND EXISTS(SELECT 1 FROM sponsor_producer p JOIN meta m ON m.key='studio_id' AND m.value=p.studio_id WHERE p.id=1 AND p.seen_at>? AND json_extract(p.capabilities,'$.'||sponsor_orders.product)=1)`,
     )
     .bind(now, now, now - sponsorLimits.heartbeatMs)
     .run();

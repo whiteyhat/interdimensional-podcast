@@ -1,3 +1,4 @@
+import { clusterOf, explorerTx, type Cluster } from './cluster';
 import { readStudioId } from './interact';
 import {
   SponsorError,
@@ -91,7 +92,7 @@ function devnetPricing(v: SponsorVars) {
   const flatCents = flatPriceCents(v.SPONSOR_FLAT_PRICE_CENTS);
   const solUsd = v.SPONSOR_SOL_USD?.trim() || undefined;
   if (flatCents === undefined && solUsd === undefined) return {};
-  if (!/devnet|localhost|127\.0\.0\.1/.test(v.SOLANA_RPC_URL?.trim() || ''))
+  if (clusterOf(v.SOLANA_RPC_URL) !== 'devnet')
     throw new SponsorError(
       503,
       'Devnet pricing is configured on a deployment that is not on devnet.',
@@ -329,7 +330,9 @@ export async function sponsorCatalog(
     now,
   };
 }
-function attemptView(a: db.AttemptRow, origin: string): SponsorAttempt {
+/** Where a request is answered from: the public origin, and the cluster its payments settle on. */
+type Site = { origin: string; cluster: Cluster };
+function attemptView(a: db.AttemptRow, site: Site): SponsorAttempt {
   return {
     id: a.id,
     productVersion: a.product_version,
@@ -348,14 +351,17 @@ function attemptView(a: db.AttemptRow, origin: string): SponsorAttempt {
     status: a.status,
     broadcastSignature: a.broadcast_signature,
     verifiedSignature: a.verified_signature,
-    solanaPayUrl: `solana:${encodeURIComponent(`${origin}/api/solana-pay/${a.pay_token}`)}`,
+    explorerUrl: a.verified_signature
+      ? explorerTx(a.verified_signature, site.cluster)
+      : null,
+    solanaPayUrl: `solana:${encodeURIComponent(`${site.origin}/api/solana-pay/${a.pay_token}`)}`,
   };
 }
 export async function sponsorReceipt(
   d: D1Database,
   o: db.OrderRow,
   token: string,
-  origin: string,
+  site: Site,
 ): Promise<SponsorReceipt> {
   const [attempts, asset] = await Promise.all([
     d
@@ -390,7 +396,7 @@ export async function sponsorReceipt(
       attempts.results.find((a) => a.id === o.paid_attempt_id)?.price_cents ??
       attempts.results[0]?.price_cents ??
       sponsorProducts.find((p) => p.id === o.product)!.priceCents,
-    attempts: attempts.results.map((a) => attemptView(a, origin)),
+    attempts: attempts.results.map((a) => attemptView(a, site)),
     fulfillment: db.fulfillment(o),
     paidAt: o.paid_at,
     payer: o.payer,
@@ -578,7 +584,7 @@ async function quote(
   o: db.OrderRow,
   asset: SponsorAsset,
   wallet: string | undefined,
-  origin: string,
+  site: Site,
   token: string,
 ) {
   if (!['FROGCLENCH', 'USDC', 'SOL'].includes(asset))
@@ -609,11 +615,11 @@ async function quote(
           d,
           (await db.getOrder(d, o.id))!,
           token,
-          origin,
+          site,
         ),
-        attempt: attemptView(updated, origin),
+        attempt: attemptView(updated, site),
         transaction: updated.unsigned_tx ?? undefined,
-        solanaPayUrl: attemptView(updated, origin).solanaPayUrl,
+        solanaPayUrl: attemptView(updated, site).solanaPayUrl,
       };
     }
   }
@@ -661,13 +667,13 @@ async function quote(
     );
     let attempt = (await db.getAttempt(d, id))!;
     if (wallet) attempt = await walletTransaction(d, v, attempt, wallet);
-    const view = attemptView(attempt, origin);
+    const view = attemptView(attempt, site);
     return {
       receipt: await sponsorReceipt(
         d,
         (await db.getOrder(d, o.id))!,
         token,
-        origin,
+        site,
       ),
       attempt: view,
       transaction: attempt.unsigned_tx ?? undefined,
@@ -840,7 +846,10 @@ export async function handleSponsorship(
 ): Promise<Response> {
   try {
     const url = new URL(request.url),
-      origin = url.origin;
+      site: Site = {
+        origin: url.origin,
+        cluster: clusterOf(v.SOLANA_RPC_URL),
+      };
     if (request.method === 'GET') {
       const action = url.searchParams.get('action') ?? 'catalog';
       if (action === 'catalog')
@@ -852,7 +861,7 @@ export async function handleSponsorship(
           url.searchParams.get('token'),
         );
         return response({
-          receipt: await sponsorReceipt(d, auth.order, auth.token, origin),
+          receipt: await sponsorReceipt(d, auth.order, auth.token, site),
         });
       }
       if (action === 'activity') {
@@ -1042,7 +1051,7 @@ export async function handleSponsorship(
           d,
           (await db.getOrder(d, id))!,
           token,
-          origin,
+          site,
         ),
       });
     }
@@ -1055,7 +1064,7 @@ export async function handleSponsorship(
           order,
           body.asset as SponsorAsset,
           string(body.wallet) || undefined,
-          origin,
+          site,
           token,
         ),
       );
@@ -1093,7 +1102,7 @@ export async function handleSponsorship(
         d,
         (await db.getOrder(d, order.id))!,
         token,
-        origin,
+        site,
       ),
     });
   } catch (e) {

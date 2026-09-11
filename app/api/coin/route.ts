@@ -1,9 +1,10 @@
 import { env } from 'cloudflare:workers';
 import { isAddress } from '@solana/kit';
+import { clusterOf } from '@/lib/cluster';
 import { chartPickConfig, normalizeCoin, pickChartCoin } from '@/lib/coin';
 import { fetchJson } from '@/lib/http';
 import { isLocalHost } from '@/lib/interact';
-type Vars = { COIN_MINT?: string; CHART_MINT?: string };
+type Vars = { COIN_MINT?: string; CHART_MINT?: string; SOLANA_RPC_URL?: string };
 const vars = () => env as unknown as Vars;
 // pump.fun's data endpoints are CORS-protected, so the browser reads them through here.
 // One isolate remembers the last answer for a few seconds and the subrequest cache lets the
@@ -52,7 +53,10 @@ async function borrow(now: number): Promise<string> {
  * CHART_MINT never touches the payment path, which reads COIN_MINT and only COIN_MINT.
  */
 async function subject(now: number): Promise<{ mint: string; rehearsal: boolean }> {
-  const own = vars().COIN_MINT?.trim() ?? '';
+  // A devnet deployment pays in its own test mint, which pump.fun has never heard of: asking
+  // about it would fail every viewer's poll. Its chart has a subject only if CHART_MINT names one.
+  const own =
+    clusterOf(vars().SOLANA_RPC_URL) === 'devnet' ? '' : (vars().COIN_MINT?.trim() ?? '');
   const override = vars().CHART_MINT?.trim() ?? '';
   const mint =
     override === 'auto' ? await borrow(now) : isAddress(override) ? override : own;

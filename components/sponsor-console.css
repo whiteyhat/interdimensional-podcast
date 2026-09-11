@@ -137,12 +137,18 @@
   color: #8e9a80;
   margin: 15px 0 0;
 }
+/*
+ * The disclosure is a corner bug, not a lower third. The bottom of the stage belongs to the
+ * captions (bottom: 15% of the stage, growing upward) and the ticker (bottom: 0), and none of
+ * them share a layout, so a card anchored there collides once the stage is under ~790px tall.
+ * The corner under the camera label is the one slot neither can reach.
+ */
 .sponsor-on-air {
   position: absolute;
   z-index: 5;
-  bottom: 64px;
+  top: 56px;
   left: 18px;
-  max-width: calc(100% - 36px);
+  max-width: min(440px, calc(100% - 36px));
   display: flex;
   align-items: center;
   gap: 10px;
@@ -152,6 +158,7 @@
   color: #f3ecdc;
   background: #1c2119ee;
   box-shadow: 0 5px 18px #0003;
+  animation: bug-in var(--dur-reveal) var(--ease-cut) both;
 }
 .sponsor-on-air > span {
   font: 9px var(--font-mono, monospace);
@@ -186,21 +193,45 @@
   display: flex;
   padding: 4px;
 }
+/* An operator's broadcast view parks its toast in this corner; the card crosses to sit under the coin bug. */
+html:not(.hosted-page) .broadcast-mode:has(> .notice) .sponsor-on-air {
+  left: auto;
+  right: 18px;
+}
+/* In the studio the coin bug shares the card's row (top: 56px, right: 15px). Once the stage is
+   too narrow for both, the card drops to the row below it. */
+@media (max-width: 1020px) {
+  .podcast:not(.broadcast-mode) .sponsor-on-air {
+    top: 94px;
+  }
+}
+@media (max-width: 760px) {
+  .podcast:not(.broadcast-mode) .sponsor-on-air {
+    left: 10px;
+    max-width: calc(100% - 20px);
+  }
+}
 @media (max-width: 480px) {
   .sponsor-on-air {
     gap: 7px;
     padding: 7px 9px;
-    left: 8px;
-    bottom: 50px;
-    max-width: calc(100% - 16px);
   }
   .sponsor-on-air > span {
     font-size: 7px;
+  }
+  .sponsor-on-air img {
+    width: 24px;
+    height: 24px;
   }
   .sponsor-on-air b {
     font-size: 11px;
   }
   .sponsor-on-air small {
     font-size: 8px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sponsor-on-air {
+    animation-duration: 1ms;
   }
 }

@@ -127,15 +127,15 @@ export async function studioHeartbeat(
 export async function holdAir(
   site,
   token,
-  { everyMs = 20_000, onRefused = () => {} } = {},
+  { everyMs = 20_000, onRefused = () => {}, capabilities } = {},
 ) {
-  const first = await studioHeartbeat(site, token);
+  const first = await studioHeartbeat(site, token, capabilities);
   if (first.status !== 200)
     throw Error(
       `${site} refused the studio token: ${first.status} ${JSON.stringify(first.body)}`,
     );
   const timer = setInterval(() => {
-    void studioHeartbeat(site, token).then((r) => {
+    void studioHeartbeat(site, token, capabilities).then((r) => {
       if (r.status !== 200) onRefused(r.status);
     });
   }, everyMs);

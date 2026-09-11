@@ -764,6 +764,11 @@ void test('finalized cosigned payment credits its actual payer exactly once', as
     ).json();
     assert.equal(result.receipt.status, 'paid');
     assert.equal(result.receipt.payer, f.wallet.publicKey.toBase58());
+    // The fixture settles on a local validator: the receipt links to the devnet explorer.
+    assert.equal(
+      result.receipt.attempts[0].explorerUrl,
+      `https://solscan.io/tx/${sig}?cluster=devnet`,
+    );
     await post(f.v, {
       action: 'confirm',
       token: receipt.token,

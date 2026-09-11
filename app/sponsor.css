@@ -262,7 +262,8 @@ aside.sponsor-rail {
   height: 110px;
 }
 /* The spotlight's cover is the purchase drawn to scale: a broadcast frame with
-   the sponsor card sitting on it exactly where the live overlay puts it. */
+   the sponsor card sitting on it exactly where the live overlay puts it, the
+   top-left corner the captions and the ticker never reach. */
 .sponsor-preview-stage {
   position: relative;
   overflow: hidden;
@@ -276,9 +277,9 @@ aside.sponsor-rail {
 }
 .sponsor-preview-banner {
   position: absolute;
+  top: 12px;
   left: 12px;
-  right: 12px;
-  bottom: 12px;
+  max-width: calc(100% - 24px);
   display: flex;
   align-items: center;
   gap: 9px;
@@ -288,7 +289,7 @@ aside.sponsor-rail {
   background: #1c2119ee;
   box-shadow: 0 5px 18px #0004;
   color: #f3ecdc;
-  animation: sponsor-banner-in var(--dur-reveal) var(--ease-cut) both;
+  animation: bug-in var(--dur-reveal) var(--ease-cut) both;
 }
 .sponsor-preview-banner > span {
   font: 8px/1.4 monospace;
@@ -436,7 +437,7 @@ aside.sponsor-rail {
 /* The track behind the walk, and the warm line that fills as the step is earned. */
 .sponsor-stepper-item + .sponsor-stepper-item::before,
 .sponsor-stepper-item + .sponsor-stepper-item::after {
-  content: "";
+  content: '';
   position: absolute;
   top: 11px;
   left: calc(-50% + 18px);
@@ -987,7 +988,8 @@ aside.sponsor-rail {
   font-size: 10px;
   color: #b6c0a8;
   margin-top: 5px;
-}.sponsor-explainer {
+}
+.sponsor-explainer {
   margin-top: 20px;
   padding-top: 16px;
   border-top: 1px solid var(--sponsor-line);
@@ -1051,16 +1053,6 @@ aside.sponsor-rail {
   margin-top: 16px;
   border-radius: 6px;
   font-size: 12px;
-}
-@keyframes sponsor-banner-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 @keyframes sponsor-step-in {
   from {

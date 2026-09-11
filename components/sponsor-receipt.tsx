@@ -105,9 +105,9 @@ export function SponsorReceipt({
         <a href={`/?receipt=${encodeURIComponent(receipt.token)}`}>
           Open receipt <ExternalLink size={12} />
         </a>
-        {attempt?.verifiedSignature && (
+        {attempt?.explorerUrl && (
           <a
-            href={`https://solscan.io/tx/${encodeURIComponent(attempt.verifiedSignature)}`}
+            href={attempt.explorerUrl}
             target="_blank"
             rel="noreferrer"
           >

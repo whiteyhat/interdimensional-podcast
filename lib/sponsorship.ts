@@ -49,6 +49,8 @@ export type SponsorAttempt = {
   status: 'issued' | 'submitted' | 'expired' | 'verified';
   broadcastSignature: string | null;
   verifiedSignature: string | null;
+  /** The verified payment on the explorer for the cluster it settled on. */
+  explorerUrl: string | null;
   solanaPayUrl: string;
 };
 export type SponsorReceipt = {

@@ -5,6 +5,12 @@
 //   SITE=... STUDIO_TOKEN=... RPC_URL=... node scripts/sponsorpay.mjs
 //   SITE=... STUDIO_TOKEN=...            node scripts/sponsorpay.mjs --hold
 //
+// PRODUCT picks the placement (message, the default; spotlight; cap). A spotlight takes
+// PROJECT and STYLE (intro, debate or gentle-roast). A cap takes PROJECT, TARGET (host or
+// guest) and LOGO, a PNG, JPG or WebP path the site qualifies against the cap template
+// before anything is quoted; ASSET_ID reuses a design that is already qualified.
+// MESSAGE overrides the buyer's text for any of them.
+//
 // --hold sends the studio heartbeat every twenty seconds and nothing else, so a person can
 // buy from a real browser wallet on the devnet site without running the whole show.
 //
@@ -15,6 +21,8 @@ import {
   createSolanaRpcSubscriptions,
   sendAndConfirmTransactionFactory,
 } from '@solana/kit';
+import { readFile } from 'node:fs/promises';
+import { basename, extname } from 'node:path';
 import {
   holdAir,
   loadKeys,
@@ -27,6 +35,16 @@ const SITE = process.env.SITE;
 const STUDIO_TOKEN = process.env.STUDIO_TOKEN;
 const RPC_URL = process.env.RPC_URL;
 const HOLD = process.argv.includes('--hold');
+const PRODUCT = process.env.PRODUCT || 'message';
+if (!['message', 'spotlight', 'cap'].includes(PRODUCT))
+  throw Error(`PRODUCT must be message, spotlight or cap, not ${PRODUCT}.`);
+if (PRODUCT === 'cap' && !process.env.LOGO && !process.env.ASSET_ID && !HOLD)
+  throw Error(
+    'A cap needs LOGO (an image path) or ASSET_ID (a qualified design).',
+  );
+// The stand-in studio offers a cap only when one is being bought: the site refuses to quote a
+// placement the producer has not said it can deliver.
+const capabilities = { message: true, spotlight: true, cap: PRODUCT === 'cap' };
 if (!SITE || !STUDIO_TOKEN || (!HOLD && !RPC_URL))
   throw Error(
     HOLD
@@ -60,13 +78,14 @@ async function catalog() {
   const r = await fetch(`${SITE}/api/sponsorship?action=catalog`);
   return r.json();
 }
-const heartbeat = () => studioHeartbeat(SITE, STUDIO_TOKEN);
+const heartbeat = () => studioHeartbeat(SITE, STUDIO_TOKEN, capabilities);
 
 // Holding the air is the whole job in --hold: a person buys from a real wallet while this
 // keeps the producer lease warm. Nothing is written, generated or delivered. For a picture
 // as well, see scripts/rehearsal.mjs.
 if (HOLD) {
   await holdAir(SITE, STUDIO_TOKEN, {
+    capabilities,
     onRefused: (status) => console.error(`heartbeat refused: ${status}`),
   });
   console.log(
@@ -74,6 +93,42 @@ if (HOLD) {
   );
   await new Promise(() => {});
 }
+
+// ---- a cap's design is qualified against the template before it can be sold. Qualifying takes
+// up to forty seconds, so it starts now, before the stand-in studio claims its thirty-second
+// producer window, and is awaited only when the draft needs it.
+const TARGET = process.env.TARGET === 'guest' ? 'guest' : 'host';
+async function qualifyLogo(path) {
+  const type = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp',
+  }[extname(path).toLowerCase()];
+  if (!type) throw Error('LOGO must be a PNG, JPG or WebP file.');
+  const form = new FormData();
+  form.set('image', new File([await readFile(path)], basename(path), { type }));
+  form.set('kind', 'cap');
+  form.set('target', TARGET);
+  const started = Date.now();
+  const r = await fetch(`${SITE}/api/sponsorship/assets`, {
+    method: 'POST',
+    body: form,
+  });
+  const uploaded = await r.json().catch(() => ({}));
+  check(
+    'the cap design is qualified',
+    r.ok && uploaded.status === 'qualified',
+    r.ok
+      ? `asset ${uploaded.id} (${uploaded.status}) in ${Date.now() - started} ms`
+      : `${r.status} ${JSON.stringify(uploaded)}`,
+  );
+  return uploaded.id;
+}
+const qualified =
+  PRODUCT === 'cap' && !process.env.ASSET_ID
+    ? qualifyLogo(process.env.LOGO)
+    : Promise.resolve(process.env.ASSET_ID);
 
 const rpc = createSolanaRpc(RPC_URL);
 const subs = createSolanaRpcSubscriptions(RPC_URL.replace(/^http/, 'ws'));
@@ -120,12 +175,21 @@ check(
 );
 
 // ---- the happy path: draft, quote, sign, submit, confirm
+const PROJECT = process.env.PROJECT || 'Frog Labs';
+const pitch = {
+  message: 'Chad, does a devnet dollar still count as conviction?',
+  spotlight: `${PROJECT} is a web3 marketplace for indie games.`,
+  cap: `${PROJECT} makes caps for frogs who touch grass.`,
+};
 const drafted = await api({
   action: 'draft',
   draft: {
-    product: 'message',
+    product: PRODUCT,
     name: '',
-    message: 'Chad, does a devnet dollar still count as conviction?',
+    message: process.env.MESSAGE || pitch[PRODUCT],
+    ...(PRODUCT !== 'message' && { projectName: PROJECT }),
+    ...(PRODUCT === 'spotlight' && { style: process.env.STYLE || 'intro' }),
+    ...(PRODUCT === 'cap' && { target: TARGET, assetId: await qualified }),
   },
 });
 check(

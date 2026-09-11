@@ -369,7 +369,70 @@ void test('paused fulfillment resumes after a durable cooldown and keeps progres
   assert.equal(resumed.started_at, 420);
 });
 
-test('the producer lease reports a live studio while the request queue sits idle', async () => {
+void test('an order that keeps pausing is never given up on, only spaced out', async () => {
+  // Paid and non-refundable: the fifth pause must wait longer, not wait forever.
+  assert.deepEqual(
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 40].map(db.pauseCooldownMs),
+    [
+      30000, 60000, 120000, 240000, 480000, 960000, 1800000, 1800000, 21600000,
+      21600000,
+    ],
+  );
+  const d = await fixture();
+  await db.settlePayment(
+    d,
+    'a1',
+    { signature: 'sig1', payer: 'payer', blockTime: 150 },
+    300,
+  );
+  const caps = { message: true, spotlight: false, cap: false };
+  let now = 400;
+  await db.heartbeat(d, 'studio', caps, now);
+  for (let pause = 0; pause < 6; pause++) {
+    const [o] = await db.leaseOrders(d, 'studio', now);
+    assert.ok(o, `the order is leased again after pause ${pause}`);
+    const base = {
+      orderId: o.id,
+      studioId: 'studio',
+      leaseToken: o.lease_token,
+    };
+    await db.applyEvent(
+      d,
+      { ...base, type: 'prepare', eventId: `prepare${pause}` },
+      now + 10,
+    );
+    await db.applyEvent(
+      d,
+      { ...base, type: 'start', eventId: `start${pause}` },
+      now + 20,
+    );
+    await db.applyEvent(
+      d,
+      { ...base, type: 'paused', eventId: `pause${pause}` },
+      now + 30,
+    );
+    const waited = now + 30 + db.pauseCooldownMs(pause);
+    await db.heartbeat(d, 'studio', caps, waited - 1);
+    await db.resumeDue(d, waited - 1);
+    assert.equal(
+      (await db.getOrder(d, o.id)).status,
+      'paused',
+      'not before its cooldown',
+    );
+    now = waited;
+    await db.heartbeat(d, 'studio', caps, now);
+    await db.resumeDue(d, now);
+    const resumed = await db.getOrder(d, o.id);
+    assert.equal(
+      resumed.status,
+      'paid',
+      `pause ${pause + 1} still resumes by itself`,
+    );
+    assert.equal(resumed.pause_count, pause + 1);
+  }
+});
+
+void test('the producer lease reports a live studio while the request queue sits idle', async () => {
   const d = database();
   await db.ensureSponsorSchema(d);
   await interactDb.ensureSchema(d);
