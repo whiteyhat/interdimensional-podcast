@@ -42,9 +42,21 @@ if (PRODUCT === 'cap' && !process.env.LOGO && !process.env.ASSET_ID && !HOLD)
   throw Error(
     'A cap needs LOGO (an image path) or ASSET_ID (a qualified design).',
   );
-// The stand-in studio offers a cap only when one is being bought: the site refuses to quote a
-// placement the producer has not said it can deliver.
+// The stand-in studio offers what a real one would: a cap only when one is being bought, and
+// then with the template version the media service qualifies against. The site refuses to
+// quote a placement the producer has not said it can deliver, and checks the design against
+// that version.
 const capabilities = { message: true, spotlight: true, cap: PRODUCT === 'cap' };
+if (PRODUCT === 'cap') {
+  const health = await fetch(`${SITE}/api/sponsorship/assets`)
+    .then((r) => r.json())
+    .catch(() => ({}));
+  if (!health.capQualified)
+    throw Error(
+      `${SITE} cannot sell a cap right now: ${JSON.stringify(health)}`,
+    );
+  capabilities.capTemplateVersion = health.templateVersion;
+}
 if (!SITE || !STUDIO_TOKEN || (!HOLD && !RPC_URL))
   throw Error(
     HOLD
