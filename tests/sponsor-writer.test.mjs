@@ -601,7 +601,10 @@ void test('the judge sees the advertiser text and the dialogue as data', () => {
   assert.ok(prompt.includes(JSON.stringify(elixir.advertiserClaim)));
   assert.ok(prompt.includes(JSON.stringify(grounded[1].text)));
   assert.match(prompt, /PREVIOUS LINE.*Volatility is a test of character/);
-  assert.match(prompt, /fictional anecdotes about the hosts' own lives/);
+  // On devnet the judge rejected "I touch grass. Is that why my cap feels so good?": a host
+  // talking about himself and his cap is never a claim about the sponsor.
+  assert.match(prompt, /Never list what a host says about himself/);
+  assert.match(prompt, /When unsure, do not list it/);
   assert.match(prompt, /every turn that is not about "Elixir Games"/);
   const read = W.judgePrompt(answered, message).prompt;
   assert.match(read, /empty offTopicTurns/);

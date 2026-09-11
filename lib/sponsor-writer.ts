@@ -509,7 +509,7 @@ export function judgePrompt(
       (line, i) =>
         `${i + 1}. ${cast[line.speaker]?.name ?? line.speaker}: ${JSON.stringify(line.text)}`,
     ),
-    "TASK 1. List every statement presented as FACT about the sponsor, its product, or any real company, token, project or person that the advertiser text does not support, such as launches, products, games, partners, users, numbers, dates, history, posts, news or rumours. Never list opinions, jokes, questions, hypotheticals, paraphrases of the advertiser text, the paid disclosure and thanks, or fictional anecdotes about the hosts' own lives. Quote the exact words from the turn.",
+    'TASK 1. List only statements that assert, as fact, something about the sponsor, its product, its team, or any real company, token, project or person, that the advertiser text does not support: launches, products, features, materials, games, partners, users, numbers, dates, history, posts, news or rumours. Never list what a host says about himself (what he does, owns, wears or feels, including the cap he is wearing and how it feels), a question, a joke, an opinion, a hypothetical, a paraphrase of the advertiser text, or the paid disclosure and thanks, even when it mentions the sponsor. When unsure, do not list it. Quote the exact words from the turn.',
     project
       ? `TASK 2. List every turn that is not about ${JSON.stringify(project)}.`
       : 'TASK 2. This is a message placement: return an empty offTopicTurns list.',
