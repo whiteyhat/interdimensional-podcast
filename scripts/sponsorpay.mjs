@@ -61,7 +61,22 @@ check(
   `${Number(balance.value) / 1e9} SOL — fund it with scripts/testmint.mjs --fund ${viewer.address}`,
 );
 
-// ---- the studio has to be on air before anything can be quoted
+// ---- the studio has to be on air before anything can be quoted. This harness stands in
+// for one: the same heartbeat the real studio sends, with the same token, claiming the
+// producer lease for the thirty seconds a rehearsal needs. A studio already on air keeps
+// its lease, and the claim is refused instead.
+const onAir = await api(
+  {
+    action: 'heartbeat',
+    capabilities: { message: true, spotlight: true, cap: false },
+  },
+  { 'x-studio-token': STUDIO_TOKEN },
+);
+check(
+  'the rehearsal can stand in for the studio',
+  onAir.status === 200,
+  `${onAir.status} ${JSON.stringify(onAir.body)}`,
+);
 const shown = await catalog();
 check('the catalog answers', !shown.error, shown.error);
 check(
@@ -70,7 +85,11 @@ check(
   'run the studio against this origin, or every quote answers 409 OFFAIR',
 );
 const sol = shown.assets?.find((a) => a.id === 'SOL');
-check('SOL is payable', sol?.available === true, sol?.reason ?? 'missing');
+check(
+  'SOL is payable',
+  sol?.available === true,
+  sol?.available ? `pinned at $${sol.priceUsd}` : (sol?.reason ?? 'missing'),
+);
 check(
   'every placement costs a dollar',
   shown.products?.every((p) => p.priceCents === 100),
@@ -89,7 +108,9 @@ const drafted = await api({
 check(
   'the order is drafted',
   !!drafted.body.receipt,
-  JSON.stringify(drafted.body),
+  drafted.body.receipt
+    ? `order ${drafted.body.receipt.id}`
+    : JSON.stringify(drafted.body),
 );
 const token = drafted.body.receipt?.token;
 
@@ -97,7 +118,11 @@ const quoted = token
   ? await api({ action: 'quote', token, asset: 'SOL', wallet: viewer.address })
   : { body: {} };
 const attempt = quoted.body.attempt;
-check('the placement is quoted', !!attempt, JSON.stringify(quoted.body));
+check(
+  'the placement is quoted',
+  !!attempt,
+  attempt ? `attempt ${attempt.id}` : JSON.stringify(quoted.body),
+);
 check(
   'it is priced at a dollar',
   attempt?.priceCents === 100,
@@ -118,24 +143,30 @@ const submitted = quoted.body.transaction
       signedTx: await signQuote(quoted.body.transaction, viewer),
     })
   : { body: {} };
+const accepted =
+  submitted.body.receipt?.status === 'paid' ||
+  !!submitted.body.receipt?.attempts?.some((a) => a.status !== 'expired');
 check(
   'the signed placement is accepted',
-  submitted.body.receipt?.status === 'paid' ||
-    !!submitted.body.receipt?.attempts?.some((a) => a.status !== 'expired'),
-  JSON.stringify(submitted.body).slice(0, 300),
+  accepted,
+  accepted
+    ? submitted.body.receipt.status
+    : JSON.stringify(submitted.body).slice(0, 300),
 );
 
+// Reading the receipt never verifies anything. The browser asks the site to confirm,
+// which is what looks the reference up on chain and marks the order paid, so the
+// harness asks the same way. Without an attempt id it sweeps every open attempt.
 const paid = await until(async () => {
-  const r = await fetch(
-    `${SITE}/api/sponsorship?action=receipt&token=${encodeURIComponent(token)}`,
-  );
-  const body = await r.json().catch(() => ({}));
-  return body.receipt?.paidAt ? body.receipt : null;
+  const r = await api({ action: 'confirm', token });
+  return r.body.receipt?.paidAt ? r.body.receipt : null;
 });
 check(
-  'the placement is paid and queued',
+  'the placement is paid and verified on chain',
   !!paid,
-  paid ? `status ${paid.status}` : 'timed out',
+  paid
+    ? `${paid.status}, paid by ${paid.payer}, signature ${paid.attempts.find((a) => a.verifiedSignature)?.verifiedSignature ?? '?'}`
+    : 'timed out',
 );
 
 // ---- what must keep failing
