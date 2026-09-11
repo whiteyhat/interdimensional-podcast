@@ -111,4 +111,5 @@ SPONSOR_MEDIA_TOKEN=
 SPONSOR_USDC_MINT=
 # Build-time: SPONSOR_ASSETS_BUCKET picks the R2 bucket for this environment.
 # Reconciler service only: SPONSOR_ORIGIN and SPONSOR_RECONCILE_TOKEN.
-# Media service only: SPONSOR_SITE_ORIGIN, SPONSOR_MEDIA_TOKEN, WEARABLE_PYTHON.
+# Media service only: SPONSOR_MEDIA_TOKEN, WEARABLE_PYTHON, and SPONSOR_SITE_ORIGIN for the
+# legacy logo-URL render form (the site now sends the logo itself).

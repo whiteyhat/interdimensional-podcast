@@ -64,6 +64,29 @@ jobs:
             exit 1
           fi
 
+      # The same danger for sponsor artwork. vite.config.ts falls back to the production bucket
+      # when SPONSOR_ASSETS_BUCKET is empty, so a missing repository variable would quietly
+      # store rehearsal logos and composited takes beside real customers' ones.
+      - name: Verify the build keeps sponsor artwork out of the production bucket
+        env:
+          DEVNET_BUCKET: ${{ vars.DEVNET_SPONSOR_ASSETS_BUCKET }}
+          PRODUCTION_BUCKET: pepe-chad-sponsor-assets
+        run: |
+          ACTUAL=$(node -e "const b=(require('./dist/server/wrangler.json').r2_buckets||[]).find(b=>b.binding==='SPONSOR_ASSETS');console.log(b?b.bucket_name:'')")
+          echo "built with sponsor bucket: ${ACTUAL:-none}"
+          if [ -z "$DEVNET_BUCKET" ]; then
+            echo "::error::DEVNET_SPONSOR_ASSETS_BUCKET repository variable is not set. Refusing to deploy with the production fallback."
+            exit 1
+          fi
+          if [ "$ACTUAL" = "$PRODUCTION_BUCKET" ]; then
+            echo "::error::This build binds SPONSOR_ASSETS to the production bucket. Refusing to deploy it as devnet."
+            exit 1
+          fi
+          if [ "$ACTUAL" != "$DEVNET_BUCKET" ]; then
+            echo "::error::Built sponsor bucket '$ACTUAL' does not match DEVNET_SPONSOR_ASSETS_BUCKET."
+            exit 1
+          fi
+
       - name: Deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -89,6 +112,10 @@ jobs:
           SOL_USD: ${{ vars.DEVNET_SOL_USD }}
           RPC_URL: ${{ secrets.DEVNET_SOLANA_RPC_URL }}
           STREAM_EMBED_URL: ${{ vars.DEVNET_STREAM_EMBED_URL }}
+          SPONSOR_MEDIA_URL: ${{ vars.DEVNET_SPONSOR_MEDIA_URL }}
+          SPONSOR_MEDIA_TOKEN: ${{ secrets.DEVNET_SPONSOR_MEDIA_TOKEN }}
+          SPONSOR_RECONCILE_TOKEN: ${{ secrets.DEVNET_SPONSOR_RECONCILE_TOKEN }}
+          SITE_URL: ${{ vars.DEVNET_ORIGIN }}
         run: |
           NAME="${WORKER:-interdimensional-podcast-staging}"
           if [ -z "$RPC_URL" ]; then
@@ -110,6 +137,43 @@ jobs:
             put STREAM_EMBED_URL "$STREAM_EMBED_URL"
           else
             echo "::warning::DEVNET_STREAM_EMBED_URL is not set; the devnet site will say the stream link is coming soon."
+          fi
+          # The site's half of the two sponsorship services (node scripts/media.mjs setup devnet
+          # prints the values). A missing one keeps the cap off sale or leaves payment recovery
+          # to each buyer's own receipt: a rehearsal with a gap in it, not a broken deploy, so
+          # it warns. A value that is present but unusable is a mistake to fix, so that fails.
+          if [ -n "$SPONSOR_MEDIA_URL" ]; then
+            case "$SPONSOR_MEDIA_URL" in
+              https://*) put SPONSOR_MEDIA_URL "$SPONSOR_MEDIA_URL" ;;
+              *) echo "::error::DEVNET_SPONSOR_MEDIA_URL must be an https address."; exit 1 ;;
+            esac
+          else
+            echo "::warning::DEVNET_SPONSOR_MEDIA_URL is not set; the devnet cap stays off sale."
+          fi
+          if [ -n "$SPONSOR_MEDIA_TOKEN" ]; then
+            if [ "${#SPONSOR_MEDIA_TOKEN}" -lt 24 ]; then
+              echo "::error::DEVNET_SPONSOR_MEDIA_TOKEN is shorter than the 24 characters the worker requires."
+              exit 1
+            fi
+            put SPONSOR_MEDIA_TOKEN "$SPONSOR_MEDIA_TOKEN"
+          else
+            echo "::warning::DEVNET_SPONSOR_MEDIA_TOKEN is not set; the devnet cap stays off sale."
+          fi
+          if [ -n "$SPONSOR_RECONCILE_TOKEN" ]; then
+            if [ "${#SPONSOR_RECONCILE_TOKEN}" -lt 16 ]; then
+              echo "::error::DEVNET_SPONSOR_RECONCILE_TOKEN is shorter than the 16 characters the worker requires."
+              exit 1
+            fi
+            put SPONSOR_RECONCILE_TOKEN "$SPONSOR_RECONCILE_TOKEN"
+          else
+            echo "::warning::DEVNET_SPONSOR_RECONCILE_TOKEN is not set; the reconciler's calls will be refused."
+          fi
+          # Uploaded logos are addressed from SITE_URL, and the media service only fetches from
+          # the origin it was given, so the two have to agree.
+          if [ -n "$SITE_URL" ]; then
+            put SITE_URL "$SITE_URL"
+          else
+            echo "::warning::DEVNET_ORIGIN is not set; the worker names uploaded logos by whichever address served the upload."
           fi
 
       - name: Check the devnet site prices a placement at a dollar

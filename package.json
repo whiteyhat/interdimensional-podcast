@@ -15,10 +15,11 @@
     "newsdesk": "node scripts/newsdesk.mjs",
     "dev:app": "vinext dev --hostname 127.0.0.1 --port 3212",
     "deploy": "npm run build && wrangler deploy --config dist/server/wrangler.json",
-    "deploy:staging": "D1_DATABASE_NAME=pepe-chad-requests-staging D1_DATABASE_ID=6c07b691-cdbe-4681-82a8-4e14a7c85bcb npm run build && wrangler deploy --config dist/server/wrangler.json --name interdimensional-podcast-staging && npm run build",
+    "deploy:staging": "D1_DATABASE_NAME=pepe-chad-requests-staging D1_DATABASE_ID=6c07b691-cdbe-4681-82a8-4e14a7c85bcb SPONSOR_ASSETS_BUCKET=pepe-chad-sponsor-assets-staging npm run build && wrangler deploy --config dist/server/wrangler.json --name interdimensional-podcast-staging && npm run build",
     "deploy:devnet": "D1_DATABASE_NAME=pepe-chad-requests-staging D1_DATABASE_ID=6c07b691-cdbe-4681-82a8-4e14a7c85bcb SPONSOR_ASSETS_BUCKET=pepe-chad-sponsor-assets-staging npm run build && wrangler deploy --config dist/server/wrangler.json --name interdimensional-podcast-staging && npm run build",
     "stream": "node scripts/stream.mjs",
     "air": "node scripts/air.mjs",
+    "media": "node scripts/media.mjs",
     "launch": "node scripts/launch.mjs"
   },
   "dependencies": {

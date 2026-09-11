@@ -197,7 +197,9 @@ npm run deploy:staging
 
 That script rebuilds for staging, deploys, then **rebuilds for production again**. The database
 id is baked in at build time, so leaving `dist/` on the staging build is how you accidentally
-point production at the staging database. The trailing rebuild is what stops that.
+point production at the staging database. The trailing rebuild is what stops that. The sponsor
+artwork bucket is baked in the same way, and an unset one falls back to production's, so the
+staging build names `pepe-chad-sponsor-assets-staging` explicitly.
 
 Staging secrets: the devnet `COIN_MINT` and `TREASURY_WALLET`, `SOLANA_RPC_URL` on devnet, and
 `PRICE_FIXED=1000`. Leave `CLIENT_RPC_URL` unset here too.
@@ -299,9 +301,71 @@ an order queued behind others waits its turn. A delivered message or spotlight s
 `status='fulfilled'`, `intro=1`, and 4 start, 4 progress and 1 complete events. This
 generates the show for real: budget the normal cost per minute for the whole run.
 
-A cap cannot be delivered on devnet yet: it needs the media worker reachable by the devnet
-site over HTTPS (`SPONSOR_MEDIA_URL`, `SPONSOR_MEDIA_TOKEN`), a qualified logo uploaded before
+A cap on devnet needs three things: the devnet media service running and known to the devnet
+site (see [Sponsorship services](#sponsorship-services)), a qualified logo uploaded before
 payment, and ten verified minutes on air.
+
+## Sponsorship services
+
+Two small services per site run next to the box on Railway. `sponsor-media-<site>` normalizes
+logos, draws the cap previews and composites the paid take. `sponsor-reconcile-<site>` asks the
+site every 20 seconds to recover payments and reschedule paused placements, whether or not a
+studio is on air. Neither holds a payment key. Each shares one token with the site, and the
+same `RAILWAY_TOKEN` as the box drives both.
+
+Devnet, once:
+
+```sh
+node scripts/media.mjs setup devnet    # both services, their tokens, settings and address
+node scripts/media.mjs deploy devnet   # uploads ~2.6 MB for media and 3 files for the reconciler
+node scripts/media.mjs health devnet   # ready and capQualified, plus the reconciler's last passes
+```
+
+`setup` prints the four values the devnet worker needs (tokens masked) and the commands that
+store them in GitHub. The "Deploy devnet" workflow puts them on the worker on every run:
+
+| Repository setting | Kind | Value |
+|---|---|---|
+| `DEVNET_SPONSOR_MEDIA_URL` | variable | The media address `setup` printed; becomes `SPONSOR_MEDIA_URL` |
+| `DEVNET_SPONSOR_MEDIA_TOKEN` | secret | `SPONSOR_MEDIA_TOKEN_DEVNET` from `.dev.vars` |
+| `DEVNET_SPONSOR_RECONCILE_TOKEN` | secret | `SPONSOR_RECONCILE_TOKEN_DEVNET` from `.dev.vars` |
+| `DEVNET_ORIGIN` | variable | The devnet site's origin; becomes `SITE_URL` |
+| `DEVNET_SPONSOR_ASSETS_BUCKET` | variable | `pepe-chad-sponsor-assets-staging`; the deploy refuses to run without it |
+
+Then run the workflow (`gh workflow run deploy-devnet.yml --ref main`) and check again with
+`node scripts/media.mjs health devnet`. The reconciler's passes stop reporting 401 once the
+worker has its token, and the devnet catalog offers the cap once the site reads
+`capQualified: true`. A missing value makes the workflow warn, not fail. A value that is set but
+unusable (a media address that is not https, or a token too short for the worker) fails it.
+
+Production has no workflow step for these, so the values go on the worker by hand:
+
+```sh
+node scripts/media.mjs setup production
+node scripts/media.mjs deploy production
+node scripts/media.mjs health production
+npm run build                              # a production dist/, never a staging one
+node scripts/media.mjs status production   # prints the four `wrangler secret put` lines
+```
+
+Run the four printed lines with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` exported. Each
+line reads its token straight from `.dev.vars`, so no token is typed or shown on screen.
+
+The production deploy refuses a build whose sponsor artwork bucket is not
+`pepe-chad-sponsor-assets`, and the devnet deploy refuses one that is.
+
+Worth knowing:
+
+- These commands never touch the box. Each service is found by name, remembered in `.dev.vars`
+  as `RAILWAY_SERVICE_ID_SPONSOR_MEDIA_DEVNET` and so on, and refused outright if it ever
+  resolves to the box's id. The box's own `RAILWAY_SERVICE_ID` is never written.
+- Each service reads its own config file (`broadcast/railway.sponsor-*.json`) and receives only
+  the files its Dockerfile copies, never the repository's `railway.json`, which describes the box.
+- Running `setup` again is safe. It keeps the tokens, sends the settings again, and removes
+  nothing, including anything added by hand in Railway's dashboard. To rotate a token, delete
+  its line from `.dev.vars`, run `setup` and `deploy`, then give the worker the new value.
+- `status` shows each service's config file, latest deployment, address and variable names, and
+  whether its token still matches `.dev.vars`.
 
 ## Launch day
 
@@ -326,6 +390,7 @@ when using `prepare-treasury`.
 | Airtime | ~$22/hr promo, ~$90/hr list — dominated by video generation |
 | Cloudflare Stream | ~$5/mo + ~$1/day live input + ~$1 per 1,000 viewer-minutes |
 | The box | ~$0.25/hr on air, ~$1/mo parked, on a $5/mo Railway plan |
+| Sponsorship services | ~$1–2/mo per site, idle; about a tenth of a cent per cap render |
 | Workers + D1 | Effectively free at this scale |
 
 Airtime is the only number that matters. It is charged per second of generated video, so the

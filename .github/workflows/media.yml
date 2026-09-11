@@ -1,0 +1,194 @@
+# The sponsorship media service, checked where it actually runs.
+#
+# npm test skips the wearable runtime checks on a stock runner, because OpenCV and FFmpeg are
+# not there, and until now no pipeline built the image Railway runs. This does both. The first
+# job runs the renderer and media tests against the exact OpenCV and NumPy the image pins. The
+# second builds the image for the architecture Railway runs, from the same files
+# `node scripts/media.mjs deploy` uploads, and makes the calls the site makes.
+#
+# A branch is checked through its pull request and main through its push, so nothing runs twice.
+
+name: Media service
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'broadcast/**'
+      - 'scripts/wearable*.py'
+      - 'scripts/media.mjs'
+      - 'scripts/railway.mjs'
+      - 'public/wearables/**'
+      - 'lib/sponsor-media.ts'
+      - 'lib/sponsor-assets.ts'
+      - 'tests/sponsor-media.test.mjs'
+      - 'tests/sponsor-render.test.mjs'
+      - 'tests/sponsor-assets.test.mjs'
+      - 'tests/wearable-render.test.py'
+      - '.github/workflows/media.yml'
+  pull_request:
+    paths:
+      - 'broadcast/**'
+      - 'scripts/wearable*.py'
+      - 'scripts/media.mjs'
+      - 'scripts/railway.mjs'
+      - 'public/wearables/**'
+      - 'lib/sponsor-media.ts'
+      - 'lib/sponsor-assets.ts'
+      - 'tests/sponsor-media.test.mjs'
+      - 'tests/sponsor-render.test.mjs'
+      - 'tests/sponsor-assets.test.mjs'
+      - 'tests/wearable-render.test.py'
+      - '.github/workflows/media.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: media-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    name: Renderer and media tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
+      # Read from the Dockerfile rather than repeated here, so these tests always run against
+      # the libraries the image ships.
+      - name: Install the image's OpenCV and NumPy
+        run: |
+          PINS=$(grep -oE '(opencv-python-headless|numpy)==[0-9.]+' broadcast/Dockerfile.sponsor-media | sort -u)
+          echo "$PINS"
+          if [ "$(printf '%s\n' "$PINS" | grep -c .)" != 2 ]; then
+            echo "::error::Could not read both pins from broadcast/Dockerfile.sponsor-media."
+            exit 1
+          fi
+          python -m pip install --no-cache-dir $PINS
+
+      - run: npm ci
+
+      - name: Renderer
+        run: python tests/wearable-render.test.py
+
+      # The media tests skip themselves when the vision runtime is missing, which is right on a
+      # laptop and wrong here: a skip in this job would mean it checked nothing.
+      - name: Media service
+        shell: bash
+        run: |
+          WEARABLE_PYTHON="$(which python)" node --test --test-reporter=tap \
+            tests/sponsor-media.test.mjs tests/sponsor-render.test.mjs tests/sponsor-assets.test.mjs \
+            | tee media-tests.tap
+          if ! grep -qx '# skipped 0' media-tests.tap; then
+            echo "::error::Media tests skipped: the vision runtime here is not the one the image ships."
+            exit 1
+          fi
+
+  image:
+    name: Image, as Railway builds it
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Railway never sees the repository, only the files the deploy script uploads. Building
+      # from exactly those files is what proves the upload carries everything the image needs.
+      - name: Unpack the files the deploy uploads
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/upload"
+          node --input-type=module -e "
+            import { pack } from './scripts/railway.mjs';
+            import { ROOT, uploadFiles } from './scripts/media.mjs';
+            process.stdout.write(await pack(ROOT, await uploadFiles('media')));
+          " | tar -xz -C "$RUNNER_TEMP/upload"
+          find "$RUNNER_TEMP/upload" -type f | sed "s|$RUNNER_TEMP/upload/||" | sort
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build for linux/amd64
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ runner.temp }}/upload
+          file: ${{ runner.temp }}/upload/broadcast/Dockerfile.sponsor-media
+          platforms: linux/amd64
+          load: true
+          tags: sponsor-media:ci
+          cache-from: type=gha,scope=sponsor-media
+          cache-to: type=gha,mode=max,scope=sponsor-media
+
+      # The service is given what Railway gives it (scripts/media.mjs mediaVariables), with a
+      # throwaway token, then asked the three things the site depends on.
+      - name: Smoke-test the container
+        shell: bash
+        run: |
+          TOKEN=$(openssl rand -hex 24)
+          echo "::add-mask::$TOKEN"
+          docker run -d --name media -p 4017:4017 \
+            -e SPONSOR_MEDIA_TOKEN="$TOKEN" \
+            -e SPONSOR_SITE_ORIGIN=https://interdimensional-podcast-staging.leonardo-chekup.workers.dev \
+            -e MEDIA_CONCURRENCY=2 -e MEDIA_QUEUE=6 \
+            -e PORT=4017 -e SPONSOR_MEDIA_PORT=4017 \
+            sponsor-media:ci
+
+          for i in $(seq 1 60); do
+            CODE=$(curl -s -o health.json -w '%{http_code}' http://127.0.0.1:4017/health || true)
+            if [ "$CODE" = 200 ] && node -e "process.exit(require('./health.json').capQualified === true ? 0 : 1)" 2>/dev/null; then
+              echo "health: $(cat health.json)"
+              break
+            fi
+            if [ "$i" = 60 ]; then
+              echo "::error::/health never answered 200 with capQualified true (last answer: $CODE)."
+              cat health.json 2>/dev/null || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+          PREVIEW='http://127.0.0.1:4017/preview?kind=cap&target=host'
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: image/png' \
+            --data-binary @public/logo.png "$PREVIEW")
+          if [ "$CODE" != 401 ]; then
+            echo "::error::/preview without the token answered $CODE, not 401."
+            exit 1
+          fi
+
+          CODE=$(curl -s -o preview.json -w '%{http_code}' -X POST -H 'content-type: image/png' \
+            -H "authorization: Bearer $TOKEN" --data-binary @public/logo.png "$PREVIEW")
+          if [ "$CODE" != 200 ]; then
+            echo "::error::/preview with the token answered $CODE, not 200."
+            head -c 500 preview.json || true
+            exit 1
+          fi
+          node -e "
+            const p = require('./preview.json');
+            const ok = p.templateId === 'pepe-cap-v1' && /^[a-f0-9]{64}$/.test(p.sha256) &&
+              p.qualificationVersion === 'caps-v1' && p.preview?.length > 100 && p.logo?.length > 100;
+            console.log(JSON.stringify({ ...p, preview: p.preview?.length, logo: p.logo?.length }));
+            process.exit(ok ? 0 : 1);
+          "
+
+      - name: Container output
+        if: always()
+        run: docker logs media 2>&1 | tail -100 || true

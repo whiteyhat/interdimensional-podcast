@@ -60,6 +60,20 @@ jobs:
             exit 1
           fi
 
+      # The devnet deploy refuses this bucket; production must have it. A stale staging build,
+      # or a SPONSOR_ASSETS_BUCKET leaking into this job, would file paid customers' artwork
+      # and composited takes in the rehearsal bucket, where the production site never looks.
+      - name: Verify the build stores sponsor artwork in the production bucket
+        env:
+          EXPECTED: pepe-chad-sponsor-assets
+        run: |
+          ACTUAL=$(node -e "const b=(require('./dist/server/wrangler.json').r2_buckets||[]).find(b=>b.binding==='SPONSOR_ASSETS');console.log(b?b.bucket_name:'')")
+          echo "built with sponsor bucket: ${ACTUAL:-none}"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Built sponsor bucket '$ACTUAL' is not the production bucket $EXPECTED."
+            exit 1
+          fi
+
       - name: Deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

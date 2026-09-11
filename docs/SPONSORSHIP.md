@@ -11,11 +11,12 @@ Checkout is **disabled by default**. The implementation and local rehearsal are 
 | Public Cloudflare Worker | D1 `DB`, R2 `SPONSOR_ASSETS`, `SITE_URL`, `SPONSOR_ENABLED` | Catalog, orders, receipts, uploads and payment endpoints |
 | Payment RPC | `SOLANA_RPC_URL`, `TREASURY_WALLET`, `COIN_MINT`, optional `SPONSOR_USDC_MINT`, `JUPITER_API_KEY` | Chain verification and server-owned quotes |
 | Clip producer | `STUDIO_TOKEN`, `STUDIO_ID`, `INTERACT_ORIGIN` | Exclusive delivery leases and actual playback evidence |
-| CPU media worker | `SPONSOR_MEDIA_TOKEN`, `SPONSOR_SITE_ORIGIN`, optional `WEARABLE_PYTHON` | Normalize logos, preview caps and validate/composite footage |
-| Worker → media | `SPONSOR_MEDIA_URL`, matching `SPONSOR_MEDIA_TOKEN` | Authenticated media service access |
-| Reconciliation service | `SPONSOR_ORIGIN`, `SPONSOR_RECONCILE_TOKEN` | Independent payment recovery and rescheduling |
+| Media service (`sponsor-media-<site>` on Railway) | `SPONSOR_MEDIA_TOKEN`, `MEDIA_CONCURRENCY`, `MEDIA_QUEUE`, `PORT`, optional `SPONSOR_SITE_ORIGIN` and `WEARABLE_PYTHON` | Normalize logos, preview caps and validate/composite footage |
+| Worker → media | `SPONSOR_MEDIA_URL`, matching `SPONSOR_MEDIA_TOKEN`, `SITE_URL` | Authenticated media service access |
+| Reconciler (`sponsor-reconcile-<site>` on Railway) | `SPONSOR_ORIGIN`, `SPONSOR_RECONCILE_TOKEN` | Independent payment recovery and rescheduling |
+| Worker ← reconciler | matching `SPONSOR_RECONCILE_TOKEN` | Accepts the reconciler's passes |
 
-Use distinct D1, R2, RPC and signer configuration for staging. Set the build-time `SPONSOR_ASSETS_BUCKET` to that environment's R2 bucket, alongside `D1_DATABASE_NAME` and `D1_DATABASE_ID`. Create the bucket before deploying the generated Worker configuration. Apply migrations `0001_requests.sql`, `0002_sponsorship.sql`, and `0003_legacy_payment_recovery.sql` in order; databases from earlier local previews also receive additive columns on startup. Existing request IDs and receipt references are preserved.
+Use distinct D1, R2, RPC and signer configuration for staging. Set the build-time `SPONSOR_ASSETS_BUCKET` to that environment's R2 bucket, alongside `D1_DATABASE_NAME` and `D1_DATABASE_ID`. Create the bucket before deploying the generated Worker configuration. Both deploy workflows check the built binding: Deploy devnet refuses a build whose `SPONSOR_ASSETS` is not the `DEVNET_SPONSOR_ASSETS_BUCKET` repository variable (or is `pepe-chad-sponsor-assets`), and the production deploy refuses anything but `pepe-chad-sponsor-assets`. Without the check, an unset variable silently falls back to the production bucket. Apply migrations `0001_requests.sql`, `0002_sponsorship.sql`, and `0003_legacy_payment_recovery.sql` in order; databases from earlier local previews also receive additive columns on startup. Existing request IDs and receipt references are preserved.
 
 **There are no refunds.** Every placement is final once paid, and nothing in the service holds a signing key or a reserve to send money back. The buyer pays the checkout network fee. A paused placement keeps its verified progress and resumes in the next live slot.
 
@@ -25,23 +26,58 @@ The producer discovers media readiness and advertises compatible products. Direc
 
 Legacy requests and sponsorships share one atomic producer lease in the existing `meta.studio_id` row. Either queue renews its 60-second ownership window; each keeps a separate readiness heartbeat, so legacy polling cannot keep unavailable sponsorship products on sale. Both APIs normalize studio names identically. Keep `STUDIO_ID` distinct between the hosted producer and any local producer.
 
-## Run the auxiliary services
+## The media and reconciliation services
 
-The media service is independent of the broadcast container and receives no payment keys:
+Each site has its own pair of services on Railway, in the broadcast box's project. Neither is part of the broadcast container, and neither receives a payment key.
+
+| Site | Media service | Reconciler | Origin both are given |
+|---|---|---|---|
+| devnet | `sponsor-media-devnet` | `sponsor-reconcile-devnet` | `https://interdimensional-podcast-staging.leonardo-chekup.workers.dev` |
+| production | `sponsor-media-production` | `sponsor-reconcile-production` | `https://frogclench.fun` |
+
+`node scripts/media.mjs setup|deploy|status|health <devnet|production>` creates, configures, deploys and checks both; [the launch runbook](LAUNCH.md#sponsorship-services) has the steps. The script finds each service by name and never reuses the broadcast box's ids. It points each service at its own config file (`broadcast/railway.sponsor-media.json`, `broadcast/railway.sponsor-reconcile.json`), so the repository's `railway.json`, which describes the box, is never read for them. It uploads only the files each Dockerfile copies: about 2.6 MB for the media service and three files for the reconciler. It merges variables into a service and never replaces them.
+
+Settings on each side:
+
+| Where | Setting | Value |
+|---|---|---|
+| Media service | `SPONSOR_MEDIA_TOKEN` | 64 hex characters, generated once by `setup` and kept in `.dev.vars` as `SPONSOR_MEDIA_TOKEN_<SITE>` (the service requires 24 or more) |
+| | `SPONSOR_SITE_ORIGIN` | Optional. The site's origin, needed only by the legacy `/render` form that names a logo URL instead of sending the logo |
+| | `MEDIA_CONCURRENCY`, `MEDIA_QUEUE` | `2` renders at once, `6` waiting |
+| | `PORT`, `SPONSOR_MEDIA_PORT` | `4017`. The service listens on it, and Railway's healthcheck and public address both aim at it |
+| Reconciler | `SPONSOR_ORIGIN` | The site's origin |
+| | `SPONSOR_RECONCILE_TOKEN` | 64 hex characters, generated once by `setup` and kept as `SPONSOR_RECONCILE_TOKEN_<SITE>` |
+| Worker | `SPONSOR_MEDIA_URL` | The media service's `https://…up.railway.app` address |
+| | `SPONSOR_MEDIA_TOKEN` | The media service's token |
+| | `SPONSOR_RECONCILE_TOKEN` | The reconciler's token (the worker requires 16 or more characters) |
+| | `SITE_URL` | The site's public origin. Rendered takes and stored artwork are addressed from it |
+
+The media service's config file sets a `/health` healthcheck with a 120-second timeout, always restarts, never sleeps, keeps one replica, and gives a replaced deployment 120 seconds to finish in-flight renders before it is killed. The reconciler's config has no healthcheck, because it has no HTTP port. It always restarts and never sleeps.
+
+How the site uses the media service. The site sends `Authorization: Bearer <SPONSOR_MEDIA_TOKEN>` on every call and refuses redirects; only `/health` answers without the token:
+
+- `GET /health` answers 200 only when the service is ready (a usable token and the Python/OpenCV/FFmpeg runtime), and 503 otherwise. `capQualified` means the exact renderer, templates and masks the qualification proof binds are in place *and* this machine decodes video the way the proof did. The site asks at most once every 15 seconds per isolate, and the cap stays off sale unless it reads `capQualified: true`.
+- `POST /preview?kind=cap|logo&target=host|guest` takes the uploaded image (4 MB at most). It returns the normalized logo, the cap composited on the host's template, and their hashes. The site stores both in R2.
+- `POST /render` takes a JSON body: the fal clip URL, the buyer's logo itself (base64, read by the site from R2 and checked against the qualified hash), that hash, the host, the template version, and a key, the SHA-256 of `videoUrl|logoSha256|target|templateVersion`. The service rechecks the logo hash and the template's qualification, tracks and composites every frame, and returns the MP4 with an `x-sponsor-quality` header that summarizes the tracking and audio checks, including the output's hash. The site keeps the take only if the body matches that hash and the producer still holds the lease, and records it under the key in R2 so the same shot is never rendered twice. The service finishes or fails every render within 95 seconds and kills the renderer's whole process group on that deadline or when the caller hangs up. `MEDIA_CONCURRENCY` renders run at once and up to `MEDIA_QUEUE` wait; a render that cannot start in time is answered busy (503 `BUSY` with `retryAfterMs`), and the site retries once. A second request for a key already rendering joins it, and a finished key is served from a ten-minute cache.
+- Decoding is part of the proof. OpenCV's bundled FFmpeg converts colour differently on Linux than on the Mac the caps were qualified on, which made real takes lose tracking in the container. At boot the service decodes a probe frame and compares it with the qualified result: it either decodes directly, or has FFmpeg convert each take with plain C arithmetic (`-cpuflags 0`), which reproduces the qualified decode bit for bit on arm64 and amd64. If neither matches, `capQualified` is false and `/render` refuses with 409 `NOT_QUALIFIED`, so a cap is never sold on a machine that cannot deliver it.
+
+`.github/workflows/media.yml` runs on every change to the service, renderer, templates or bridge. One job runs `tests/wearable-render.test.py` and the media tests with the exact OpenCV and NumPy the Dockerfile pins, and fails if any test skips. The other builds the image for linux/amd64 from exactly the files `deploy` uploads, then checks that `/health` is 200 with `capQualified: true`, that `/preview` without the token is 401, and that `/preview` with it is 200.
+
+To build and run the media image by hand:
 
 ```sh
 docker build -f broadcast/Dockerfile.sponsor-media -t pepe-chad-sponsor-media .
 ```
 
-Configure `SPONSOR_MEDIA_TOKEN` (at least 24 characters) and `SPONSOR_SITE_ORIGIN` on that service. Its internal port is 4017; use HTTPS between deployed services. `/health` checks Python/OpenCV, FFmpeg, and the exact qualification artifacts. The container pins Python 3.12, OpenCV 5.0.0.93 and NumPy 2.5.3. The container image itself still needs a staging build and execution check.
+The container pins Python 3.12, OpenCV 5.0.0.93 and NumPy 2.5.3. Use HTTPS between deployed services.
 
-Run reconciliation independently of the studio:
+Reconciliation can also run by hand, independently of the studio:
 
 ```sh
 node scripts/sponsor-reconcile.mjs --watch
 ```
 
-Or deploy `broadcast/Dockerfile.sponsor-reconcile` as an always-running service. The loop waits 20 seconds after each completed pass, uses a bounded HTTP request, and logs only counts/errors. Without `--watch`, it performs one pass for an external scheduler. Set the same `SPONSOR_RECONCILE_TOKEN` on the public Worker. Do not couple this process to studio polling or broadcast uptime.
+The loop waits 20 seconds after each completed pass, uses a bounded HTTP request, and logs only counts/errors. Without `--watch`, it performs one pass for an external scheduler. Do not couple this process to studio polling or broadcast uptime.
 
 ## Delivery and recovery
 
@@ -88,7 +124,7 @@ These use the real browser components with explicitly simulated wallets and paym
 
 ## Remaining staging release gate
 
-Keep `SPONSOR_ENABLED=false` until the staging rehearsal below has passed. In that environment, build and run both service containers, apply migrations, and validate:
+Keep `SPONSOR_ENABLED=false` until the staging rehearsal below has passed. In that environment, deploy both services (`node scripts/media.mjs setup devnet`, `deploy devnet`, then `health devnet`), give the worker their four values, apply migrations, and validate:
 
 - Connected wallet and physical mobile QR handoff; rejection, insufficient token balance/SOL fees, slow confirmation, reload and duplicate submission.
 - Exact amounts/discounts for all three assets, actual treasury accounts, missing prices, late payments and concurrent reconciliation.
