@@ -34,6 +34,8 @@ async function call<T>(body: unknown) {
   }
   return data;
 }
+/** How long a studio trusts its last cap health answer when a fresh check fails. */
+export const HEALTH_GRACE_MS = 75000;
 export function createSponsorServices(): SponsorServices {
   const pauseKey = 'podcast:sponsor-pause-intents:v1';
   const pauses = new Map<string, SponsorEvent>();
@@ -106,22 +108,32 @@ export function createSponsorServices(): SponsorServices {
     templateVersion?: string;
     ready?: boolean;
   } = {};
-  let checked = 0;
+  let checked = 0,
+    answeredAt = 0;
   return {
     async sync() {
       await recoverPauses();
       if (Date.now() - checked > 20000) {
+        // A check that fails or runs slow keeps the last answer the site gave, for a while. One
+        // missed probe used to heartbeat cap:false, and the site then refused the lease of a
+        // cap already on air and threw away its finished take. An answer the site does give,
+        // not ready included, always counts at once.
+        let answer: typeof health | null = null;
         try {
           const response = await fetch(
             '/api/sponsorship/assets?action=health',
             { cache: 'no-store', signal: AbortSignal.timeout(5000) },
           );
-          health = response.ok
-            ? ((await response.json()) as typeof health)
-            : {};
+          const body: unknown = await response.json().catch(() => null);
+          if (body && typeof body === 'object' && 'ready' in body)
+            answer = body as typeof health;
         } catch {
-          health = {};
+          /* Kept below: the last answer stands until it is too old to trust. */
         }
+        if (answer) {
+          health = answer;
+          answeredAt = Date.now();
+        } else if (Date.now() - answeredAt > HEALTH_GRACE_MS) health = {};
         checked = Date.now();
       }
       await recoverPauses();

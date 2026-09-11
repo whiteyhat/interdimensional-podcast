@@ -105,15 +105,22 @@ function bucket() {
   };
 }
 
-/** A paid cap order leased to the heartbeating studio, with its design qualified. */
-async function fixture({ logoBytes = logo } = {}) {
+/**
+ * A paid cap order leased to the heartbeating studio, with its design qualified. The design
+ * was qualified with qualifiedLogo under templateVersion; logoBytes is what storage holds now.
+ */
+async function fixture({
+  logoBytes = logo,
+  qualifiedLogo = logo,
+  templateVersion = 'caps-v1',
+} = {}) {
   const DB = d1(),
     now = Date.now(),
     caps = {
       message: true,
       spotlight: true,
       cap: true,
-      capTemplateVersion: 'caps-v1',
+      capTemplateVersion: templateVersion,
     };
   await db.ensureSponsorSchema(DB);
   await db.heartbeat(DB, 'studio', caps, now);
@@ -131,11 +138,11 @@ async function fixture({ logoBytes = logo } = {}) {
         kind: 'cap',
         target: 'host',
         sha256: sha('preview'),
-        logoSha256: LOGO_SHA,
+        logoSha256: sha(qualifiedLogo),
         logoUrl: `https://frogclench.test/api/sponsorship/assets/${ASSET_ID}?part=logo`,
         templateId: 'pepe-cap-v1',
-        templateVersion: 'caps-v1',
-        qualificationVersion: 'caps-v1',
+        templateVersion,
+        qualificationVersion: templateVersion,
       }),
     );
   await db.createOrder(DB, {
@@ -191,7 +198,7 @@ async function fixture({ logoBytes = logo } = {}) {
       }),
       v,
     );
-  return { DB, assets, render };
+  return { DB, assets, render, v };
 }
 
 /** Replace the media service. Each call gets the next scripted answer, then the last one. */
@@ -421,34 +428,63 @@ void test('a render that runs out of time is not retried', async (t) => {
   assert.equal(calls.length, 1);
 });
 
-void test('a take without a readable quality summary is refused as INVALID_WEARABLE', async (t) => {
-  for (const [name, headers] of [
-    ['missing', { 'x-sponsor-quality': null }],
-    ['not base64', { 'x-sponsor-quality': '%%%not-base64%%%' }],
-    ['not JSON', { 'x-sponsor-quality': btoa('{accepted: true') }],
+// The studio answers INVALID_WEARABLE by paying for up to two fresh generations, and WARDROBE
+// by retrying the same take. A 200 nobody can read a verdict from is the desk failing (or a
+// wrong SPONSOR_MEDIA_URL answering in its place), never a reason to buy a new take.
+void test('a 200 the desk did not vouch for is the desk failing, not a bad take', async (t) => {
+  const withoutFrames = { ...qualityOf(take), frames: undefined };
+  for (const [name, answer] of [
+    ['no summary', () => success(take, { 'x-sponsor-quality': null })],
     [
-      'not accepted',
-      {
-        'x-sponsor-quality': encodeQuality({
-          ...qualityOf(take),
-          accepted: false,
-        }),
-      },
+      'not base64',
+      () => success(take, { 'x-sponsor-quality': '%%%not-base64%%%' }),
     ],
     [
-      'audio unverified',
-      {
-        'x-sponsor-quality': encodeQuality({
-          ...qualityOf(take),
-          audioVerified: false,
-        }),
-      },
+      'not JSON',
+      () => success(take, { 'x-sponsor-quality': btoa('{accepted: true') }),
     ],
-    ['for a different key', { 'x-sponsor-key': sha('another take') }],
+    ['not an object', () => success(take, { 'x-sponsor-quality': btoa('42') })],
+    [
+      'a summary missing its frame count',
+      () =>
+        success(take, { 'x-sponsor-quality': encodeQuality(withoutFrames) }),
+    ],
+    [
+      'for a different key',
+      () => success(take, { 'x-sponsor-key': sha('another take') }),
+    ],
+    [
+      'a web page from the wrong host',
+      () =>
+        new Response('<!doctype html><title>Welcome</title>', {
+          headers: { 'content-type': 'text/html' },
+        }),
+    ],
   ]) {
     await t.test(name, async (t) => {
       const f = await fixture();
-      media(t, () => success(take, headers));
+      const calls = media(t, answer);
+      const result = await failure(await f.render());
+      assert.equal(result.status, 503);
+      assert.equal(result.code, 'WARDROBE');
+      assert.equal(calls.length, 1, 'a 200 is not retried here');
+      assert.deepEqual(f.assets.puts, []);
+    });
+  }
+});
+
+void test('a summary that says the take failed its checks is a bad take', async (t) => {
+  for (const [name, change] of [
+    ['not accepted', { accepted: false }],
+    ['audio unverified', { audioVerified: false }],
+  ]) {
+    await t.test(name, async (t) => {
+      const f = await fixture();
+      media(t, () =>
+        success(take, {
+          'x-sponsor-quality': encodeQuality({ ...qualityOf(take), ...change }),
+        }),
+      );
       const result = await failure(await f.render());
       assert.equal(result.status, 422);
       assert.equal(result.code, 'INVALID_WEARABLE');
@@ -457,7 +493,7 @@ void test('a take without a readable quality summary is refused as INVALID_WEARA
   }
 });
 
-void test('bytes that do not match the quality digest are refused and never stored', async (t) => {
+void test('bytes that do not match the quality digest are the desk failing, and never stored', async (t) => {
   const f = await fixture();
   media(t, () =>
     success(take, {
@@ -465,8 +501,8 @@ void test('bytes that do not match the quality digest are refused and never stor
     }),
   );
   const result = await failure(await f.render());
-  assert.equal(result.status, 422);
-  assert.equal(result.code, 'INVALID_WEARABLE');
+  assert.equal(result.status, 503);
+  assert.equal(result.code, 'WARDROBE');
   assert.deepEqual(f.assets.puts, []);
 });
 
@@ -529,14 +565,62 @@ void test('an oversized take is refused before it is buffered', async (t) => {
   });
 });
 
+// A take with a declared length is read straight into one buffer of that size, so it is
+// never held as chunks and a copy at once. The length is then a promise the body must keep.
+void test('a take is held to the length it declares', async (t) => {
+  await t.test('exact: filed as sent', async (t) => {
+    const f = await fixture();
+    media(t, () => success(take, { 'content-length': String(take.length) }));
+    assert.equal((await f.render()).status, 200);
+    assert.deepEqual(
+      f.assets.objects.get(`${sha(take)}/video.mp4`).bytes,
+      take,
+    );
+  });
+  await t.test('runs past it: refused as soon as it does', async (t) => {
+    const f = await fixture();
+    const body = fiftyMiB({ 'content-length': String(MiB) });
+    media(t, body.response);
+    const result = await failure(await f.render());
+    assert.equal(result.status, 503);
+    assert.equal(result.code, 'WARDROBE');
+    assert.ok(body.stats.pulled <= 2, `read ${body.stats.pulled} MiB`);
+    assert.ok(body.stats.cancelled, 'the body was released');
+    assert.deepEqual(f.assets.puts, []);
+  });
+  await t.test('stops short of it: refused, not stored', async (t) => {
+    const f = await fixture();
+    media(t, () =>
+      success(take, { 'content-length': String(take.length + 100) }),
+    );
+    const result = await failure(await f.render());
+    assert.equal(result.status, 503);
+    assert.equal(result.code, 'WARDROBE');
+    assert.deepEqual(f.assets.puts, []);
+  });
+  await t.test(
+    'compressed: counted as it arrives, not by its header',
+    async (t) => {
+      // A runtime that inflates a gzip body hands over more bytes than content-length says.
+      const f = await fixture();
+      media(t, () =>
+        success(take, { 'content-length': '5', 'content-encoding': 'gzip' }),
+      );
+      assert.equal((await f.render()).status, 200);
+    },
+  );
+});
+
 void test('the logo must be in storage and still hash to what was qualified', async (t) => {
-  for (const [name, logoBytes] of [
-    ['missing', null],
-    ['changed', Buffer.from('a different mark')],
-    ['too large to send', Buffer.alloc(5 * MiB + 1)],
+  // The media service refuses a logo over 4 MiB, however faithfully it hashes.
+  const heavy = Buffer.alloc(4 * MiB + 1, 7);
+  for (const [name, stored] of [
+    ['missing', { logoBytes: null }],
+    ['changed', { logoBytes: Buffer.from('a different mark') }],
+    ['too large to send', { logoBytes: heavy, qualifiedLogo: heavy }],
   ]) {
     await t.test(name, async (t) => {
-      const f = await fixture({ logoBytes });
+      const f = await fixture(stored);
       const calls = media(t, () => success());
       const result = await failure(await f.render());
       assert.equal(result.status, 409);
@@ -545,6 +629,48 @@ void test('the logo must be in storage and still hash to what was qualified', as
       assert.deepEqual(f.assets.puts, []);
     });
   }
+});
+
+void test('a logo right at the media service limit is sent, and its request still fits', async (t) => {
+  const mark = Buffer.alloc(4 * MiB, 7);
+  const f = await fixture({ logoBytes: mark, qualifiedLogo: mark });
+  const calls = media(t, () => success(take, { 'x-sponsor-key': null }));
+  assert.equal((await f.render()).status, 200);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(
+    Buffer.from(JSON.parse(calls[0].init.body).logo, 'base64'),
+    mark,
+  );
+  assert.ok(calls[0].init.body.length <= 8 * MiB, 'inside the 8 MiB body');
+});
+
+void test('the template sent is the one the design was qualified under', async (t) => {
+  await t.test('a newer template renders with its own version', async (t) => {
+    const f = await fixture({ templateVersion: 'caps-v2' });
+    const key = sha(`${VIDEO_URL}|${LOGO_SHA}|host|caps-v2`);
+    const calls = media(t, () => success(take, { 'x-sponsor-key': key }));
+    const response = await f.render();
+    assert.equal(response.status, 200);
+    const sent = JSON.parse(calls[0].init.body);
+    assert.equal(sent.templateVersion, 'caps-v2');
+    assert.equal(sent.key, key);
+  });
+  await t.test('a design with no template version is refused', async (t) => {
+    const f = await fixture();
+    const row = f.DB.sql
+      .prepare('SELECT metadata FROM sponsor_assets WHERE id=?')
+      .get(ASSET_ID);
+    const { templateVersion, ...meta } = JSON.parse(row.metadata);
+    assert.equal(templateVersion, 'caps-v1');
+    f.DB.sql
+      .prepare('UPDATE sponsor_assets SET metadata=? WHERE id=?')
+      .run(JSON.stringify(meta), ASSET_ID);
+    const calls = media(t, () => success());
+    const result = await failure(await f.render());
+    assert.equal(result.status, 409);
+    assert.equal(result.code, 'ASSET');
+    assert.equal(calls.length, 0, 'the media service was never asked');
+  });
 });
 
 void test('a lease that ends while the take renders stores nothing', async (t) => {
@@ -571,8 +697,11 @@ void test('only fal.media footage is sent for branding', async (t) => {
     'https://fal.media.evil.test/take.mp4',
     'https://user:pass@v3.fal.media/take.mp4',
     'not a url',
+    // The media service refuses an explicit port, and a URL over 3000 characters as sent.
+    'https://v3.fal.media:8443/files/take.mp4',
+    `https://v3.fal.media/files/${' '.repeat(1100)}.mp4`,
   ]) {
-    await t.test(videoUrl, async (t) => {
+    await t.test(videoUrl.slice(0, 60), async (t) => {
       const f = await fixture();
       const calls = media(t, () => success());
       const result = await failure(await f.render(videoUrl));
@@ -581,4 +710,113 @@ void test('only fal.media footage is sent for branding', async (t) => {
       assert.deepEqual(f.assets.puts, []);
     });
   }
+});
+
+/** A 100 MiB request body served a MiB at a time, counting how much of it the route reads. */
+function hundredMiB() {
+  const stats = { pulled: 0, cancelled: false },
+    chunk = new Uint8Array(MiB);
+  const body = new ReadableStream(
+    {
+      pull(controller) {
+        if (stats.pulled === 100) return controller.close();
+        stats.pulled++;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        stats.cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  return { stats, body };
+}
+const post = (url, headers, body) =>
+  new Request(url, { method: 'POST', headers, body, duplex: 'half' });
+
+void test('a caller that is not the studio is refused before its body is read', async (t) => {
+  for (const [name, url, headers, status] of [
+    ['no token', 'https://site.workers.test/api/sponsorship/media', {}, 401],
+    [
+      'the wrong token',
+      'https://site.workers.test/api/sponsorship/media',
+      { 'x-studio-token': 'not-the-studio-token' },
+      401,
+    ],
+    [
+      'another site through the local studio',
+      'http://127.0.0.1:3212/api/sponsorship/media',
+      { 'sec-fetch-site': 'cross-site' },
+      403,
+    ],
+  ]) {
+    await t.test(name, async (t) => {
+      const f = await fixture();
+      const calls = media(t, () => success());
+      const upload = hundredMiB();
+      const result = await failure(
+        await renderSponsorMedia(post(url, headers, upload.body), f.v),
+      );
+      assert.equal(result.status, status);
+      assert.equal(upload.stats.pulled, 0, 'no byte of the body was read');
+      assert.equal(calls.length, 0);
+    });
+  }
+});
+
+void test('a render request over 8 KiB is refused without being held', async (t) => {
+  const studio = { 'x-studio-token': STUDIO_TOKEN, 'x-studio-id': 'studio' };
+  await t.test('declared too large: nothing is read', async (t) => {
+    const f = await fixture();
+    const calls = media(t, () => success());
+    const upload = hundredMiB();
+    const result = await failure(
+      await renderSponsorMedia(
+        post(
+          'https://site.workers.test/api/sponsorship/media',
+          { ...studio, 'content-length': String(100 * MiB) },
+          upload.body,
+        ),
+        f.v,
+      ),
+    );
+    assert.equal(result.status, 413);
+    assert.equal(upload.stats.pulled, 0);
+    assert.equal(calls.length, 0);
+  });
+  await t.test('undeclared: cut off as it crosses the limit', async (t) => {
+    const f = await fixture();
+    const calls = media(t, () => success());
+    const upload = hundredMiB();
+    const result = await failure(
+      await renderSponsorMedia(
+        post(
+          'https://site.workers.test/api/sponsorship/media',
+          studio,
+          upload.body,
+        ),
+        f.v,
+      ),
+    );
+    assert.equal(result.status, 413);
+    assert.equal(upload.stats.pulled, 1, 'the first MiB already crossed it');
+    assert.ok(upload.stats.cancelled, 'the body was released');
+    assert.equal(calls.length, 0);
+  });
+  await t.test(
+    'the local studio bridge forwards no oversized body',
+    async (t) => {
+      const calls = media(t, () => Response.json({ url: 'https://x.test' }));
+      const upload = hundredMiB();
+      const result = await failure(
+        await renderSponsorMedia(
+          post('http://127.0.0.1:3212/api/sponsorship/media', {}, upload.body),
+          { STUDIO_TOKEN, INTERACT_ORIGIN: 'https://frogclench.test' },
+        ),
+      );
+      assert.equal(result.status, 413);
+      assert.equal(upload.stats.pulled, 1);
+      assert.equal(calls.length, 0, 'nothing reached the site');
+    },
+  );
 });

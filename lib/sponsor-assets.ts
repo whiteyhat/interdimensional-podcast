@@ -74,10 +74,72 @@ const notReady = (): MediaHealth => ({ ready: false, capQualified: false });
 // crowd of probes. An answer is reused by this isolate for 15 seconds, and callers who
 // arrive while a probe is still out wait on that same probe instead of starting another.
 const HEALTH_TTL_MS = 15000;
-let healthProbe:
-  | { url: string; expires: number; result: Promise<MediaHealth> }
-  | undefined;
-async function probeMediaHealth(url: URL): Promise<MediaHealth> {
+const HEALTH_PROBE_MS = 5000;
+// The studio heartbeats cap:true or cap:false from this answer, and a lease whose producer
+// stops reporting cap:true is refused mid-take: the verified take is thrown away and the paid
+// order pauses. One lost or slow probe must not read as the desk going down, so the last
+// answer the service actually gave stands for 75 seconds after it arrived. Only a service
+// that has stayed out of reach that long, or that says itself it is not ready, is reported
+// not ready.
+const HEALTH_STALE_MS = 75000;
+// A caller that already holds a standing answer waits this long for a fresher one, then takes
+// the standing one. The studio gives its whole health round trip 5 s, so waiting out the
+// probe's own 5 s timeout would lose the very answer the stale window keeps.
+const HEALTH_PATIENCE_MS = 2500;
+// A Worker drops what a finished request left running, so a probe can be lost with the
+// request that started it and never settle. One still out well past its own timeout is not
+// waited on again; the next caller starts another.
+const HEALTH_ABANDON_MS = HEALTH_PROBE_MS + 1000;
+type HealthEntry = {
+  /** The last answer the service gave on purpose, and when it arrived. */
+  answer?: { health: MediaHealth; at: number };
+  /** When the last probe settled, answered or not. The quiet period runs from here. */
+  checkedAt?: number;
+  probe?: { started: number; done: Promise<void> };
+};
+// Keyed by media URL. One is configured at a time; the bound only stops a changed one leaking.
+const healthByUrl = new Map<string, HealthEntry>();
+function healthEntry(key: string) {
+  let entry = healthByUrl.get(key);
+  if (!entry) {
+    const oldest = healthByUrl.keys().next();
+    if (healthByUrl.size >= 8 && !oldest.done) healthByUrl.delete(oldest.value);
+    entry = {};
+    healthByUrl.set(key, entry);
+  }
+  return entry;
+}
+/** A small JSON object from a body, or null. A health answer is a few hundred bytes; a wrong
+ * host can send anything, so its body is never read whole. */
+async function smallJson(response: Response) {
+  if (!response.body) return null;
+  try {
+    const data: unknown = JSON.parse(
+      new TextDecoder().decode(
+        await readBounded(response.body, 64 * 1024, 'Health answer too large.'),
+      ),
+    );
+    return data && typeof data === 'object' && !Array.isArray(data)
+      ? (data as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+/** A health answer, when the body is one: it has to say whether the desk is ready. */
+function healthFrom(data: Record<string, unknown> | null): MediaHealth | null {
+  if (!data || typeof data.ready !== 'boolean') return null;
+  return {
+    ready: data.ready,
+    capQualified: data.capQualified === true,
+    templateVersion:
+      typeof data.templateVersion === 'string'
+        ? data.templateVersion
+        : undefined,
+  };
+}
+/** What the service says about itself, or null when nothing it said can be trusted. */
+async function probeMediaHealth(url: URL): Promise<MediaHealth | null> {
   try {
     // /health is unauthenticated, so the render secret stays off this request.
     // Workers refuse the 'error' redirect mode outright, so every call to the media service asks for
@@ -85,29 +147,45 @@ async function probeMediaHealth(url: URL): Promise<MediaHealth> {
     // treats anything but a 2xx as a failure.
     const r = await fetch(new URL('/health', url), {
       redirect: 'manual',
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(HEALTH_PROBE_MS),
     });
-    // A 503 is the service saying it is not ready, whatever its body goes on to claim.
-    if (!r.ok) {
-      await r.body?.cancel().catch(() => {});
-      return notReady();
-    }
-    const data = (await r.json()) as {
-      ready?: unknown;
-      capQualified?: unknown;
-      templateVersion?: unknown;
-    };
-    return {
-      ready: data.ready === true,
-      capQualified: data.capQualified === true,
-      templateVersion:
-        typeof data.templateVersion === 'string'
-          ? data.templateVersion
-          : undefined,
-    };
+    const data = await smallJson(r);
+    // A 503 the service wrote itself is it saying it is not ready, whatever its body goes on
+    // to claim. A proxy's error page in front of a restarting service says nothing about it.
+    if (r.status === 503) return data ? notReady() : null;
+    return r.ok ? healthFrom(data) : null;
   } catch {
-    return notReady();
+    return null;
   }
+}
+function startProbe(entry: HealthEntry, url: URL) {
+  const probe = {
+    started: Date.now(),
+    done: probeMediaHealth(url).then((health) => {
+      // The 15 seconds start when the probe settles, not when it was sent, so a slow probe
+      // still buys the full quiet period afterwards.
+      const at = Date.now();
+      if (health) entry.answer = { health, at };
+      entry.checkedAt = at;
+      if (entry.probe === probe) entry.probe = undefined;
+    }),
+  };
+  return probe;
+}
+const standing = (entry: HealthEntry, now: number) =>
+  entry.answer && now - entry.answer.at <= HEALTH_STALE_MS
+    ? entry.answer.health
+    : undefined;
+/** Wait for the probe, but never past ms: a lost one would otherwise hold the caller forever. */
+async function settledWithin(done: Promise<void>, ms: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    done,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, Math.max(0, ms));
+    }),
+  ]);
+  clearTimeout(timer);
 }
 /**
  * Whether this site can carry a cap order through to broadcast. The service being up is not
@@ -125,25 +203,30 @@ export async function sponsorMediaHealth(
     return notReady();
   }
   if (!v.SPONSOR_ASSETS) return notReady();
+  const entry = healthEntry(url.href),
+    now = Date.now();
+  if (entry.probe && now - entry.probe.started >= HEALTH_ABANDON_MS)
+    entry.probe = undefined;
   if (
-    !healthProbe ||
-    healthProbe.url !== url.href ||
-    Date.now() >= healthProbe.expires
-  ) {
-    // The 15 seconds start when the answer arrives, not when the question was asked, so a
-    // slow probe still buys the full quiet period afterwards.
-    const probe = {
-      url: url.href,
-      expires: Infinity,
-      result: probeMediaHealth(url),
-    };
-    healthProbe = probe;
-    void probe.result.then(() => {
-      probe.expires = Date.now() + HEALTH_TTL_MS;
-    });
-  }
-  return healthProbe.result;
+    !entry.probe &&
+    (entry.checkedAt === undefined || now - entry.checkedAt >= HEALTH_TTL_MS)
+  )
+    entry.probe = startProbe(entry, url);
+  if (entry.probe)
+    await settledWithin(
+      entry.probe.done,
+      standing(entry, now)
+        ? HEALTH_PATIENCE_MS
+        : entry.probe.started + HEALTH_ABANDON_MS - now,
+    );
+  return standing(entry, Date.now()) ?? notReady();
 }
+// The local studio bridge relays the site's answer, and one lost hop to the site would flip
+// the studio's heartbeat to cap:false as surely as a lost probe. The site's last answer stands
+// here for the same 75 seconds, and one the site gives passes straight through. The bridge
+// gives up on the site after 4 s because the studio waits 5 s for the bridge.
+const HEALTH_RELAY_MS = 4000;
+let relayed: { origin: string; health: MediaHealth; at: number } | undefined;
 export async function sponsorAssetHealth(
   request: Request,
   v: SponsorMediaVars,
@@ -153,37 +236,62 @@ export async function sponsorAssetHealth(
     v.INTERACT_ORIGIN &&
     ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
   ) {
+    const origin = v.INTERACT_ORIGIN;
+    let health: MediaHealth | null = null;
     try {
       const response = await fetch(
-        new URL('/api/sponsorship/assets?action=health', v.INTERACT_ORIGIN),
-        { redirect: 'manual', signal: AbortSignal.timeout(6000) },
+        new URL('/api/sponsorship/assets?action=health', origin),
+        { redirect: 'manual', signal: AbortSignal.timeout(HEALTH_RELAY_MS) },
       );
-      return new Response(response.body, {
-        status: response.status,
-        headers: {
-          'content-type': 'application/json',
-          'cache-control': 'no-store',
-        },
-      });
-    } catch {
-      return json({ ready: false, capQualified: false });
-    }
+      if (response.ok) health = healthFrom(await smallJson(response));
+      else await response.body?.cancel().catch(() => {});
+    } catch {}
+    const now = Date.now();
+    if (health) relayed = { origin, health, at: now };
+    else if (relayed?.origin === origin && now - relayed.at <= HEALTH_STALE_MS)
+      health = relayed.health;
+    return json(health ?? notReady());
   }
   return json(await sponsorMediaHealth(v));
 }
 /**
  * Read a body into memory, refusing it the moment it passes max bytes. Checking the size
  * only after buffering would let one oversized answer claim the isolate's memory first.
+ * When the sender declared its length, the bytes land in one buffer of exactly that size, so
+ * a 40 MiB take costs 40 MiB rather than its chunks and then their copy. A body that runs past
+ * or stops short of the length it declared is not the body that was sent, and is refused.
  */
 export async function readBounded(
   body: ReadableStream<Uint8Array>,
   max: number,
   tooLarge: string,
-) {
+  declared?: number,
+): Promise<Uint8Array<ArrayBuffer>> {
   const reader = body.getReader();
-  const parts: Uint8Array[] = [];
-  let size = 0;
   try {
+    if (declared !== undefined && declared > max)
+      throw new SponsorError(413, tooLarge);
+    if (
+      declared !== undefined &&
+      Number.isSafeInteger(declared) &&
+      declared >= 0
+    ) {
+      const bytes = new Uint8Array(declared);
+      let offset = 0;
+      for (;;) {
+        const r = await reader.read();
+        if (r.done) break;
+        if (r.value.length > declared - offset)
+          throw new Error('The body ran past the length it declared.');
+        bytes.set(r.value, offset);
+        offset += r.value.length;
+      }
+      if (offset !== declared)
+        throw new Error('The body ended short of the length it declared.');
+      return bytes;
+    }
+    const parts: Uint8Array[] = [];
+    let size = 0;
     for (;;) {
       const r = await reader.read();
       if (r.done) break;
@@ -191,16 +299,16 @@ export async function readBounded(
       if (size > max) throw new SponsorError(413, tooLarge);
       parts.push(r.value);
     }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const part of parts) {
+      bytes.set(part, offset);
+      offset += part.length;
+    }
+    return bytes;
   } finally {
     await reader.cancel().catch(() => {});
   }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const part of parts) {
-    bytes.set(part, offset);
-    offset += part.length;
-  }
-  return bytes;
 }
 async function boundedBody(request: Request, max: number) {
   if (Number(request.headers.get('content-length')) > max)

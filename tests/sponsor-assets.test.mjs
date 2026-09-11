@@ -179,6 +179,183 @@ void test('a 503 from the media health check means not ready, whatever its body 
     capQualified: false,
   });
 });
+
+const ready = { ready: true, capQualified: true, templateVersion: 'caps-v1' },
+  notReady = { ready: false, capQualified: false };
+const realSetTimeout = globalThis.setTimeout;
+/** Let every timer fire at once, keeping what was asked for. */
+function instantTimers(t) {
+  const waits = [];
+  const timers = t.mock.method(globalThis, 'setTimeout', (fn, ms) => {
+    waits.push(ms);
+    return realSetTimeout(fn, 0);
+  });
+  return { waits, restore: () => timers.mock.restore() };
+}
+
+// The studio heartbeats cap:false the moment this says not ready, and a lease whose producer
+// stops reporting cap:true is refused mid-take. One lost probe must not do that.
+void test('a failed probe keeps the last answer the service gave, for 75 seconds', async (t) => {
+  let clock = Date.now();
+  t.mock.method(Date, 'now', () => clock);
+  let answer = () => Response.json(readyBody);
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    calls.push(String(url));
+    return answer();
+  });
+  const v = healthVars('https://media-stale.test');
+  assert.deepEqual(await checkHealth(v), ready);
+  for (const [name, fault] of [
+    ['network error', () => Promise.reject(new TypeError('fetch failed'))],
+    [
+      'timeout',
+      () =>
+        Promise.reject(
+          new DOMException('The operation timed out.', 'TimeoutError'),
+        ),
+    ],
+    ['proxy error page', () => new Response('Bad gateway', { status: 502 })],
+    [
+      'proxy 503 page',
+      () => new Response('upstream connect error', { status: 503 }),
+    ],
+    [
+      'a web page from the wrong host',
+      () =>
+        new Response('<!doctype html><title>Welcome</title>', {
+          headers: { 'content-type': 'text/html' },
+        }),
+    ],
+  ]) {
+    clock += 15000;
+    answer = fault;
+    assert.deepEqual(await checkHealth(v), ready, name);
+  }
+  assert.equal(calls.length, 6, 'each fault was a fresh probe');
+  clock += 1;
+  assert.deepEqual(
+    await checkHealth(v),
+    notReady,
+    'out of reach for over 75 seconds',
+  );
+  clock += 15000;
+  answer = () => Response.json(readyBody);
+  assert.deepEqual(await checkHealth(v), ready, 'back as soon as it answers');
+});
+void test('a 503 the service writes itself takes caps off sale at once', async (t) => {
+  let clock = Date.now();
+  t.mock.method(Date, 'now', () => clock);
+  let answer = () => Response.json(readyBody);
+  t.mock.method(globalThis, 'fetch', async () => answer());
+  const v = healthVars('https://media-closing.test');
+  assert.deepEqual(await checkHealth(v), ready);
+  clock += 15000;
+  answer = () =>
+    Response.json(
+      { ...readyBody, ready: false, capQualified: false },
+      {
+        status: 503,
+      },
+    );
+  assert.deepEqual(await checkHealth(v), notReady);
+});
+void test('a slow probe does not hold a caller that has an answer to give', async (t) => {
+  let clock = Date.now();
+  t.mock.method(Date, 'now', () => clock);
+  let release;
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls.push(clock);
+    if (calls.length === 1) return Response.json(readyBody);
+    await new Promise((resolve) => (release = resolve));
+    return Response.json({ ...readyBody, ready: false }, { status: 503 });
+  });
+  const v = healthVars('https://media-slow.test');
+  assert.deepEqual(await checkHealth(v), ready);
+  clock += 15000;
+  const timers = instantTimers(t);
+  assert.deepEqual(await checkHealth(v), ready, 'the standing answer');
+  assert.ok(
+    timers.waits.length && Math.max(...timers.waits) < 5000,
+    `waited ${timers.waits.join(', ')} ms, not the probe's 5 s`,
+  );
+  assert.deepEqual(await checkHealth(v), ready);
+  assert.equal(calls.length, 2, 'the second caller joined the probe');
+  timers.restore();
+  release();
+  assert.deepEqual(
+    await checkHealth(v),
+    notReady,
+    'the late answer counts once it comes',
+  );
+  assert.equal(calls.length, 2);
+});
+void test('a probe that never settles is not waited on for ever', async (t) => {
+  let clock = Date.now();
+  t.mock.method(Date, 'now', () => clock);
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', () => {
+    calls++;
+    // The first probe is lost with the request that sent it.
+    return calls === 1 ? new Promise(() => {}) : Response.json(readyBody);
+  });
+  const v = healthVars('https://media-lost.test');
+  const timers = instantTimers(t);
+  assert.deepEqual(await checkHealth(v), notReady);
+  assert.ok(
+    Math.max(...timers.waits) <= 6000,
+    `bounded by the probe's own timeout: ${timers.waits.join(', ')} ms`,
+  );
+  clock += 1000;
+  assert.deepEqual(await checkHealth(v), notReady);
+  assert.equal(calls, 1, 'still inside its timeout, so it is joined');
+  timers.restore();
+  clock += 5000;
+  assert.deepEqual(await checkHealth(v), ready);
+  assert.equal(calls, 2, 'past it, a new probe replaces the lost one');
+});
+void test('the studio bridge keeps the site answer through a lost hop', async (t) => {
+  let clock = Date.now();
+  t.mock.method(Date, 'now', () => clock);
+  let answer = () => Response.json(ready);
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    calls.push(String(url));
+    return answer();
+  });
+  const v = { INTERACT_ORIGIN: 'https://relay-site.test' };
+  const bridge = async () =>
+    (
+      await sponsorAssetHealth(
+        new Request(
+          'http://127.0.0.1:3212/api/sponsorship/assets?action=health',
+        ),
+        v,
+      )
+    ).json();
+  assert.deepEqual(await bridge(), ready);
+  assert.equal(
+    calls[0],
+    'https://relay-site.test/api/sponsorship/assets?action=health',
+  );
+  clock += 60000;
+  answer = () => Promise.reject(new TypeError('fetch failed'));
+  assert.deepEqual(await bridge(), ready, 'a lost hop');
+  clock += 15000;
+  answer = () => new Response('Bad gateway', { status: 502 });
+  assert.deepEqual(await bridge(), ready, 'an error page at 75 s');
+  clock += 1;
+  assert.deepEqual(await bridge(), notReady, 'the site gone for over 75 s');
+  answer = () => Response.json(ready);
+  assert.deepEqual(await bridge(), ready);
+  answer = () => Response.json(notReady);
+  assert.deepEqual(
+    await bridge(),
+    notReady,
+    'the site saying not ready passes straight through',
+  );
+});
 void test('a site that cannot render reports not ready without probing', async (t) => {
   let calls = 0;
   t.mock.method(globalThis, 'fetch', async () => {

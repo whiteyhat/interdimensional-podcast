@@ -4,16 +4,23 @@ import {
   sponsorMediaConfig,
   type SponsorMediaVars,
 } from './sponsor-assets';
-import { sponsorFailure } from './sponsor-server';
+import { assertSponsorStudio, sponsorFailure } from './sponsor-server';
 import { SponsorError, type SponsorLease } from './sponsorship';
 import { resolveTrustedSponsor } from './sponsor-context';
 import { readStudioId } from './interact';
 
 const MAX_VIDEO = 40 * 1024 * 1024;
-// The media service accepts a /render body of at most 8 MiB, and base64 grows the logo by a
-// third on the way. 5 MiB of PNG leaves the rest of the body room, and is more than a
-// normalized mark can weigh: the normalizer holds it to 1024 pixels a side.
-const MAX_LOGO = 5 * 1024 * 1024;
+// The media service refuses a logo over 4 MiB, and would do it with a status that reads here
+// as the desk failing, so the order would retry into a pause. Held to the same 4 MiB, such an
+// order stops at once on its artwork instead. 4 MiB grows to under 5.4 MiB as base64, inside
+// the service's 8 MiB /render body, and is more than a normalized mark can weigh anyway: the
+// normalizer holds it to 1024 pixels a side.
+const MAX_LOGO = 4 * 1024 * 1024;
+// What the studio sends is an order id, a lease token and one fal URL: a few KB at most.
+const MAX_RENDER_REQUEST = 8 * 1024;
+// The media service's own limit on a video URL, applied to the URL as it will be sent.
+const MAX_VIDEO_URL = 3000;
+const LOCAL_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
 // The timeout ladder, from the inside out: the media service finishes or fails a render
 // within 95 s, this site gives it 105 s, the studio bridge waits 115 s and the browser 120 s.
 // Each rung outlasts the one it calls, so a failure arrives as an answer, never a hang-up.
@@ -54,18 +61,34 @@ function verifiedQuality(raw: unknown): SponsorQuality | null {
     ? (q as SponsorQuality)
     : null;
 }
-function qualityHeader(value: string | null) {
+/**
+ * What the service's quality header says: a summary that vouches for the take, 'refused' when
+ * it plainly says the take failed its checks, or null when there is nothing readable to go
+ * on. Only 'refused' is a verdict on the take. A missing or garbled header is the service (or
+ * whatever answered in its place) failing, and must not cost the order a fresh generation.
+ */
+function qualityHeader(
+  value: string | null,
+): SponsorQuality | 'refused' | null {
   if (!value) return null;
+  let raw: unknown;
   try {
     const bytes = Uint8Array.from(atob(value), (c) => c.charCodeAt(0));
-    return verifiedQuality(JSON.parse(new TextDecoder().decode(bytes)));
+    raw = JSON.parse(new TextDecoder().decode(bytes));
   } catch {
     return null;
   }
+  const q =
+    raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  if (q.accepted === false || q.audioVerified === false) return 'refused';
+  return verifiedQuality(raw);
 }
 function qualifiedCap(order: SponsorLease): QualifiedCap {
   const meta = order.assetMetadata,
     { assetId, target } = order.draft;
+  // The template comes from the design itself, never from a version written here: the lease
+  // was only granted because it matches the template the studio says it delivers, and a
+  // literal would refuse every cap sold after the next template bump.
   if (
     order.draft.product !== 'cap' ||
     !meta ||
@@ -75,7 +98,8 @@ function qualifiedCap(order: SponsorLease): QualifiedCap {
     !HEX64.test(meta.logoSha256) ||
     typeof meta.templateVersion !== 'string' ||
     !meta.templateVersion ||
-    meta.qualificationVersion !== 'caps-v1'
+    typeof meta.qualificationVersion !== 'string' ||
+    !meta.qualificationVersion
   )
     throw new SponsorError(
       409,
@@ -94,16 +118,53 @@ function falVideo(raw: string) {
   try {
     video = new URL(raw);
   } catch {}
+  // The media service refuses an explicit port and a URL over 3000 characters as sent. Either
+  // would come back as a service refusal, retried like an outage, so both stop here instead.
   if (
     !video ||
     video.protocol !== 'https:' ||
+    video.port ||
     video.username ||
     video.password ||
     video.hash ||
+    video.href.length > MAX_VIDEO_URL ||
     !(video.hostname === 'fal.media' || video.hostname.endsWith('.fal.media'))
   )
     throw new SponsorError(400, 'The rendered video host is not allowed.');
   return video;
+}
+/** The declared size of a body, when it is the size of the bytes the reader will see. A body
+ * the runtime decompresses on the way in is longer than the length its header gives. */
+function declaredLength(headers: Headers) {
+  const raw = headers.get('content-length')?.trim(),
+    encoding = headers.get('content-encoding')?.trim().toLowerCase();
+  return raw && /^\d+$/.test(raw) && (!encoding || encoding === 'identity')
+    ? Number(raw)
+    : undefined;
+}
+/**
+ * The render request's body, read only after the caller has proven to be the studio, and
+ * never more of it than a real request could weigh.
+ */
+async function renderRequest(request: Request) {
+  const tooLarge = 'The wardrobe render request is too large.';
+  if (Number(request.headers.get('content-length')) > MAX_RENDER_REQUEST) {
+    await request.body?.cancel().catch(() => {});
+    throw new SponsorError(413, tooLarge);
+  }
+  if (!request.body)
+    throw new SponsorError(400, 'A valid wardrobe render is required.');
+  return readBounded(request.body, MAX_RENDER_REQUEST, tooLarge);
+}
+function jsonObject(bytes: Uint8Array) {
+  try {
+    const data: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    return data && typeof data === 'object'
+      ? (data as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
 }
 function base64(bytes: Uint8Array) {
   let binary = '';
@@ -250,9 +311,15 @@ async function requestRender(endpoint: URL, token: string, body: string) {
 /**
  * The take's bytes, once they prove to be what the quality summary describes. A declared size
  * over the cap is refused before a byte is read, and an undeclared one is cut off as it
- * crosses it. A missing or unreadable summary is a take nobody vouched for, not an outage.
- * An echoed key naming some other render means the service mixed two jobs up; a service
- * that echoes no key is still held to the digest.
+ * crosses it.
+ *
+ * The studio pays for up to two fresh generations when told a take is bad (422), and retries
+ * the same take when told the desk failed (503). So 422 is kept for a summary that says in so
+ * many words that this take failed its checks. Everything else that goes wrong after a 200 is
+ * the desk's fault, or that of whatever answered in its place (a wrong SPONSOR_MEDIA_URL, a
+ * proxy page): no summary, one that cannot be read, a key naming some other render, bytes
+ * that do not arrive whole or are not the ones the summary names. A service that echoes no
+ * key is still held to the digest.
  */
 async function verifiedTake(response: Response, key: string) {
   const refuse = async (error: SponsorError): Promise<never> => {
@@ -261,22 +328,30 @@ async function verifiedTake(response: Response, key: string) {
   };
   if (Number(response.headers.get('content-length')) > MAX_VIDEO)
     return refuse(new SponsorError(413, 'The wardrobe take is too large.'));
-  const quality = qualityHeader(response.headers.get('x-sponsor-quality'));
-  if (!quality)
-    return refuse(
-      new SponsorError(
-        422,
-        'The wardrobe take did not supply verified timing.',
-        'INVALID_WEARABLE',
-      ),
-    );
   const echoed = response.headers.get('x-sponsor-key');
   if (echoed && echoed !== key)
     return refuse(
       new SponsorError(
-        422,
+        503,
         'The wardrobe desk answered for a different take.',
+        'WARDROBE',
+      ),
+    );
+  const quality = qualityHeader(response.headers.get('x-sponsor-quality'));
+  if (quality === 'refused')
+    return refuse(
+      new SponsorError(
+        422,
+        'The wardrobe take did not pass its checks.',
         'INVALID_WEARABLE',
+      ),
+    );
+  if (!quality)
+    return refuse(
+      new SponsorError(
+        503,
+        'The wardrobe desk did not vouch for this take.',
+        'WARDROBE',
       ),
     );
   let bytes: Uint8Array<ArrayBuffer>;
@@ -286,21 +361,22 @@ async function verifiedTake(response: Response, key: string) {
           response.body,
           MAX_VIDEO,
           'The wardrobe take is too large.',
+          declaredLength(response.headers),
         )
       : new Uint8Array(0);
   } catch (e) {
     if (e instanceof SponsorError) throw e;
     throw new SponsorError(
       503,
-      'The wardrobe take was cut off on its way here.',
+      'The wardrobe take did not arrive whole.',
       'WARDROBE',
     );
   }
   if ((await sha256Hex(bytes)) !== quality.outputSha256)
     throw new SponsorError(
-      422,
-      'The wardrobe video integrity check failed.',
-      'INVALID_WEARABLE',
+      503,
+      'The wardrobe take is not the one the desk described.',
+      'WARDROBE',
     );
   return { bytes, quality };
 }
@@ -314,20 +390,19 @@ export async function renderSponsorMedia(
   try {
     const origin = request.headers.get('origin'),
       url = new URL(request.url),
-      site = request.headers.get('sec-fetch-site');
+      site = request.headers.get('sec-fetch-site'),
+      local = LOCAL_HOSTS.includes(url.hostname);
     if (origin && origin !== url.origin)
       throw new SponsorError(403, 'Origin not allowed.');
     if (v.INTERACT_ORIGIN) {
-      if (
-        !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) ||
-        (site && site !== 'same-origin' && site !== 'none')
-      )
+      if (!local || (site && site !== 'same-origin' && site !== 'none'))
         throw new SponsorError(
           403,
           'The media bridge only serves the local studio.',
         );
       if (!v.STUDIO_TOKEN)
         throw new SponsorError(503, 'Studio authorization is unavailable.');
+      const body = await renderRequest(request);
       const response = await fetch(
         new URL('/api/sponsorship/media', v.INTERACT_ORIGIN),
         {
@@ -337,7 +412,7 @@ export async function renderSponsorMedia(
             'x-studio-token': v.STUDIO_TOKEN,
             'x-studio-id': readStudioId(v.STUDIO_ID),
           },
-          body: await request.text(),
+          body,
           redirect: 'manual',
           signal: AbortSignal.timeout(115000),
         },
@@ -350,20 +425,25 @@ export async function renderSponsorMedia(
         },
       });
     }
+    // The caller is held to the checks resolveTrustedSponsor makes before a byte of the body
+    // is read. A body read first lets anyone on the internet make this isolate hold whatever
+    // they choose to send, and a Worker has 128 MB.
+    if (!local) assertSponsorStudio(request, v);
+    else if (site && site !== 'same-origin' && site !== 'none')
+      throw new SponsorError(
+        403,
+        'The studio bridge only serves its own machine.',
+      );
     if (!v.SPONSOR_ASSETS)
       throw new SponsorError(503, 'Wardrobe media storage is unavailable.');
     const assets = v.SPONSOR_ASSETS;
-    const body = (await request.json().catch(() => null)) as {
-      orderId?: unknown;
-      leaseToken?: unknown;
-      videoUrl?: unknown;
-    } | null;
+    const body = jsonObject(await renderRequest(request));
     if (
       !body ||
       typeof body.orderId !== 'string' ||
       typeof body.leaseToken !== 'string' ||
       typeof body.videoUrl !== 'string' ||
-      body.videoUrl.length > 3000
+      body.videoUrl.length > MAX_VIDEO_URL
     )
       throw new SponsorError(400, 'A valid wardrobe render is required.');
     const reference = { orderId: body.orderId, leaseToken: body.leaseToken };
