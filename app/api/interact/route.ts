@@ -167,8 +167,13 @@ async function config(origin: string): Promise<PublicConfig> {
   if (d) {
     try {
       await db.ensureSchema(d);
-      const [seen, count] = await Promise.all([db.getHeartbeat(d), db.countQueued(d)]);
-      studioOnline = now - seen < interactLimits.heartbeatMs;
+      // Whether a show is on air is a question about the studio, not about the paid
+      // request queue. `studio_seen_at` only moves when that queue is pulled, so it goes
+      // stale the moment the engine pauses and the public page reads OFF AIR over a running
+      // broadcast. The producer lease is refreshed by every queue the studio serves, and is
+      // the authoritative liveness for exactly this question.
+      const [lease, count] = await Promise.all([db.getStudio(d), db.countQueued(d)]);
+      studioOnline = !!lease.id && now - lease.seenAt < interactLimits.heartbeatMs;
       queued = count;
     } catch (e) {
       console.warn('[interact] config db', e instanceof Error ? e.message : e);

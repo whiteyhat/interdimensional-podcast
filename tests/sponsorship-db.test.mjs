@@ -8,8 +8,10 @@ await build([
   'producer-lease',
   'sponsorship',
   'sponsor-db',
+  'db',
 ]);
 const db = await import('../work/tests/sponsor-db.js');
+const interactDb = await import('../work/tests/db.js');
 function database() {
   const sql = new DatabaseSync(':memory:');
   return {
@@ -391,4 +393,29 @@ void test('paused fulfillment resumes after a durable cooldown and keeps progres
   const resumed = await db.getOrder(d, o.id);
   assert.equal(resumed.status, 'paid');
   assert.equal(resumed.started_at, 420);
+});
+
+test('the producer lease reports a live studio while the request queue sits idle', async () => {
+  const d = database();
+  await db.ensureSponsorSchema(d);
+  await interactDb.ensureSchema(d);
+  // The studio serves sponsorships only: nothing pulls the paid request queue.
+  await db.heartbeat(
+    d,
+    'studio',
+    { message: true, spotlight: true, cap: true },
+    10_000,
+  );
+  assert.equal(
+    await interactDb.getHeartbeat(d),
+    0,
+    'the request queue never reports readiness on its own',
+  );
+  const lease = await interactDb.getStudio(d);
+  assert.equal(lease.id, 'studio');
+  assert.equal(
+    lease.seenAt,
+    10_000,
+    'the lease carries the liveness the public page asks about',
+  );
 });
