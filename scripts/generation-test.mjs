@@ -45,6 +45,14 @@ const context = await browser.newContext({
 });
 const page = await context.newPage();
 page.on('pageerror', (e) => log(`pageerror ${e.message.slice(0, 160)}`));
+// Render and delivery failures happen in the page, where the server log never sees them: a
+// take that fails its speech or ending checks, a download, a lease. They explain a pause.
+page.on('console', (message) => {
+  if (!['error', 'warning'].includes(message.type())) return;
+  const text = message.text();
+  if (/sponsor|shot|take|speech|wardrobe|cap|lease|pause|render/i.test(text))
+    log(`console.${message.type()} ${text.slice(0, 240)}`);
+});
 page.on('response', async (r) => {
   if (!r.url().includes('/api/podcast') || r.request().method() !== 'POST')
     return;
@@ -71,6 +79,7 @@ log(
 
 const started = Date.now();
 let seen = '';
+let said = '';
 let shots = 0;
 let done = false;
 while (!done && Date.now() - started < MAX_MINUTES * 60000) {
@@ -94,6 +103,11 @@ while (!done && Date.now() - started < MAX_MINUTES * 60000) {
     .map((o) => `${o.id.slice(0, 8)}:${o.product}:${o.status}`)
     .join(' ');
   if (summary !== seen) log(`orders ${(seen = summary)}`);
+  // What the studio shows its operator: a shot being made again, a paused placement.
+  const notice = await page
+    .evaluate(() => document.querySelector('.notice, [role="alert"]')?.textContent?.trim() ?? '')
+    .catch(() => '');
+  if (notice && notice !== said) log(`studio says: ${(said = notice).slice(0, 240)}`);
   if (overlay && shots < 20) {
     shots++;
     await page.screenshot({ path: `${OUT}/on-air-${shots}.png` });
