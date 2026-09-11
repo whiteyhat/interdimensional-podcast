@@ -272,6 +272,37 @@ void test('the box still has its variables replaced outright, as air.mjs expects
   assert.equal(upsert.variables.input.serviceId, 'box-1');
 });
 
+void test('a JSON log line reads as its fields, since Railway files it with an empty message', async () => {
+  await fresh();
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const { query } = JSON.parse(init.body ?? '{}');
+    if (/deploymentLogs/.test(query ?? ''))
+      return new Response(
+        JSON.stringify({
+          data: {
+            deploymentLogs: [
+              { message: 'Reconciler returned 401.', severity: 'error' },
+              {
+                message: '',
+                severity: 'info',
+                attributes: [
+                  { key: 'level', value: '"info"' },
+                  { key: 'ok', value: 'true' },
+                  { key: 'checked', value: '9' },
+                ],
+              },
+            ],
+          },
+        }),
+      );
+    return real(url, init);
+  };
+  assert.deepEqual(await railway.logs('dep-1', 'run', 2), [
+    'Reconciler returned 401.',
+    'ok=true checked=9',
+  ]);
+});
 void test('configure sends the service its own settings and a draining time, never a config file', async () => {
   await fresh();
   await railway.configure(mediaIds, {

@@ -509,8 +509,17 @@ export async function instance(ids) {
 export async function logs(id, kind = 'build', limit = 60) {
   const field = kind === 'build' ? 'buildLogs' : 'deploymentLogs';
   const data = await gql(
-    `query($id: String!, $limit: Int) { ${field}(deploymentId: $id, limit: $limit) { message severity } }`,
+    `query($id: String!, $limit: Int) { ${field}(deploymentId: $id, limit: $limit) { message severity attributes { key value } } }`,
     { id, limit },
   );
-  return (data[field] ?? []).map((l) => l.message.replace(/\s+$/, ''));
+  // Railway files a JSON log line under attributes and leaves its message empty: the
+  // reconciler's passes and the media service's request lines both arrive that way.
+  return (data[field] ?? []).map((l) => {
+    const message = (l.message ?? '').replace(/\s+$/, '');
+    if (message || !l.attributes?.length) return message;
+    return l.attributes
+      .filter((a) => a.key !== 'level')
+      .map((a) => `${a.key}=${a.value}`)
+      .join(' ');
+  });
 }
