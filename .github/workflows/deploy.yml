@@ -16,6 +16,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: deploy-production
   cancel-in-progress: false
@@ -45,9 +48,12 @@ jobs:
 
       # The staging database id has shipped to production before by way of a stale dist/.
       # A build that produced anything other than the production id must not reach the edge.
+      # Checked against the id itself, not only the variable the build was given: a variable
+      # holding the staging id would otherwise build staging and pass its own comparison.
       - name: Verify the build points at the production database
         env:
           EXPECTED: ${{ vars.D1_DATABASE_ID }}
+          PRODUCTION_D1: b4a21bd4-5ba5-43f3-9f77-46c7745727f0
         run: |
           ACTUAL=$(node -e "console.log(require('./dist/server/wrangler.json').d1_databases[0].database_id)")
           echo "built with database: $ACTUAL"
@@ -55,8 +61,8 @@ jobs:
             echo "::error::D1_DATABASE_ID repository variable is not set. Refusing to deploy a placeholder database."
             exit 1
           fi
-          if [ "$ACTUAL" != "$EXPECTED" ]; then
-            echo "::error::Built database id $ACTUAL does not match the expected production id."
+          if [ "$ACTUAL" != "$EXPECTED" ] || [ "$ACTUAL" != "$PRODUCTION_D1" ]; then
+            echo "::error::Built database id $ACTUAL is not the production database $PRODUCTION_D1."
             exit 1
           fi
 

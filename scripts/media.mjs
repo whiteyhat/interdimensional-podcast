@@ -18,7 +18,7 @@
 // own config file (broadcast/railway.sponsor-*.json), is sent only the files its Dockerfile
 // copies, and has its variables merged rather than replaced.
 import { randomBytes } from 'node:crypto';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { lstat, readdir, readFile } from 'node:fs/promises';
 import { join, posix, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { devVar, remember, VARS } from './devvars.mjs';
@@ -134,9 +134,12 @@ async function expand(source) {
       `The Dockerfile copies "${source}". The upload is exactly what the Dockerfile copies, ` +
         'so it has to name files or folders: not the whole context, and not a pattern.',
     );
-  const info = await stat(join(ROOT, path)).catch(() => null);
+  // lstat, not stat: a link would be followed into whatever it points at, .dev.vars included.
+  const info = await lstat(join(ROOT, path)).catch(() => null);
   if (!info)
     throw Error(`The Dockerfile copies ${path}, which does not exist.`);
+  if (info.isSymbolicLink())
+    throw Error(`${path} is a link; copy the file itself.`);
   if (info.isFile()) return [path];
   if (!info.isDirectory()) throw Error(`${path} is not a file or a folder.`);
   const files = [];
@@ -275,8 +278,23 @@ async function nextSteps(env) {
   }
 }
 
-export async function setup(env) {
+/**
+ * The token a live service already holds must be the one .dev.vars has. Setup run from another
+ * folder or machine finds no token, makes a new one and, without this, would write it onto the
+ * running service: every call from the site would then be refused until someone noticed.
+ */
+async function sameToken(ids, name, token, rotate) {
+  const current = (await railway.variables(ids))[name];
+  if (!current || current === token || rotate) return;
+  throw Error(
+    `${ids.service} already has a ${name} that differs from ${VARS}. Run setup from the repository ` +
+      `root with the .dev.vars that made it, or pass --rotate to replace it (then update the worker).`,
+  );
+}
+
+export async function setup(env, ...flags) {
   checkEnv(env);
+  const rotate = flags.includes('--rotate');
   const key = env.toUpperCase();
   // Secrets first: a bad value in .dev.vars stops setup before Railway has anything half-made.
   const mediaVars = mediaVariables(
@@ -291,6 +309,18 @@ export async function setup(env) {
   const reconcile = await railway.target({
     service: serviceName('reconcile', env),
   });
+  await sameToken(
+    media,
+    'SPONSOR_MEDIA_TOKEN',
+    mediaVars.SPONSOR_MEDIA_TOKEN,
+    rotate,
+  );
+  await sameToken(
+    reconcile,
+    'SPONSOR_RECONCILE_TOKEN',
+    reconcileVars.SPONSOR_RECONCILE_TOKEN,
+    rotate,
+  );
   await railway.upsertVariables(media, mediaVars);
   await railway.upsertVariables(reconcile, reconcileVars);
   await railway.configure(media, await instanceSettings('media'));
@@ -364,8 +394,40 @@ export async function deployRole(
   return false;
 }
 
-async function deploy(env, which) {
+/**
+ * Files the deploy would upload that differ from the last commit. The upload is read from the
+ * working tree, and other sessions edit this tree: a half-finished edit must not reach a live
+ * service that CI never built.
+ */
+export async function uncommitted(files) {
+  const { execFile } = await import('node:child_process');
+  const out = await new Promise((resolveOut, reject) =>
+    execFile(
+      'git',
+      ['status', '--porcelain', '--', ...files],
+      { cwd: ROOT },
+      (error, stdout) => (error ? reject(error) : resolveOut(stdout)),
+    ),
+  );
+  return out
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => line.slice(3));
+}
+
+async function deploy(env, which, ...flags) {
+  if (which?.startsWith('--')) [which, flags] = [undefined, [which, ...flags]];
   const roles = which ? [checkRole(which)] : Object.keys(ROLES);
+  if (!flags.includes('--allow-dirty'))
+    for (const role of roles) {
+      const dirty = await uncommitted(await uploadFiles(role));
+      if (dirty.length)
+        throw Error(
+          `Not deploying ${serviceName(role, env)}: ${dirty.join(', ')} ` +
+            `${dirty.length === 1 ? 'differs' : 'differ'} from the last commit. Commit first, ` +
+            'or pass --allow-dirty to ship the working tree as it is.',
+        );
+    }
   let ok = true;
   for (const role of roles) ok = (await deployRole(env, role)) && ok;
   if (ok && roles.includes('media')) {

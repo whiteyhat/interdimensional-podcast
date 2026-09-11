@@ -13,6 +13,9 @@ name: Deploy devnet
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: deploy-devnet
   cancel-in-progress: false
@@ -44,15 +47,23 @@ jobs:
       # Production's guard refuses anything that is not the production database.
       # Here the danger runs the other way: a devnet deploy that carries the production
       # database would point rehearsal traffic, and rehearsal prices, at real orders.
+      # The production database and worker are named here outright, not only through
+      # variables: one wrong repository variable must not be enough to deploy devnet onto them.
       - name: Verify the build does not point at production
         env:
           DEVNET: ${{ vars.DEVNET_D1_DATABASE_ID }}
-          PRODUCTION: ${{ vars.D1_DATABASE_ID }}
+          PRODUCTION: b4a21bd4-5ba5-43f3-9f77-46c7745727f0
+          WORKER: ${{ vars.DEVNET_WORKER_NAME }}
         run: |
+          case "${WORKER:-interdimensional-podcast-staging}" in
+            interdimensional-podcast|frogclench*)
+              echo "::error::DEVNET_WORKER_NAME names the production worker. Refusing to deploy devnet onto it."
+              exit 1 ;;
+          esac
           ACTUAL=$(node -e "console.log(require('./dist/server/wrangler.json').d1_databases[0].database_id)")
           echo "built with database: $ACTUAL"
-          if [ -z "$DEVNET" ]; then
-            echo "::error::DEVNET_D1_DATABASE_ID repository variable is not set. Refusing to deploy a placeholder database."
+          if [ -z "$DEVNET" ] || [ "$DEVNET" = "$PRODUCTION" ]; then
+            echo "::error::DEVNET_D1_DATABASE_ID is unset or names the production database."
             exit 1
           fi
           if [ "$ACTUAL" = "$PRODUCTION" ]; then
@@ -122,10 +133,18 @@ jobs:
             echo "::error::DEVNET_SOLANA_RPC_URL is not set. The worker refuses devnet pricing without a devnet RPC."
             exit 1
           fi
-          case "$RPC_URL" in
-            *devnet*|*localhost*|*127.0.0.1*) ;;
-            *) echo "::error::DEVNET_SOLANA_RPC_URL is not a devnet endpoint."; exit 1 ;;
-          esac
+          # The same test the worker applies (lib/cluster.ts): host and path only, since an API
+          # key in the query can spell anything, and a host that says mainnet is mainnet.
+          CLUSTER=$(RPC_URL="$RPC_URL" node -e '
+            const word = (n, t) => new RegExp(`(^|[^a-z])${n}([^a-z]|$)`).test(t);
+            let where = "";
+            try { const u = new URL(process.env.RPC_URL.trim()); where = (u.hostname + u.pathname).toLowerCase(); } catch {}
+            console.log(!where || word("mainnet", where) ? "mainnet-beta"
+              : word("devnet", where) || /^(localhost|127\.0\.0\.1|\[::1\])(\/|$)/.test(where) ? "devnet" : "mainnet-beta");')
+          if [ "$CLUSTER" != "devnet" ]; then
+            echo "::error::DEVNET_SOLANA_RPC_URL is not a devnet endpoint."
+            exit 1
+          fi
           put() { printf '%s' "$2" | npx wrangler secret put "$1" --config dist/server/wrangler.json --name "$NAME"; }
           put SOLANA_RPC_URL "$RPC_URL"
           put SPONSOR_FLAT_PRICE_CENTS "${FLAT_CENTS:-100}"

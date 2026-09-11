@@ -45,6 +45,7 @@ async function fresh({
   domains = [],
   statuses = ['SUCCESS'],
   mediaHealth = { status: 200, body: {} },
+  serviceVars = {},
 } = {}) {
   await writeFile('.dev.vars', vars);
   calls = [];
@@ -96,6 +97,8 @@ async function fresh({
     }
     if (/variableCollectionUpsert/.test(query))
       return reply({ variableCollectionUpsert: true });
+    if (/variables\(projectId/.test(query))
+      return reply({ variables: serviceVars[variables.serviceId] ?? {} });
     if (/serviceInstanceUpdate/.test(query))
       return reply({ serviceInstanceUpdate: true });
     if (/domains\(/.test(query))
@@ -270,6 +273,31 @@ void test('the box still has its variables replaced outright, as air.mjs expects
   const [upsert] = gqlCalls(/variableCollectionUpsert/);
   assert.equal(upsert.variables.input.replace, true);
   assert.equal(upsert.variables.input.serviceId, 'box-1');
+});
+
+void test('setup never swaps a live service token for one .dev.vars just made', async () => {
+  // Run from a folder without the tokens, setup makes new ones; the live service keeps its own.
+  await fresh({
+    services: [
+      BOX,
+      { id: 'svc-sponsor-media-devnet', name: 'sponsor-media-devnet' },
+    ],
+    serviceVars: {
+      'svc-sponsor-media-devnet': { SPONSOR_MEDIA_TOKEN: 'a'.repeat(64) },
+    },
+  });
+  await assert.rejects(
+    quietly(() => media.setup('devnet')),
+    /already has a SPONSOR_MEDIA_TOKEN that differs/,
+  );
+  assert.equal(
+    gqlCalls(/variableCollectionUpsert/).length,
+    0,
+    'nothing was written',
+  );
+  // Asked outright, it replaces the token.
+  await quietly(() => media.setup('devnet', '--rotate'));
+  assert.ok(gqlCalls(/variableCollectionUpsert/).length > 0);
 });
 
 void test('a JSON log line reads as its fields, since Railway files it with an empty message', async () => {
