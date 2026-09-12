@@ -41,8 +41,9 @@ const wardrobe = {
 
 void test('a cap is composited on the native take, and fal never rescales a cap shot', async (t) => {
   const requests = studio(t);
+  const services = createServices();
   await assert.rejects(
-    createServices().render({
+    services.render({
       id: 0,
       speaker: 'host',
       text: 'Of course.',
@@ -62,5 +63,25 @@ void test('a cap is composited on the native take, and fal never rescales a cap 
     requests.filter((r) => r.body.action === 'scale').length,
     0,
     'no rescale is paid for a shot the media desk scales itself',
+  );
+  // The desk refused three takes; a retry from the engine must buy a fourth, never send the
+  // third back to be refused again.
+  const before = requests.length;
+  await assert.rejects(
+    services.render({
+      id: 0,
+      speaker: 'host',
+      text: 'Of course.',
+      wardrobe,
+    }),
+  );
+  const again = requests
+    .slice(before)
+    .filter((r) => r.url === '/api/sponsorship/media')
+    .map((r) => r.body.videoUrl);
+  assert.ok(again.length >= 1, 'the retry reached the compositor');
+  assert.ok(
+    again.every((url) => !composites.some((c) => c.body.videoUrl === url)),
+    `a fresh take was composited, not a refused one: ${again.join(', ')}`,
   );
 });

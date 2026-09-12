@@ -225,8 +225,6 @@ export function mediaVariables(env, token) {
 export const mask = (value) =>
   value ? `****${value.slice(-4)} (${value.length} characters)` : 'missing';
 
-const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
-
 // ---- commands ---------------------------------------------------------------------------
 
 /** The worker's half of each secret, and how to put it there. Tokens are never printed whole. */
@@ -340,14 +338,8 @@ export async function setup(env, ...flags) {
   console.log(`\nNext: node scripts/media.mjs deploy ${env}`);
 }
 
-const BROKEN = ['FAILED', 'CRASHED', 'REMOVED', 'SKIPPED'];
-
 /** Upload one service's files, then follow its deployment to the end. True when it is live. */
-export async function deployRole(
-  env,
-  role,
-  { every = 10_000, attempts = 150 } = {},
-) {
+export async function deployRole(env, role, options = {}) {
   const name = serviceName(role, env);
   const ids = await railway.target({ service: name, create: false });
   if (!ids)
@@ -360,38 +352,7 @@ export async function deployRole(
   console.log(
     `Building ${started.megabytes} MB as deployment ${started.id.slice(0, 8)}.`,
   );
-  let last = '';
-  for (let i = 0; i < attempts; i++) {
-    await sleep(every);
-    const state = await railway.deployment(started.id).catch(() => null);
-    if (!state) continue;
-    if (state.status !== last) {
-      console.log(`  ${state.status.toLowerCase()}`);
-      last = state.status;
-    }
-    if (state.status === 'SUCCESS') return true;
-    if (BROKEN.includes(state.status)) {
-      console.error(
-        `\n${name}'s deployment ${state.status.toLowerCase()}. Last of the build:\n`,
-      );
-      for (const line of (await railway.logs(started.id, 'build', 60)).slice(
-        -25,
-      ))
-        console.error(`  ${line}`);
-      if (state.status === 'CRASHED') {
-        console.error('\nLast of its own output:\n');
-        for (const line of (await railway.logs(started.id, 'run', 40)).slice(
-          -15,
-        ))
-          console.error(`  ${line}`);
-      }
-      return false;
-    }
-  }
-  console.error(
-    `${name} is still going after ${Math.round((attempts * every) / 60_000)} minutes; check Railway.`,
-  );
-  return false;
+  return railway.follow(started, name, options);
 }
 
 /**

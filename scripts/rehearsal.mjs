@@ -13,8 +13,7 @@ import { existsSync } from 'node:fs';
 import { readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { cf, credentials, ingest } from './cfapi.mjs';
-import { devVar, VARS } from './devvars.mjs';
+import { rehearsalIngest } from './cfapi.mjs';
 import { holdAir } from './devnet.mjs';
 
 const SITE = process.env.SITE;
@@ -23,25 +22,8 @@ if (!SITE || !STUDIO_TOKEN) throw Error('SITE and STUDIO_TOKEN are required.');
 const FOOTAGE = resolve('public/continuity');
 
 // ---- which input, and is it safe to talk into
-const uid = await devVar('AIR_RTMP_INPUT');
-if (!uid)
-  throw Error(
-    `Set AIR_RTMP_INPUT in ${VARS} to a rehearsal live input. Make one with: node scripts/stream.mjs create rehearsal`,
-  );
-if (uid === (await devVar('CF_LIVE_INPUT_ID')))
-  throw Error(
-    `AIR_RTMP_INPUT is the show's own live input (${uid}). A rehearsal never goes there: it would reach the public player and every simulcast output.`,
-  );
-const creds = await credentials();
-const outputs = await cf(
-  `/accounts/${creds.account}/stream/live_inputs/${uid}/outputs`,
-  creds,
-);
-if (Array.isArray(outputs) && outputs.length)
-  throw Error(
-    `Live input ${uid} has ${outputs.length} simulcast output(s). Rehearsals only go to inputs nothing listens to; remove them with scripts/stream.mjs rm, or use another input.`,
-  );
-const target = await ingest(creds, uid);
+const target = await rehearsalIngest();
+const { uid } = target;
 
 // ---- the picture: the plain idle clips, in a fixed order, forever. Their audio variants
 // carry the show's foley layer (a sip of tea, a beard scratch, headphone rustle over room

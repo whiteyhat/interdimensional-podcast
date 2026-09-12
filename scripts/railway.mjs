@@ -9,10 +9,10 @@
 // own. An id that means "the box" is never handed to anything else: a media service that
 // inherited the box's id would replace the live show's variables and rebuild it as something
 // else.
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { readFile, rm, stat } from 'node:fs/promises';
-import { join, posix } from 'node:path';
+import { join, matchesGlob, posix } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { devVar, remember } from './devvars.mjs';
 
@@ -473,6 +473,85 @@ export async function deploy(
     url: data.url,
     megabytes: (body.length / 1e6).toFixed(1),
   };
+}
+
+const BROKEN = ['FAILED', 'CRASHED', 'REMOVED', 'SKIPPED'];
+/**
+ * Follow a started deployment until it is live or dead, printing each change of state and, on a
+ * failure, the tail of the build (and of the service's own output when it crashed). True when
+ * it is live. One loop for every service, so a state Railway adds is handled in one place.
+ */
+export async function follow(
+  started,
+  name,
+  { every = 10_000, attempts = 150 } = {},
+) {
+  let last = '';
+  for (let i = 0; i < attempts; i++) {
+    await new Promise((r) => setTimeout(r, every));
+    const state = await deployment(started.id).catch(() => null);
+    if (!state) continue;
+    if (state.status !== last) {
+      console.log(`  ${state.status.toLowerCase()}`);
+      last = state.status;
+    }
+    if (state.status === 'SUCCESS') return true;
+    if (BROKEN.includes(state.status)) {
+      console.error(
+        `\n${name}'s deployment ${state.status.toLowerCase()}. Last of the build:\n`,
+      );
+      for (const line of (await logs(started.id, 'build', 60)).slice(-25))
+        console.error(`  ${line}`);
+      if (state.status === 'CRASHED') {
+        console.error('\nLast of its own output:\n');
+        for (const line of (await logs(started.id, 'run', 40)).slice(-15))
+          console.error(`  ${line}`);
+      }
+      return false;
+    }
+  }
+  console.error(
+    `${name} is still going after ${Math.round((attempts * every) / 60_000)} minutes; check Railway.`,
+  );
+  return false;
+}
+
+/** A .dockerignore pattern, as Docker reads it: from the context root, a directory with it. */
+function ignored(file, patterns) {
+  let out = false;
+  for (const raw of patterns) {
+    const negated = raw.startsWith('!');
+    const pattern = negated ? raw.slice(1) : raw;
+    if (matchesGlob(file, pattern) || matchesGlob(file, `${pattern}/**`))
+      out = !negated;
+  }
+  return out;
+}
+
+/**
+ * Every file of the working tree an image built with `COPY . .` would see: what git tracks or
+ * would track, minus what must never leave this machine and what .dockerignore drops anyway.
+ * git decides, not the file system, so scratch that .gitignore hides never rides along.
+ */
+export async function repositoryFiles(root) {
+  const out = await new Promise((done, fail) =>
+    execFile(
+      'git',
+      ['ls-files', '-co', '--exclude-standard'],
+      { cwd: root, maxBuffer: 64 * 1024 * 1024 },
+      (error, stdout) => (error ? fail(error) : done(stdout)),
+    ),
+  );
+  const patterns = (
+    await readFile(join(root, '.dockerignore'), 'utf8').catch(() => '')
+  )
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'));
+  return out
+    .split('\n')
+    .filter(Boolean)
+    .filter((file) => !FORBIDDEN.test(file) && !ignored(file, patterns));
 }
 
 export async function deployment(id) {

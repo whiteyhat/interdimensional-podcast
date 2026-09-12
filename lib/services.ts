@@ -200,15 +200,13 @@ export function createServices(): Services {
             finalUrl = composed.url;
             media.set(mediaKey, finalUrl);
           } catch (error) {
-            if (
-              error instanceof WearableError &&
-              (wardrobeRetries.get(identity) ?? 0) < 2
-            ) {
-              wardrobeRetries.set(
-                identity,
-                (wardrobeRetries.get(identity) ?? 0) + 1,
-              );
-              return this.render(line);
+            if (error instanceof WearableError) {
+              // Every refusal advances the counter, so the take is never sent back to the
+              // desk to be refused again: two more are tried here, and a retry the engine
+              // makes after that arrives with a fresh take of its own.
+              const refused = (wardrobeRetries.get(identity) ?? 0) + 1;
+              wardrobeRetries.set(identity, refused);
+              if (refused <= 2) return this.render(line);
             }
             throw error;
           }

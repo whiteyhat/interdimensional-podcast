@@ -1336,3 +1336,66 @@ void test('a host may ask about what the brief left out; a question never excuse
     ).some((p) => /airdrop/.test(p)),
   );
 });
+
+void test('one writer input per mode: draft, repair told the reasons, rewrite on another model', () => {
+  const plan = W.sponsorTurnPlan('guest', elixir);
+  const transcript =
+    'COMMITTED TRANSCRIPT:\nGigaChad: Volatility is a test of character.';
+  const draft = W.sponsoredWriterInput({
+    mode: 'draft',
+    brief: elixir,
+    plan,
+    transcript,
+  });
+  assert.equal(draft.model, 'google/gemini-2.5-flash');
+  assert.equal(draft.temperature, 0.6);
+  assert.equal(draft.system_prompt, W.sponsoredWriterSystem());
+  assert.ok(draft.prompt.startsWith(transcript));
+  assert.match(draft.prompt, /VERIFIED SPONSORSHIP/);
+  assert.doesNotMatch(
+    draft.prompt,
+    /REPAIR THE REJECTED|Write the exchange again/,
+  );
+  // A repair quotes the rejected draft and the reasons the check finds in it, once each.
+  const rejected = aired
+    .map((l) => `${S.cast[l.speaker].name}: ${l.text}`)
+    .join('\n');
+  const repair = W.sponsoredWriterInput({
+    mode: 'repair',
+    brief: elixir,
+    plan,
+    transcript,
+    rejected,
+    start: 8,
+  });
+  assert.equal(repair.temperature, 0.45);
+  assert.equal(repair.model, 'google/gemini-2.5-flash');
+  assert.match(repair.prompt, /REPAIR THE REJECTED SPONSORED EXCHANGE/);
+  assert.match(repair.prompt, /launchpad/);
+  assert.equal(
+    repair.prompt.split('launchpad').length - 1,
+    2,
+    'once as a reason, once inside the quoted draft',
+  );
+  // A rewrite starts over on an independent model.
+  const rewrite = W.sponsoredWriterInput({
+    mode: 'rewrite',
+    brief: elixir,
+    plan,
+    transcript,
+  });
+  assert.equal(rewrite.model, 'anthropic/claude-haiku-4.5');
+  assert.equal(rewrite.temperature, 0.8);
+  assert.match(rewrite.prompt, /Write the exchange again from scratch/);
+});
+
+void test('the repair prompt states a reason once, however many places reported it', () => {
+  const prompt = W.sponsoredRepairPrompt('Pepe: x', [
+    'Turn 2: "last year" is not in the advertiser text.',
+    'Turn 2: "last year" is not in the advertiser text',
+    '  Turn 2: "last year" is not in the advertiser text.  ',
+    'Turn 3 is not about Elixir Games.',
+  ]);
+  assert.equal(prompt.split('"last year"').length - 1, 1);
+  assert.match(prompt, /Turn 3 is not about Elixir Games/);
+});

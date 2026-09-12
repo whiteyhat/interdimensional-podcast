@@ -3,11 +3,9 @@ import { speechEndFor } from '@/lib/speech';
 import { readBrand } from '@/lib/interact';
 import { resolveTrustedSponsor } from '@/lib/sponsor-context';
 import {
-  recentRejections,
   rememberRejection,
   sponsorBrief,
-  sponsoredWriterRequest,
-  sponsoredWriterSystem,
+  sponsoredWriterInput,
   sponsorTurnPlan,
   verifySponsoredDialogue,
   type SponsorBrief,
@@ -379,24 +377,19 @@ export async function POST(request: Request) {
       // A paid exchange has its own system prompt, brief and plan: the news writer's demand for
       // facts, years and timeline reports is exactly what made it invent them for a sponsor.
       const writer = sponsor
-        ? {
-            system: sponsoredWriterSystem(),
-            prompt: `${transcript}\n${sponsoredWriterRequest(sponsor, sponsorTurnPlan(prevSpeaker, sponsor), { avoid: recentRejections(sponsor.orderId) })}`,
-            // Held to the advertiser's words, it trades a little range for fidelity.
-            temperature: 0.6,
-          }
+        ? sponsoredWriterInput({
+            mode: 'draft',
+            brief: sponsor,
+            plan: sponsorTurnPlan(prevSpeaker, sponsor),
+            transcript,
+          })
         : {
-            system: writerSystemFor(coin),
+            model: 'google/gemini-2.5-flash',
+            system_prompt: writerSystemFor(coin),
             prompt: `${transcript}\n${writerRequest(body.cue, topic, from, coin)}\nWrite the next four turns, each on its own line and each prefixed with "Pepe:" or "GigaChad:", exactly as the TURN PLAN below sets out. Move onto the new subject immediately: name it in the FIRST turn with one supplied fact, connected to whatever was just said. For sourced stories, build the next turns around what happened, a community consequence and a disagreement grounded in another supplied detail when available. Keep the actual event central through turn four. Historical stories must be introduced as memories with their year or period, never as breaking news. For audience and chat requests, answer the requested subject directly. If there is no new topic, deepen the current conversation without inventing news. Use ANGLE as a direction, never as a line to read. Keep the delivery casual and the connection understandable.\n${planPrompt(turnPlan(body.start!, prevSpeaker))}`,
             temperature: 0.95,
           };
-      input = {
-        model: 'google/gemini-2.5-flash',
-        system_prompt: writer.system,
-        prompt: writer.prompt,
-        max_tokens: 700,
-        temperature: writer.temperature,
-      };
+      input = { ...writer, max_tokens: 700 };
       endpoint = 'openrouter/router';
     } else return reply({ error: 'Unknown action' }, 400);
     const job = await provider(
