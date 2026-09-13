@@ -1,6 +1,11 @@
 // Paid audience requests. Pure: no DOM, no network, no clock reads.
 // The site, the interact route and the studio engine all agree on these shapes.
-export type RequestStatus = 'queued' | 'writing' | 'buffered' | 'on-air' | 'aired';
+export type RequestStatus =
+  | 'queued'
+  | 'writing'
+  | 'buffered'
+  | 'on-air'
+  | 'aired';
 export type PaidRequest = {
   id: string;
   /** Solana Pay reference key; unique per payment. */
@@ -21,6 +26,21 @@ export type PaidRequest = {
  * for it twice.
  */
 export class StudioBusyError extends Error {}
+
+/**
+ * The site says a placement is no longer ours to deliver: its lease ended, this studio lost
+ * the capability, or the design changed. Retrying can only fail the same way, and counting it
+ * against the provider held the whole show once, on devnet, for an outage that never happened.
+ */
+export class PlacementLostError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+  ) {
+    super(message);
+  }
+}
+export const placementLostCodes = new Set(['LEASE', 'CAPABILITY', 'ASSET']);
 
 export const requestConfig = {
   limits: { text: 240, name: 20, keep: 30 },
@@ -50,29 +70,45 @@ const SLURS =
   /\b(n[i1]gg(a|er)s?|f[a4]gg?[o0]ts?|k[i1]kes?|ch[i1]nks?|sp[i1]cs?|tr[a4]nn(y|ies)|r[e3]t[a4]rds?|w[e3]tb[a4]cks?)\b/i;
 const NAME = /^[A-Za-z0-9][A-Za-z0-9 _.'-]{0,19}$/;
 
-export type MessageCheck = { ok: true; text: string } | { ok: false; error: string };
+export type MessageCheck =
+  | { ok: true; text: string }
+  | { ok: false; error: string };
 /** The one validator for a paid message, shared by the card (instant feedback) and the server. */
 export function checkMessage(raw: unknown): MessageCheck {
-  if (typeof raw !== 'string') return { ok: false, error: 'Write a message first.' };
+  if (typeof raw !== 'string')
+    return { ok: false, error: 'Write a message first.' };
   const text = raw.replace(/\s+/g, ' ').trim();
-  if (text.length < 3) return { ok: false, error: 'Say a little more than that.' };
+  if (text.length < 3)
+    return { ok: false, error: 'Say a little more than that.' };
   if (text.length > requestConfig.limits.text)
-    return { ok: false, error: `Keep it under ${requestConfig.limits.text} characters.` };
+    return {
+      ok: false,
+      error: `Keep it under ${requestConfig.limits.text} characters.`,
+    };
   if (hasControl(text)) return { ok: false, error: 'Plain text only.' };
-  if (URLISH.test(text)) return { ok: false, error: 'No links; the hosts cannot read them out.' };
+  if (URLISH.test(text))
+    return { ok: false, error: 'No links; the hosts cannot read them out.' };
   if (EVM_ADDRESS.test(text) || SOLANA_ADDRESS.test(text))
     return { ok: false, error: 'No wallet or contract addresses.' };
-  if (SLURS.test(text)) return { ok: false, error: 'That will not be read on air.' };
+  if (SLURS.test(text))
+    return { ok: false, error: 'That will not be read on air.' };
   return { ok: true, text };
 }
 /** A display name the hosts can say aloud; empty is allowed and means anonymous. */
 export function checkName(raw: unknown): MessageCheck {
-  if (raw === undefined || raw === null || raw === '') return { ok: true, text: '' };
-  if (typeof raw !== 'string') return { ok: false, error: 'Use letters and numbers for your name.' };
-  const name = raw.replace(/\s+/g, ' ').trim().slice(0, requestConfig.limits.name);
+  if (raw === undefined || raw === null || raw === '')
+    return { ok: true, text: '' };
+  if (typeof raw !== 'string')
+    return { ok: false, error: 'Use letters and numbers for your name.' };
+  const name = raw
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, requestConfig.limits.name);
   if (!name) return { ok: true, text: '' };
-  if (!NAME.test(name)) return { ok: false, error: 'Use letters and numbers for your name.' };
-  if (SLURS.test(name) || URLISH.test(name)) return { ok: false, error: 'Pick another name.' };
+  if (!NAME.test(name))
+    return { ok: false, error: 'Use letters and numbers for your name.' };
+  if (SLURS.test(name) || URLISH.test(name))
+    return { ok: false, error: 'Pick another name.' };
   return { ok: true, text: name };
 }
 export function spokenName(name: string) {
@@ -84,14 +120,20 @@ export function spokenName(name: string) {
  * significant digits, which is the most Solana Pay will encode.
  */
 export function quoteAmount(priceUsd: number, usd: number, decimals: number) {
-  if (!(priceUsd > 0) || !(usd > 0) || !Number.isInteger(decimals) || decimals < 0)
+  if (
+    !(priceUsd > 0) ||
+    !(usd > 0) ||
+    !Number.isInteger(decimals) ||
+    decimals < 0
+  )
     throw Error('Cannot price the request');
   const raw = usd / priceUsd;
   const digits = Math.max(1, Math.floor(Math.log10(raw)) + 1);
   const places = Math.max(0, Math.min(decimals, 15 - digits));
   const factor = 10 ** places;
   const amount = Math.ceil(raw * factor - 1e-9) / factor;
-  if (!Number.isFinite(amount) || amount <= 0) throw Error('Cannot price the request');
+  if (!Number.isFinite(amount) || amount <= 0)
+    throw Error('Cannot price the request');
   return amount;
 }
 /** Base units as a decimal string, for storage and exact comparison. */
@@ -104,7 +146,10 @@ export function nextQueued(list: PaidRequest[]) {
   return list.find((r) => r.status === 'queued');
 }
 /** FIFO append; a request already known by reference is never added twice. */
-export function mergeIncoming(list: PaidRequest[], incoming: PaidRequest[]): PaidRequest[] {
+export function mergeIncoming(
+  list: PaidRequest[],
+  incoming: PaidRequest[],
+): PaidRequest[] {
   const known = new Set(list.map((r) => r.reference));
   const added = incoming.filter((r) => {
     if (known.has(r.reference)) return false;
@@ -112,7 +157,10 @@ export function mergeIncoming(list: PaidRequest[], incoming: PaidRequest[]): Pai
     return true;
   });
   if (!added.length) return list;
-  return trimRequests([...list, ...added.map((r) => ({ ...r, status: 'queued' as const }))]);
+  return trimRequests([
+    ...list,
+    ...added.map((r) => ({ ...r, status: 'queued' as const })),
+  ]);
 }
 export function markRequest(
   list: PaidRequest[],
@@ -128,7 +176,9 @@ export function markRequest(
 export function trimRequests(list: PaidRequest[]): PaidRequest[] {
   if (list.length <= requestConfig.limits.keep) return list;
   const done = list.filter((r) => r.status === 'aired');
-  const drop = new Set(done.slice(0, Math.max(0, list.length - requestConfig.limits.keep)));
+  const drop = new Set(
+    done.slice(0, Math.max(0, list.length - requestConfig.limits.keep)),
+  );
   return list.filter((r) => !drop.has(r));
 }
 /** Parse whatever the interact route returned into a request, or nothing. */

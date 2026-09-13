@@ -85,3 +85,38 @@ void test('a cap is composited on the native take, and fal never rescales a cap 
     `a fresh take was composited, not a refused one: ${again.join(', ')}`,
   );
 });
+
+void test('a placement the site no longer owns is dropped at once, not retaken', async (t) => {
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    const body = JSON.parse(options.body);
+    requests.push({ url, body });
+    if (url === '/api/sponsorship/media')
+      return Response.json(
+        { code: 'LEASE', error: 'The delivery lease ended.' },
+        { status: 409 },
+      );
+    if (body.action === 'poll')
+      return Response.json({
+        status: 'COMPLETED',
+        speechEnd: 0.8,
+        hasExtraSpeech: false,
+        url: `https://fal.media/${body.token}.mp4`,
+      });
+    return Response.json({ token: `${body.action}-${body.attempt ?? 0}` });
+  });
+  await assert.rejects(
+    createServices().render({
+      id: 0,
+      speaker: 'host',
+      text: 'Of course.',
+      wardrobe,
+    }),
+    (e) => e.code === 'LEASE' && e.constructor.name === 'PlacementLostError',
+  );
+  assert.equal(
+    requests.filter((r) => r.body.action === 'shot').length,
+    1,
+    'no new take is bought for a placement that is gone',
+  );
+});

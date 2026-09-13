@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { speechEndFor } from '@/lib/speech';
 import { readBrand } from '@/lib/interact';
 import { resolveTrustedSponsor } from '@/lib/sponsor-context';
+import { SponsorError } from '@/lib/sponsorship';
 import {
   rememberRejection,
   sponsorBrief,
@@ -417,6 +418,10 @@ export async function POST(request: Request) {
       requestId: job.request_id,
     });
   } catch (e) {
+    // The site's own refusals keep their status and code: a lost lease is not a generation
+    // failure, and the studio has to be able to tell the two apart.
+    if (e instanceof SponsorError)
+      return reply({ error: e.message, code: e.code }, e.status);
     return reply(
       { error: e instanceof Error ? e.message : 'Generation failed' },
       400,

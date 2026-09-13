@@ -3,7 +3,13 @@ import { SpeechError } from './speech';
 import { createSponsorServices } from './sponsor-delivery-client';
 import { readCoinBody } from '@/hooks/use-coin';
 import { show, shotInput, scaleInput, type Line } from './show';
-import { readRequest, StudioBusyError, type PaidRequest } from './requests';
+import {
+  PlacementLostError,
+  placementLostCodes,
+  readRequest,
+  StudioBusyError,
+  type PaidRequest,
+} from './requests';
 import {
   sanitizeDraft,
   type CostEstimate,
@@ -37,6 +43,11 @@ async function api(body: unknown, path = '/api/podcast', signal?: AbortSignal) {
     if (data.code === 'INVALID_DIALOGUE') throw new DialogueError(data.error);
     if (data.code === 'STUDIO_BUSY') throw new StudioBusyError(data.error);
     if (data.code === 'INVALID_WEARABLE') throw new WearableError(data.error);
+    if (data.code && placementLostCodes.has(data.code))
+      throw new PlacementLostError(
+        data.error || 'The placement is no longer ours.',
+        data.code,
+      );
     throw Error(data.error || 'Provider request failed');
   }
   return data;
