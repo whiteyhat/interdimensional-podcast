@@ -33,13 +33,25 @@ The API token needs **Account → Workers Scripts → Edit**, **Account → D1 �
 
 ## Deploying the public site
 
+Launch only from a clean checkout of `main`. Put code changes through a pull request and wait
+for its checks before merging. Freeze merges and all site, media and box deployments for the
+duration of a broadcast; deploying a replacement container interrupts the show.
+
 `.env.production` carries the D1 id and is baked in at build time, so **a database change
 needs a rebuild, not just a redeploy**.
 
 ```sh
-npm test && npx tsc --noEmit          # never deploy red
-npm run build
+(
+set -e
+git fetch origin
+test "$(git branch --show-current)" = main
+test -z "$(git status --porcelain)"
+test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+npm test && npx tsc --noEmit && npm run build
+node --test tests/launch-*.test.mjs tests/solana.test.mjs tests/rpcproxy.test.mjs
+# Continue only when every check above passed and both broadcast boxes are off.
 npm run deploy
+)
 ```
 
 Secrets, once each (`npx wrangler secret put NAME --config dist/server/wrangler.json`):
@@ -47,7 +59,7 @@ Secrets, once each (`npx wrangler secret put NAME --config dist/server/wrangler.
 - `STUDIO_TOKEN` — 32 random bytes, the same value in the studio's `.dev.vars`
 - `STREAM_EMBED_URL` — printed by `node scripts/stream.mjs create`
 - `X_LIVE_URL` — the public link to the X broadcast
-- `SOLANA_RPC_URL`, `CLIENT_RPC_URL` — a real provider. **Not the public Solana RPC:** both
+- `SOLANA_RPC_URL` — a real provider. **Not the public Solana RPC:** both
   `api.mainnet-beta.solana.com` and `api.devnet.solana.com` return 403 Forbidden to Cloudflare
   Workers, which silently turns into "treasury not ready" and no price on the card. Confirmed
   against the deployed worker on both clusters. Helius is what we use.
@@ -63,13 +75,28 @@ Generation happens only in the studio, and a borrowed chart is never shown to th
 
 ## Going on air, from the box
 
+Before the production qualification run, prepare the operator's ignored `.dev.vars`:
+
+- Remove `PRICE_FIXED`, `CHART_MINT`, `CLIENT_RPC_URL` and test `COIN_MINT`/`TREASURY_WALLET`.
+  Keep the mint and treasury absent until verified launch addresses are available; the show
+  can run while checkout remains closed. Use the server-side mainnet RPC.
+- Set `STUDIO_ID=mac`, `INTERACT_ORIGIN=https://frogclench.fun` and `AIR_MAX_MINUTES=45`.
+- Configure `AIR_ALERT_WEBHOOK` and verify delivery before relying on it. The supervisor sends
+  JSON with `text` and `content`; it supports Slack/Discord webhook payloads. An ntfy topic can
+  use [inline templating](https://docs.ntfy.sh/publish/#inline-templating), with
+  `?template=yes&message=%7B%7B.text%7D%7D`, to receive the same payload. Keep its unreserved
+  topic URL private and subscribe from the operator's browser or phone.
+- After the rehearsal is complete, remove `AIR_RTMP_INPUT`. `setup` then selects
+  `CF_LIVE_INPUT_ID`; confirm the printed input is the production input.
+
 Once, per machine. Put a Railway workspace token from
 [railway.com/account/tokens](https://railway.com/account/tokens) in `.dev.vars` as
 `RAILWAY_TOKEN`, then:
 
 ```sh
+node scripts/rehearsal-box.mjs off      # stop the other encoder before changing inputs
 node scripts/air.mjs setup --no-queue   # create the project, service, variables and URL
-node scripts/air.mjs deploy             # upload the source and build the image
+node scripts/air.mjs deploy             # only from the verified clean main checkout
 ```
 
 `setup` creates the Railway project and service if they do not exist yet and remembers their
@@ -96,6 +123,22 @@ node scripts/air.mjs setup --no-queue
 ```
 
 Clear `AIR_RTMP_INPUT` and run `setup` again to put the box back on the show's own input.
+
+Qualify the actual production container before launch:
+
+```sh
+node scripts/air.mjs on --minutes 45
+# Observe 30 uninterrupted minutes after warmup, then stop explicitly:
+node scripts/air.mjs off
+```
+
+Record timestamped `/air/status` samples while the show is `playing`, the ready buffer is at
+least 24 seconds, and the production player's `/lifecycle` reports `live:true`. Require no
+stalls, reloads, encoder restarts or stops throughout the 30 minutes. Preserve samples before
+calling `off`: shutdown clears the counters. A final healthy sample does not prove continuity.
+The 45-minute limit includes warmup. With `--no-queue`, the public queue's studio heartbeat can
+remain offline even when Cloudflare is receiving video; use lifecycle for the ingest check.
+After shutdown, verify both generation and the encoder have stopped.
 
 Then, per broadcast:
 

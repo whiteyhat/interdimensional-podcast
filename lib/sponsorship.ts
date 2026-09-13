@@ -114,6 +114,7 @@ export const sponsorProducts = [
   { id: 'spotlight', title: 'Project spotlight', priceCents: 2500 },
   { id: 'cap', title: 'Sponsor a cap', priceCents: 10000 },
 ] as const;
+export const sponsorOffers = sponsorProducts;
 export const sponsorLimits = {
   quoteMs: 60000,
   heartbeatMs: 30000,
