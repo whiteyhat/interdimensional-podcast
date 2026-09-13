@@ -160,6 +160,34 @@ def encode_png(image, output):
     return data
 
 
+def chroma(lab):
+    return float(np.hypot(lab[1], lab[2]))
+
+
+def palette(image):
+    """The ink's colours: k-means in L*a*b* over the visible pixels, largest share first. Seeded,
+    subsampled on a fixed stride and sorted stably, so the same logo always gets the same plan."""
+    ink = image[:, :, :3][image[:, :, 3] >= 128]
+    if len(ink) > 20000:
+        ink = ink[np.linspace(0, len(ink) - 1, 20000).astype(int)]
+    k = int(min(5, len(np.unique(ink, axis=0))))
+    cv2.setRNGSeed(7)
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.5)
+    _, labels, centres = cv2.kmeans(to_lab(ink), k, None, criteria, 5, cv2.KMEANS_PP_CENTERS)
+    shares = np.bincount(labels.ravel(), minlength=k) / len(labels)
+    order = np.argsort(-shares, kind='stable')
+    clusters = [{'hex': lab_to_hex(centres[i]), 'share': round(float(shares[i]), 4), 'chroma': chroma(centres[i])} for i in order]
+    inks = [c for c in clusters if c['share'] >= INK_SHARE] or clusters[:1]
+    accent = max(inks, key=lambda c: c['chroma'])
+    return {
+        'clusters': [{'hex': c['hex'], 'share': c['share']} for c in clusters],
+        'primary': inks[0]['hex'],
+        'secondary': (inks[1] if len(inks) > 1 else inks[0])['hex'],
+        'accent': accent['hex'],
+        'monochrome': all(c['chroma'] < CHROMA_MIN for c in inks),
+    }
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', choices=['normalize', 'zones'])
@@ -172,7 +200,7 @@ def main(argv=None):
         else:
             image = normalize(args.input)
             data = encode_png(image, args.output)
-            result = {'ok': True, 'sha256': sha256(data), 'width': int(image.shape[1]), 'height': int(image.shape[0])}
+            result = {'ok': True, 'sha256': sha256(data), 'width': int(image.shape[1]), 'height': int(image.shape[0]), 'palette': palette(image)}
     except Refusal as refusal:
         result = {'ok': False, 'code': refusal.code, 'message': refusal.message}
     except Exception as error:  # a crash is this machine's fault, never a verdict on the logo

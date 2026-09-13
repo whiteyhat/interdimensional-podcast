@@ -141,5 +141,78 @@ class ZonesTest(unittest.TestCase):
         self.assertEqual(report['wearers'], w.WEARERS)
 
 
+def close_hex(a, b, tolerance=2):
+    return all(abs(int(a[i:i + 2], 16) - int(b[i:i + 2], 16)) <= tolerance for i in (1, 3, 5))
+
+
+class PaletteTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = Path(self.dir.name)
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def palette_of(self, name, pixels):
+        source = self.path / name
+        cv2.imwrite(str(source), pixels)
+        code, report = run('normalize', '--input', str(source), '--output', str(self.path / ('o-' + name)))
+        self.assertEqual(code, 0, report)
+        self.assertTrue(report['ok'], report)
+        return report['palette']
+
+    def chroma(self, hex_colour):
+        lab = w.to_lab(w.hex_to_bgr(hex_colour))[0]
+        return float(np.hypot(lab[1], lab[2]))
+
+    def test_flat_colours_come_back_exactly_with_their_shares(self):
+        # A transparent margin all round, so the border rule leaves the three blocks alone.
+        logo = np.zeros((320, 320, 4), np.uint8)
+        logo[10:160, 10:310] = (48, 48, 224, 255)    # #E03030, half the ink
+        logo[160:250, 10:310] = (192, 80, 32, 255)   # #2050C0, 30 %
+        logo[250:310, 10:310] = (0, 215, 255, 255)   # #FFD700, 20 %
+        palette = self.palette_of('flat.png', logo)
+        self.assertEqual(len(palette['clusters']), 3)
+        hexes = [c['hex'] for c in palette['clusters']]
+        shares = [c['share'] for c in palette['clusters']]
+        for expected, share, got, got_share in zip(['#E03030', '#2050C0', '#FFD700'], [0.5, 0.3, 0.2], hexes, shares):
+            self.assertTrue(close_hex(expected, got), (expected, got))
+            self.assertAlmostEqual(share, got_share, delta=0.01)
+        self.assertTrue(close_hex(palette['primary'], '#E03030'))
+        self.assertTrue(close_hex(palette['secondary'], '#2050C0'))
+        self.assertTrue(close_hex(palette['accent'], '#FFD700'), 'the most saturated ink is the accent')
+        self.assertFalse(palette['monochrome'])
+
+    def test_a_dark_wordmark_is_monochrome(self):
+        palette = self.palette_of('wordmark.png', wordmark())
+        self.assertTrue(palette['monochrome'])
+        inks = [c for c in palette['clusters'] if c['share'] >= 0.10]
+        self.assertTrue(inks)
+        for cluster in inks:
+            self.assertLess(self.chroma(cluster['hex']), 15)
+            self.assertLess(w.to_lab(w.hex_to_bgr(cluster['hex']))[0][0], 30, 'the ink is dark')
+        self.assertEqual(palette['primary'], palette['secondary'])
+        self.assertEqual(palette['accent'], palette['primary'])
+
+    def test_a_white_mark_on_a_dark_box_is_a_white_monochrome(self):
+        palette = self.palette_of('mark.png', white_mark_on_navy())
+        self.assertTrue(palette['monochrome'])
+        self.assertGreater(w.to_lab(w.hex_to_bgr(palette['primary']))[0][0], 95, 'the navy border was counted as ink')
+
+    def test_a_coloured_disc_with_a_white_mark_has_two_inks(self):
+        palette = self.palette_of('disc.png', blue_circle_on_white())
+        inks = [c for c in palette['clusters'] if c['share'] >= 0.10]
+        self.assertGreaterEqual(len(inks), 2, palette)
+        self.assertGreaterEqual(self.chroma(palette['primary']), 15)
+        self.assertGreater(inks[0]['share'], 0.6)
+        self.assertFalse(palette['monochrome'])
+        self.assertGreater(sum(c['share'] for c in palette['clusters']), 0.99)
+
+    def test_the_palette_is_the_same_twice(self):
+        a = self.palette_of('a.png', blue_circle_on_white())
+        b = self.palette_of('b.png', blue_circle_on_white())
+        self.assertEqual(a, b)
+
+
 if __name__ == '__main__':
     unittest.main()
