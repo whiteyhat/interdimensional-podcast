@@ -26,10 +26,11 @@ function decode(base64: string) {
 }
 type MediaHealth = {
   ready: boolean;
-  capQualified: boolean;
+  /** The desk has FAL_KEY and SPONSOR_SITE_ORIGIN and fal answered at boot: it can tailor a look. */
+  tailor: boolean;
   templateVersion?: string;
 };
-const notReady = (): MediaHealth => ({ ready: false, capQualified: false });
+const notReady = (): MediaHealth => ({ ready: false, tailor: false });
 // GET /api/sponsorship/assets is public. Without a memory here every hit on it would make
 // the media service run its readiness checks, so a crowd refreshing the page would be a
 // crowd of probes. An answer is reused by this isolate for 15 seconds, and callers who
@@ -92,7 +93,7 @@ function healthFrom(data: Record<string, unknown> | null): MediaHealth | null {
   if (!data || typeof data.ready !== 'boolean') return null;
   return {
     ready: data.ready,
-    capQualified: data.capQualified === true,
+    tailor: data.tailor === true,
     templateVersion:
       typeof data.templateVersion === 'string'
         ? data.templateVersion

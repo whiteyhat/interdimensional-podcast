@@ -194,9 +194,8 @@ const checkHealth = async (v) =>
   ).json();
 const readyBody = {
   ready: true,
-  capQualified: true,
-  templateVersion: 'caps-v1',
-  templates: [],
+  tailor: true,
+  templateVersion: 'looks-v1',
   tools: { python: true, cv2: true, numpy: true, ffmpeg: true, node: true },
   version: 'test',
 };
@@ -212,8 +211,8 @@ void test('the public health check asks the media service at most once per 15 se
   for (let i = 0; i < 5; i++)
     assert.deepEqual(await checkHealth(v), {
       ready: true,
-      capQualified: true,
-      templateVersion: 'caps-v1',
+      tailor: true,
+      templateVersion: 'looks-v1',
     });
   assert.equal(calls.length, 1, 'five page views, one probe');
   assert.equal(calls[0].url, 'https://media-ttl.test/health');
@@ -236,7 +235,7 @@ void test('health checks that arrive together share one probe', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => {
     calls++;
     await answered;
-    return Response.json({ ...readyBody, capQualified: false });
+    return Response.json({ ...readyBody, tailor: false });
   });
   const v = healthVars('https://media-together.test');
   const pending = Array.from({ length: 8 }, () => checkHealth(v));
@@ -245,8 +244,8 @@ void test('health checks that arrive together share one probe', async (t) => {
   for (const body of await Promise.all(pending))
     assert.deepEqual(body, {
       ready: true,
-      capQualified: false,
-      templateVersion: 'caps-v1',
+      tailor: false,
+      templateVersion: 'looks-v1',
     });
   assert.equal(calls, 1);
 });
@@ -256,12 +255,12 @@ void test('a 503 from the media health check means not ready, whatever its body 
   );
   assert.deepEqual(await checkHealth(healthVars('https://media-down.test')), {
     ready: false,
-    capQualified: false,
+    tailor: false,
   });
 });
 
-const ready = { ready: true, capQualified: true, templateVersion: 'caps-v1' },
-  notReady = { ready: false, capQualified: false };
+const ready = { ready: true, tailor: true, templateVersion: 'looks-v1' },
+  notReady = { ready: false, tailor: false };
 const realSetTimeout = globalThis.setTimeout;
 /** Let every timer fire at once, keeping what was asked for. */
 function instantTimers(t) {
@@ -333,7 +332,7 @@ void test('a 503 the service writes itself takes caps off sale at once', async (
   clock += 15000;
   answer = () =>
     Response.json(
-      { ...readyBody, ready: false, capQualified: false },
+      { ...readyBody, ready: false, tailor: false },
       {
         status: 503,
       },
@@ -450,7 +449,17 @@ void test('a site that cannot render reports not ready without probing', async (
   ])
     assert.deepEqual(await checkHealth(v), {
       ready: false,
-      capQualified: false,
+      tailor: false,
     });
   assert.equal(calls, 0);
+});
+void test('a desk that is up but cannot tailor is reported as such, on the current wardrobe', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () =>
+    Response.json({ ...readyBody, tailor: false }),
+  );
+  assert.deepEqual(await checkHealth(healthVars('https://media-no-key.test')), {
+    ready: true,
+    tailor: false,
+    templateVersion: 'looks-v1',
+  });
 });
