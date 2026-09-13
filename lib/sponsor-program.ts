@@ -71,6 +71,8 @@ export class SponsorProgram {
   >();
   /** Dressed free lines that failed in a row, per cap order; a played appearance clears it. */
   private strikes = new Map<string, number>();
+  /** Per cap order, the shot after which its host airs undressed until the next cut to him. */
+  private undressedAfter = new Map<string, number>();
   constructor(
     private service: SponsorServices,
     private changed: () => void = () => {},
@@ -83,6 +85,8 @@ export class SponsorProgram {
   }
   beginRun() {
     this.lastPaidAt = -Infinity;
+    // Shot ids start over with the run, so a note about an old shot means nothing now.
+    this.undressedAfter.clear();
   }
   sync() {
     if (!this.pendingSync)
@@ -208,6 +212,12 @@ export class SponsorProgram {
         previousSpeaker === line.speaker
       )
         continue;
+      // One wardrobe per run: after a dressed take of his failed for good, the rest of this
+      // host's turn airs undressed, and the look returns at the next cut to him.
+      const undressedShot = this.undressedAfter.get(order.id);
+      if (undressedShot !== undefined && previousSpeaker === line.speaker) {
+        if (line.id > undressedShot) continue;
+      } else this.undressedAfter.delete(order.id);
       const metadata = order.assetMetadata;
       if (
         !metadata ||
@@ -233,6 +243,18 @@ export class SponsorProgram {
       };
     }
     return line;
+  }
+  /**
+   * A dressed take of this order's host failed for good, at this shot. Every later line of
+   * his before a cut airs undressed, so the look never flips mid-run: the engine makes the
+   * run-mate it already holds again undressed, and this note covers the lines not yet
+   * decorated. Cleared at the next cut to him, by a played appearance, and by a new run.
+   */
+  undressed(orderId: string, shotId: number) {
+    if (!this.orders.has(orderId)) return;
+    const noted = this.undressedAfter.get(orderId);
+    if (noted === undefined || shotId < noted)
+      this.undressedAfter.set(orderId, shotId);
   }
   private required(ref: SponsorReference) {
     const order = this.orders.get(ref.orderId);
@@ -404,7 +426,10 @@ export class SponsorProgram {
             ...(stage ? { stage } : {}),
           });
           this.played.add(eventId);
-          if (line.wardrobe?.orderId === id) this.strikes.delete(id);
+          if (line.wardrobe?.orderId === id) {
+            this.strikes.delete(id);
+            this.undressedAfter.delete(id);
+          }
           if (stage) order.pending = undefined;
           const f = order.fulfillment;
           if (

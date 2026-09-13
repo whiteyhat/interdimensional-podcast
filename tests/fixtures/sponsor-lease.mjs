@@ -11,11 +11,13 @@ export const lease = (product = 'spotlight') => ({
     target: 'host',
     assetId: 'design1',
   },
-  assetUrl: 'https://site.test/preview.png',
+  assetUrl:
+    'https://site.test/api/sponsorship/assets/design1?part=look&v=design1',
   assetMetadata: {
-    sourceUrl: 'https://site.test/cap.png',
+    sourceUrl:
+      'https://site.test/api/sponsorship/assets/design1?part=look&v=design1',
     sha256: 'design1',
-    templateVersion: 'caps-v1',
+    templateVersion: 'looks-v1',
   },
   fulfillment: {
     visibleMs: 0,
