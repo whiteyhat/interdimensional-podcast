@@ -47,7 +47,9 @@ git fetch origin
 test "$(git branch --show-current)" = main
 test -z "$(git status --porcelain)"
 test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
-npm test && npx tsc --noEmit && npm run build
+npm test
+npx tsc --noEmit
+npm run build
 node --test tests/launch-*.test.mjs tests/solana.test.mjs tests/rpcproxy.test.mjs
 # Continue only when every check above passed and both broadcast boxes are off.
 npm run deploy
