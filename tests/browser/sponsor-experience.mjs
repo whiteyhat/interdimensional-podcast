@@ -378,16 +378,22 @@ try {
     .check({ force: true });
   await cap.getByRole('button', { name: 'Continue', exact: true }).click();
   await fitting.page.locator('#sponsor-projectName').fill('Canvas');
-  // Before any logo: the host's own still, no swatch, and the promise of what happens after payment.
+  // Before any logo: an example look from a real order, marked as such, no swatch, and the
+  // promise of what happens after payment.
   const card = fitting.page.locator('.sponsor-preview.cap');
   assert.match(
     await card.locator('.sponsor-preview-caption').innerText(),
-    /Your tee and cap are tailored right after payment · usually one to two minutes/,
+    /An example look\. Yours is tailored right after payment · usually one to two minutes/,
   );
   assert.match(
-    await card.locator('.sponsor-host-art').getAttribute('src'),
-    /\/pepe-video\.avif$/,
+    await card.locator('.sponsor-host-art.example').getAttribute('src'),
+    /\/looks\/pepe-northwind\.avif$/,
   );
+  assert.ok(
+    await loaded(card.locator('.sponsor-host-art.example')),
+    'the example look is a real image',
+  );
+  assert.equal(await card.locator('.sponsor-example-tag').innerText(), 'EXAMPLE · NORTHWIND');
   assert.equal(await card.locator('.sponsor-logo-swatch').count(), 0);
   // A logo the desk cannot print is refused under the upload field, before any money moves.
   refuseUpload = true;
@@ -417,8 +423,8 @@ try {
   );
   assert.match(
     await card.locator('.sponsor-host-art').getAttribute('src'),
-    /\/pepe-video\.avif$/,
-    'no look exists before payment',
+    /\/looks\/pepe-northwind\.avif$/,
+    'still the example: no look of the buyer exists before payment',
   );
   assert.equal(
     await cap.getByRole('button', { name: 'Change your logo' }).count(),
@@ -451,8 +457,9 @@ try {
   assert.match(
     await card.locator('.sponsor-host-art').getAttribute('src'),
     /\/pepe-video\.avif$/,
-    'the still, never the stored asset URL, while the tailor works',
+    'the host\'s own still, never the example nor the stored asset URL, while the tailor works',
   );
+  assert.equal(await card.locator('.sponsor-example-tag').count(), 0);
   assert.equal(
     await card.locator('.sponsor-preview-caption small').innerText(),
     'Tailoring your tee and cap · usually one to two minutes',

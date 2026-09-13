@@ -1404,6 +1404,23 @@ aside.sponsor-rail {
 .sponsor-look-frame {
   position: relative;
 }
+/* Before payment the card shows a finished look from a real order, and says so. */
+.sponsor-example-tag {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 2;
+  padding: 5px 8px;
+  border: 1px solid #ffffff2e;
+  border-radius: 6px;
+  background: #0b0f0ecc;
+  color: #e8dcc2;
+  font:
+    9px/1.4 'Courier New',
+    monospace;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+}
 .sponsor-logo-swatch {
   position: absolute;
   right: 12px;

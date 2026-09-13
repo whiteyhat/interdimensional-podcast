@@ -55,6 +55,10 @@ work/
 !/public/logo.avif
 !/public/pepe-video.avif
 !/public/gigachad-video.avif
+# The example look the sponsorship card shows before payment: a real order's tee and cap on
+# each host, from the devnet rehearsal of 2026-09-14.
+!/public/looks/
+!/public/looks/*.avif
 !/public/favicon.png
 !/public/apple-icon.png
 !/public/share-card.png

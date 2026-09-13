@@ -6,6 +6,8 @@ import type { SponsorDraft } from '@/lib/sponsorship';
 import {
   LOOK_COPY,
   baseStill,
+  exampleAlt,
+  exampleLook,
   logoSwatchUrl,
   lookAlt,
   type LookView,
@@ -59,10 +61,13 @@ export function SponsorPreview({
     };
   }, []);
   const hostName = draft.target === 'guest' ? 'Chad' : 'Pepe';
-  // The card image, in order: the look once it is ready, otherwise the host's own still
-  // with the stored logo as a swatch. Never the asset URL (the logo while the tailor works)
-  // and never a local upload: nothing is generated before payment.
+  // The card image, in order: the look once it is ready; while the tailor works, the host's
+  // own still; before payment, an example look from a real order, so the buyer sees a dressed
+  // host. The stored logo rides on top as a swatch until the look replaces it. Never the asset
+  // URL (the logo while the tailor works) and never a local upload: nothing is generated
+  // before payment.
   const lookUrl = look?.kind === 'ready' ? look.url : null;
+  const example = !look && !paid;
   const swatch = lookUrl ? null : logoSwatchUrl(draft.assetId);
   return (
     <div
@@ -89,6 +94,15 @@ export function SponsorPreview({
                 src={lookUrl}
                 alt={lookAlt(draft.target)}
               />
+            ) : example ? (
+              <>
+                <img
+                  className="sponsor-host-art example"
+                  src={exampleLook(draft.target)}
+                  alt={exampleAlt(draft.target)}
+                />
+                <span className="sponsor-example-tag">EXAMPLE · NORTHWIND</span>
+              </>
             ) : (
               <img
                 className="sponsor-host-art"

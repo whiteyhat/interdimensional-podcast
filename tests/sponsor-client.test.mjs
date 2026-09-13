@@ -119,7 +119,7 @@ void test('the cap sells as a tee and a cap made for the brand, and every waitin
   });
   assert.deepEqual(C.LOOK_COPY, {
     previewCaption:
-      'Your tee and cap are tailored right after payment · usually one to two minutes',
+      'An example look. Yours is tailored right after payment · usually one to two minutes',
     tailoring: 'Tailoring your tee and cap · usually one to two minutes',
     anotherFit: 'Still tailoring — trying another fit',
     slow: 'This is taking longer than usual',
@@ -241,6 +241,11 @@ void test('the wardrobe card follows the order: the payment clock while tailorin
   assert.equal(C.baseStill('host'), '/pepe-video.avif');
   assert.equal(C.baseStill('guest'), '/gigachad-video.avif');
   assert.equal(C.baseStill(undefined), '/pepe-video.avif');
+  assert.equal(C.exampleLook('host'), '/looks/pepe-northwind.avif');
+  assert.equal(C.exampleLook('guest'), '/looks/gigachad-northwind.avif');
+  assert.equal(C.exampleLook(undefined), '/looks/pepe-northwind.avif');
+  assert.equal(C.exampleAlt('guest'), "An example: Chad wearing Northwind's tee and cap");
+  assert.equal(C.exampleAlt('host'), "An example: Pepe wearing Northwind's tee and cap");
 });
 
 void test('a paid cap waits on its tailor before it is in the queue; every other paid order is queued', () => {

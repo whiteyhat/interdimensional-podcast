@@ -179,7 +179,7 @@ export const productCopy = {
  */
 export const LOOK_COPY = {
   previewCaption:
-    'Your tee and cap are tailored right after payment · usually one to two minutes',
+    'An example look. Yours is tailored right after payment · usually one to two minutes',
   tailoring: 'Tailoring your tee and cap · usually one to two minutes',
   anotherFit: 'Still tailoring — trying another fit',
   slow: 'This is taking longer than usual',
@@ -253,6 +253,17 @@ export const logoSwatchUrl = (assetId: string | undefined) =>
   assetId
     ? `/api/sponsorship/assets/${encodeURIComponent(assetId)}?part=logo`
     : null;
-/** The host's own still: what the card shows before the look exists. */
+/** The host's own still: what the card shows while the tailor works. */
 export const baseStill = (target: SponsorTarget | undefined) =>
   target === 'guest' ? '/gigachad-video.avif' : '/pepe-video.avif';
+/**
+ * A finished look from a real order (Northwind's tee and cap, devnet rehearsal of
+ * 2026-09-14), shown on the card before payment so a buyer sees what a dressed host is,
+ * not an undressed one. Never the buyer's own look: theirs does not exist until they pay.
+ */
+export const exampleLook = (target: SponsorTarget | undefined) =>
+  target === 'guest'
+    ? '/looks/gigachad-northwind.avif'
+    : '/looks/pepe-northwind.avif';
+export const exampleAlt = (target: SponsorTarget | undefined) =>
+  `An example: ${target === 'guest' ? 'Chad' : 'Pepe'} wearing Northwind's tee and cap`;
