@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
+import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { Transaction } from '@solana/web3.js';
 import { WalletShell } from './wallet';
 import { sponsorAction } from '@/lib/sponsor-browser';
@@ -28,7 +28,10 @@ export function SponsorWallet(props: Props) {
 }
 function Payment({ receipt, asset, onReceipt, onPending }: Props) {
   const { connection } = useConnection();
-  const { publicKey, signTransaction, sendTransaction } = useWallet();
+  const walletContext = useWallet();
+  const { wallet, publicKey, connecting, signTransaction, sendTransaction } =
+    walletContext;
+  const { setVisible } = useWalletModal();
   const [quote, setQuote] = useState<{
     attempt: SponsorAttempt;
     transaction: string;
@@ -199,20 +202,45 @@ function Payment({ receipt, asset, onReceipt, onPending }: Props) {
       onPending(false);
     }
   }
+  async function changeWallet() {
+    if (pending.current) return;
+    // The provider forgets a wallet the moment it disconnects, so whatever is picked
+    // next in the modal is a fresh selection and connects in the same gesture, even
+    // when it is the wallet that was just let go.
+    try {
+      await walletContext.disconnect();
+    } catch {
+      /* A wallet that refuses to let go can still be swapped for another in the modal. */
+    }
+    if (mounted.current) setVisible(true);
+  }
   const expired = quote && now >= quote.attempt.expiresAt;
+  const busy = phase === 'quoting' || phase === 'signing';
+  // One button carries the whole walk: connect, pay, approve. It keeps its place and
+  // its element across the phases, only its words and its job change, so the eye,
+  // the pointer and keyboard focus never have to find a new control. While the desk
+  // or the wallet is working it stays put and says so, in place of a separate line.
+  const step: { label: string; onClick?: () => void; disabled: boolean } = busy
+    ? {
+        label:
+          phase === 'quoting'
+            ? 'Checking balance and network fees…'
+            : 'Approve in your wallet…',
+        disabled: true,
+      }
+    : !walletKey
+      ? {
+          label: connecting ? 'Connecting…' : 'Connect wallet',
+          onClick: () => setVisible(true),
+          disabled: connecting,
+        }
+      : phase === 'idle'
+        ? { label: 'Pay with wallet →', onClick: review, disabled: false }
+        : expired
+          ? { label: 'Quote window ended', disabled: true }
+          : { label: 'Approve and pay →', onClick: pay, disabled: false };
   return (
     <div className="sponsor-wallet">
-      <div className="sponsor-wallet-connect">
-        <WalletMultiButton />
-      </div>
-      {walletKey && phase === 'idle' && (
-        <button type="button" className="sponsor-button" onClick={review}>
-          Review wallet payment →
-        </button>
-      )}
-      {phase === 'quoting' && (
-        <p className="sponsor-working">Checking balance and network fees…</p>
-      )}
       {quote && phase !== 'checking' && (
         <div className="sponsor-wallet-quote">
           <div>
@@ -222,37 +250,31 @@ function Payment({ receipt, asset, onReceipt, onPending }: Props) {
             </strong>
           </div>
           <p>Paid directly to the studio. Your wallet shows the network fee.</p>
+        </div>
+      )}
+      {phase !== 'checking' && (
+        <button
+          type="button"
+          className="sponsor-button"
+          disabled={step.disabled}
+          onClick={step.onClick}
+        >
+          {step.label}
+        </button>
+      )}
+      {quote && phase !== 'checking' && expired && (
+        <div className="sponsor-wallet-quote">
+          <p>This timer does not mean a previous payment failed.</p>
+          <button type="button" className="sponsor-text-button" onClick={check}>
+            Check this payment
+          </button>
           <button
             type="button"
-            className="sponsor-button"
-            disabled={phase === 'signing' || !!expired}
-            onClick={pay}
+            className="sponsor-text-button"
+            onClick={review}
           >
-            {phase === 'signing'
-              ? 'Approve in your wallet…'
-              : expired
-                ? 'Quote window ended'
-                : 'Approve and pay →'}
+            Refresh quote
           </button>
-          {expired && (
-            <>
-              <p>This timer does not mean a previous payment failed.</p>
-              <button
-                type="button"
-                className="sponsor-text-button"
-                onClick={check}
-              >
-                Check this payment
-              </button>
-              <button
-                type="button"
-                className="sponsor-text-button"
-                onClick={review}
-              >
-                Refresh quote
-              </button>
-            </>
-          )}
         </div>
       )}
       {phase === 'checking' && (
@@ -262,6 +284,23 @@ function Payment({ receipt, asset, onReceipt, onPending }: Props) {
             Check again
           </button>
         </div>
+      )}
+      {walletKey && (
+        <p className="sponsor-wallet-account">
+          <span>
+            Paying from {wallet?.adapter.name ?? 'your wallet'}{' '}
+            {walletKey.slice(0, 4)}…{walletKey.slice(-4)}
+          </span>
+          {(phase === 'idle' || phase === 'ready') && (
+            <button
+              type="button"
+              className="sponsor-text-button"
+              onClick={changeWallet}
+            >
+              Change wallet
+            </button>
+          )}
+        </p>
       )}
       <output className="sponsor-error">{error}</output>
     </div>

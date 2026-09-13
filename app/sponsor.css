@@ -723,6 +723,12 @@ aside.sponsor-rail {
 .sponsor-button:active {
   transform: scale(0.98);
 }
+/* A button that is waiting on the desk or the wallet neither brightens nor presses. */
+.sponsor-button:disabled:hover,
+.sponsor-button:disabled:active {
+  background: #dc936b;
+  transform: none;
+}
 .sponsor-button.secondary {
   border-color: #ffffff20;
   background: transparent;
@@ -824,18 +830,25 @@ aside.sponsor-rail {
   color: #e9dfca;
   background: #b9a27c0a;
 }
-.sponsor-wallet-connect {
+/* The wallet walk is one button that only changes its words, so the payer line
+   sits under it: who is paying on the left, the way out on the right. */
+.sponsor-wallet-account {
   display: flex;
-  justify-content: center;
-  margin: 12px 0;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  color: #b6c0a8;
+  font-size: 11px;
+  line-height: 1.5;
 }
-.sponsor-wallet .wallet-adapter-button {
-  background: #2b3527;
-  border: 1px solid #6b7857;
-  font:
-    12px Arial,
-    sans-serif;
-  height: 44px;
+.sponsor-wallet-account > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.sponsor-wallet-account .sponsor-text-button {
+  margin: 0;
+  flex-shrink: 0;
 }
 .sponsor-wallet-quote {
   padding-top: 10px;

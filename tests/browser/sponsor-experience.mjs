@@ -232,6 +232,17 @@ try {
       .isChecked(),
     true,
   );
+  // The wallet walk is one button. With no wallet in this browser it asks to connect;
+  // the adapter's own "Select Wallet" control never shares the desk with it.
+  await panel.getByRole('button', { name: 'Connect wallet' }).waitFor();
+  assert.equal(
+    await panel.locator('.sponsor-wallet .sponsor-button').count(),
+    1,
+  );
+  assert.equal(
+    await panel.getByRole('button', { name: 'Select Wallet' }).count(),
+    0,
+  );
   await panel
     .locator('input[name="sponsor-asset"][value="FROGCLENCH"]')
     .check({ force: true });

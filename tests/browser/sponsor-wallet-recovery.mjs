@@ -194,11 +194,29 @@ try {
   await page
     .locator('input[name="sponsor-asset"][value="SOL"]')
     .check({ force: true });
-  await page.getByRole('button', { name: 'Select Wallet' }).click();
+  // One button owns the walk: it connects, then it pays, then it approves.
+  assert.equal(
+    await page.getByRole('button', { name: 'Select Wallet' }).count(),
+    0,
+    'the adapter button is off the desk',
+  );
+  await page.getByRole('button', { name: 'Connect wallet' }).click();
   // Choosing the wallet is the whole gesture. A second "Connect" click used to be required,
   // and a viewer who did not know it saw a checkout where nothing happened.
   await page.getByRole('button', { name: /Phantom/ }).click();
-  await page.getByRole('button', { name: 'Review wallet payment' }).click();
+  await page.getByRole('button', { name: 'Pay with wallet' }).waitFor();
+  assert.equal(
+    await page.locator('.sponsor-wallet .sponsor-button').count(),
+    1,
+    'connect, pay and approve share one button',
+  );
+  // Swapping wallets lets go of this one and reopens the picker; the next pick still
+  // connects in one gesture, even when it is the same wallet again.
+  await page.getByRole('button', { name: 'Change wallet' }).click();
+  await page.getByRole('button', { name: /Phantom/ }).click();
+  await page.getByRole('button', { name: 'Pay with wallet' }).waitFor();
+  assert.equal(attempts, 0, 'changing wallets asks for no quote');
+  await page.getByRole('button', { name: 'Pay with wallet' }).click();
   await page.getByRole('button', { name: 'Approve and pay' }).click();
   await page.waitForFunction(() =>
     document
@@ -226,7 +244,7 @@ try {
   await page.waitForTimeout(1100);
   receipt.attempts[0].expiresAt = Date.now() - 1000;
   assert.equal(
-    await page.getByRole('button', { name: 'Review wallet payment' }).count(),
+    await page.getByRole('button', { name: 'Pay with wallet' }).count(),
     0,
     'an elapsed quote window does not resolve an ambiguous payment',
   );
@@ -234,14 +252,14 @@ try {
   receipt.attempts[0].status = 'expired';
   await page.getByRole('button', { name: 'Check again' }).click();
   await page
-    .getByRole('button', { name: 'Review wallet payment' })
+    .getByRole('button', { name: 'Pay with wallet' })
     .waitFor({ timeout: 3000 });
   assert.equal(
     attempts,
     1,
     'verified expiry never creates an automatic payment',
   );
-  await page.getByRole('button', { name: 'Review wallet payment' }).click();
+  await page.getByRole('button', { name: 'Pay with wallet' }).click();
   await page.getByRole('button', { name: 'Approve and pay' }).click();
   await page
     .getByText('Your wallet may have sent this payment.')
@@ -249,17 +267,17 @@ try {
   assert.equal(attempts, 2);
   assert.equal(drafts, 1);
   assert.equal(
-    await page.getByRole('button', { name: 'Review wallet payment' }).count(),
+    await page.getByRole('button', { name: 'Pay with wallet' }).count(),
     0,
     'an expired older attempt must not unlock the current payment',
   );
   receipt.attempts[0].status = 'expired';
   receipt.attempts[0].expiresAt = Date.now() - 1000;
   await page
-    .getByRole('button', { name: 'Review wallet payment' })
+    .getByRole('button', { name: 'Pay with wallet' })
     .waitFor({ timeout: 8000 });
   assert.equal(attempts, 2, 'receipt polling also recovers verified expiry');
-  await page.getByRole('button', { name: 'Review wallet payment' }).click();
+  await page.getByRole('button', { name: 'Pay with wallet' }).click();
   await page.getByRole('button', { name: 'Approve and pay' }).click();
   await page
     .getByText('Your wallet may have sent this payment.')
@@ -282,7 +300,7 @@ try {
   assert.equal(await page.locator('.sponsor-wallet').count(), 0);
   assert.equal(attempts, 3, 'a paid order never reopens checkout');
   console.log(
-    'Wallet browser rehearsal passed: rejection sends nothing; lost relay responses retain the current attempt; verified expiry recovers the same order through confirmation and polling; older expiry cannot unlock a current payment; paid receipts win; reload creates no payment.',
+    'Wallet browser rehearsal passed: one button connects, pays and approves; changing wallets reconnects in one gesture; rejection sends nothing; lost relay responses retain the current attempt; verified expiry recovers the same order through confirmation and polling; older expiry cannot unlock a current payment; paid receipts win; reload creates no payment.',
   );
 } catch (e) {
   for (const p of context.pages())
