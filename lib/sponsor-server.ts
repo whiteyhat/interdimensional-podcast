@@ -13,6 +13,7 @@ import {
   validateSponsorDraft,
   type LookAssetMetadata,
   type SponsorAsset,
+  type SponsorDraft,
   type SponsorCatalog,
   type SponsorCapabilities,
   type SponsorLook,
@@ -504,9 +505,88 @@ async function authenticateReceipt(d: D1Database, raw: unknown) {
   if (!order) throw new SponsorError(404, 'Receipt not found.');
   return { token, order };
 }
+/**
+ * Ask the desk for the look of the asset an order names. Called the one time a payment
+ * settles an order, by the reconciler for a round that went unanswered, and by replaceLogo.
+ * The look is made once per asset: a `qualified` asset is reused as it is (a later order for
+ * the same logo shows the existing look at once), except one wearing the fallback print,
+ * which gets its single upgrade fit at round 2. Never throws: the confirm response and the
+ * reconciler's counters are the same whatever the desk does. A request the desk refuses
+ * outright (a non-409 4xx) is a verdict on the logo and refuses the asset at once.
+ */
+export async function requestTailor(
+  d: D1Database,
+  v: SponsorMediaVars,
+  orderId: string,
+  round: number,
+): Promise<void> {
+  try {
+    const order = await db.getOrder(d, orderId);
+    if (!order || order.product !== 'cap') return;
+    const draft = JSON.parse(order.draft) as SponsorDraft;
+    if (!draft.assetId || !draft.target) return;
+    const asset = await db.getAsset(d, draft.assetId);
+    if (!asset) return;
+    const meta = JSON.parse(asset.metadata) as LookAssetMetadata;
+    const upgrade =
+      asset.status === 'qualified' && !!meta.look?.fallback && round === 2;
+    if (asset.status !== 'logo' && !upgrade) return;
+    await db.markTailorRequested(d, asset.id, {
+      round,
+      requestedAt: Date.now(),
+      ...(meta.tailor?.reasons ? { reasons: meta.tailor.reasons } : {}),
+    });
+    const { url, token } = sponsorMediaConfig(v);
+    const response = await fetch(new URL('/tailor', url), {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        assetId: asset.id,
+        round,
+        target: draft.target,
+        logoUrl: meta.logoUrl,
+        logoSha256: meta.logoSha256,
+        palette: meta.palette,
+        projectName: draft.projectName ?? '',
+      }),
+      redirect: 'manual',
+      signal: AbortSignal.timeout(5000),
+    });
+    if (response.ok) return;
+    const body = (await response.json().catch(() => ({}))) as {
+      code?: string;
+      error?: string;
+    };
+    if (response.status >= 400 && response.status < 500 && response.status !== 409) {
+      await db.applyLook(d, asset.id, {
+        kind: 'refused',
+        reason:
+          body.error ||
+          `The tailor refused this logo (${body.code ?? response.status}).`,
+        round,
+      });
+      return;
+    }
+    console.warn(
+      '[sponsorship] tailor deferred',
+      asset.id,
+      response.status,
+      body.code ?? '',
+    );
+  } catch (e) {
+    console.warn(
+      '[sponsorship] tailor deferred',
+      orderId,
+      e instanceof Error ? e.message : 'request failed',
+    );
+  }
+}
 async function recoverAttempt(
   d: D1Database,
-  v: SponsorVars,
+  v: SponsorMediaVars,
   input: db.AttemptRow,
   offered?: string,
   deadlineAt = Date.now() + 15000,
@@ -529,16 +609,21 @@ async function recoverAttempt(
     const scanStartedHeight = a.scan_before
       ? a.scan_started_height
       : await c.getBlockHeight('finalized');
-    let broadcastAmbiguous = false;
+    let broadcastAmbiguous = false,
+      paidNow = false;
     if (offered) {
       if (!/^[1-9A-HJ-NP-Za-km-z]{80,90}$/.test(offered))
         throw new SponsorError(400, 'Invalid transaction signature.');
       const proof = await verifySponsorSignature(c, offered, a);
-      if (proof) await db.settlePayment(d, a.id, proof, now);
+      if (proof)
+        paidNow =
+          (await db.settlePayment(d, a.id, proof, now)).orderPaidNow || paidNow;
     }
     if (a.broadcast_signature) {
       const proof = await verifySponsorSignature(c, a.broadcast_signature, a);
-      if (proof) await db.settlePayment(d, a.id, proof, now);
+      if (proof)
+        paidNow =
+          (await db.settlePayment(d, a.id, proof, now)).orderPaidNow || paidNow;
       else {
         const status = (
           await c.getSignatureStatuses([a.broadcast_signature], {
@@ -550,7 +635,8 @@ async function recoverAttempt(
     }
     const scan = await scanSponsorReference(c, a, { deadlineAt });
     for (const proof of scan.payments)
-      await db.settlePayment(d, a.id, proof, now);
+      paidNow =
+        (await db.settlePayment(d, a.id, proof, now)).orderPaidNow || paidNow;
     let expired = false;
     if (now > a.expires_at && scan.complete && !broadcastAmbiguous) {
       if (a.last_valid_block_height !== null)
@@ -575,6 +661,8 @@ async function recoverAttempt(
         Date.now(),
       )
       .run();
+    // The one moment this order became paid, still under the attempt lock: ask for its look.
+    if (paidNow) await requestTailor(d, v, a.order_id, 1);
     return db.getAttempt(d, a.id);
   } finally {
     await db.releaseLock(d, `attempt:${input.id}`, lock);
@@ -675,7 +763,7 @@ async function walletTransaction(
 }
 async function quote(
   d: D1Database,
-  v: SponsorVars,
+  v: SponsorMediaVars,
   o: db.OrderRow,
   asset: SponsorAsset,
   wallet: string | undefined,
@@ -820,7 +908,7 @@ async function submit(
     /* Always reconcile this immutable signature, including ambiguous RPC errors. */
   }
 }
-export async function reconcileSponsorships(v: SponsorVars) {
+export async function reconcileSponsorships(v: SponsorMediaVars) {
   const d = await sponsorDatabase(v),
     now = Date.now();
   // The sweeps write only the rows that moved, so an idle pass costs reads. The lock is two
@@ -956,7 +1044,7 @@ async function studioProxy(
 }
 export async function handleSponsorship(
   request: Request,
-  v: SponsorVars,
+  v: SponsorMediaVars,
 ): Promise<Response> {
   try {
     const url = new URL(request.url),

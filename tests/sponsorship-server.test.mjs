@@ -1238,3 +1238,176 @@ void test('a cap receipt says where its look stands', async () => {
     f.restore();
   }
 });
+
+// ---- paying starts the tailor.
+/** Pay a quote on the fixture's fake chain the way a wallet does, then confirm it: the real settle path. */
+async function payOnChain(f, v, receipt, q) {
+  const tx = Transaction.from(Buffer.from(q.transaction, 'base64'));
+  tx.partialSign(f.wallet);
+  const { getBase58Decoder } = await import('@solana/kit');
+  const sig = getBase58Decoder().decode(tx.signature),
+    msg = tx.compileMessage();
+  const keys = msg.accountKeys.map((pubkey, i) => ({
+      pubkey: pubkey.toBase58(),
+      signer: i < msg.header.numRequiredSignatures,
+    })),
+    index = keys.findIndex((k) => k.pubkey === f.v.TREASURY_WALLET),
+    lamports = Number(q.attempt.amountBase),
+    pre = keys.map(() => 0),
+    after = keys.map(() => 0);
+  pre[0] = 3000000000;
+  after[0] = pre[0] - lamports - 5000;
+  after[index] = lamports;
+  f.c.getParsedTransaction = async () => ({
+    blockTime: Math.floor(Date.now() / 1000),
+    meta: { err: null, preBalances: pre, postBalances: after },
+    transaction: {
+      signatures: tx.signatures.map((s) => getBase58Decoder().decode(s.signature)),
+      message: {
+        accountKeys: keys,
+        instructions: [
+          {
+            programId: '11111111111111111111111111111111',
+            parsed: {
+              type: 'transfer',
+              info: {
+                source: f.wallet.publicKey.toBase58(),
+                destination: f.v.TREASURY_WALLET,
+                lamports,
+              },
+            },
+          },
+        ],
+      },
+    },
+  });
+  return (
+    await post(v, { action: 'confirm', token: receipt.token, attemptId: q.attempt.id, signature: sig })
+  ).json();
+}
+/** The fixture with a wardrobe desk: /tailor answers are scripted, everything else is the price oracle. */
+function withDesk(f, answer = () => Response.json({ key: 'k', queued: true }, { status: 202 })) {
+  const tailors = [];
+  const oracle = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const target = url instanceof URL ? url.href : url instanceof Request ? url.url : url;
+    if (target.endsWith('/tailor')) {
+      tailors.push({ url: target, init, body: JSON.parse(init.body) });
+      return answer();
+    }
+    return oracle(url, init);
+  };
+  return {
+    tailors,
+    v: {
+      ...f.v,
+      SPONSOR_MEDIA_URL: 'https://media.test',
+      SPONSOR_MEDIA_TOKEN: 'm'.repeat(32),
+      SITE_URL: 'https://show.test',
+    },
+  };
+}
+/** Draft a cap on the asset, quote it for the fixture wallet, pay it: the paid receipt. */
+async function buyCap(f, v) {
+  await db.heartbeat(f.DB, 'studio', CAPS, Date.now());
+  const { receipt } = await (await post(v, { action: 'draft', draft: CAP_DRAFT })).json();
+  const q = await (
+    await post(v, { action: 'quote', token: receipt.token, asset: 'SOL', wallet: f.wallet.publicKey.toBase58() })
+  ).json();
+  assert.ok(q.attempt, JSON.stringify(q));
+  const paid = await payOnChain(f, v, receipt, q);
+  assert.equal(paid.receipt.status, 'paid', JSON.stringify(paid));
+  return { receipt, q, paid };
+}
+const assetMeta = (f) =>
+  JSON.parse(f.DB.sql.prepare('SELECT metadata FROM sponsor_assets WHERE id=?').get(ASSET).metadata);
+
+void test('the first proof that pays a cap asks the desk for its look exactly once', async () => {
+  const f = await fixture();
+  try {
+    const desk = withDesk(f);
+    insertAsset(f, 'logo', capMeta());
+    const { receipt, q, paid } = await buyCap(f, desk.v);
+    assert.equal(desk.tailors.length, 1);
+    assert.equal(desk.tailors[0].url, 'https://media.test/tailor');
+    assert.equal(desk.tailors[0].init.headers.authorization, `Bearer ${'m'.repeat(32)}`);
+    assert.deepEqual(desk.tailors[0].body, {
+      assetId: ASSET,
+      round: 1,
+      target: 'host',
+      logoUrl,
+      logoSha256: 'c'.repeat(64),
+      palette: PALETTE,
+      projectName: 'Canvas',
+    });
+    const meta = assetMeta(f);
+    assert.equal(meta.tailor.round, 1);
+    assert.equal(typeof meta.tailor.requestedAt, 'number');
+    assert.deepEqual(paid.receipt.look, { status: 'tailoring', round: 1 });
+    // Confirming again, and a late second transfer, ask for nothing.
+    await post(desk.v, { action: 'confirm', token: receipt.token, attemptId: q.attempt.id });
+    await db.settlePayment(f.DB, q.attempt.id, { signature: 'late', payer: 'payer', blockTime: 150 }, Date.now());
+    await post(desk.v, { action: 'confirm', token: receipt.token });
+    assert.equal(desk.tailors.length, 1);
+  } finally {
+    f.restore();
+  }
+});
+
+void test('a site without a desk still takes the payment, and warns', async (t) => {
+  const f = await fixture();
+  try {
+    const warned = t.mock.method(console, 'warn', () => {});
+    insertAsset(f, 'logo', capMeta());
+    await buyCap(f, f.v);
+    assert.ok(
+      warned.mock.calls.some((c) => c.arguments[0] === '[sponsorship] tailor deferred'),
+      'the deferral is logged',
+    );
+    assert.equal(assetMeta(f).tailor.round, 1, 'the reconciler will ask again');
+  } finally {
+    f.restore();
+  }
+});
+
+void test('a second order for a logo whose look exists asks the desk for nothing and reads ready', async () => {
+  const f = await fixture();
+  try {
+    const desk = withDesk(f);
+    insertAsset(f, 'qualified', qualifiedMeta());
+    const { paid } = await buyCap(f, desk.v);
+    assert.equal(desk.tailors.length, 0);
+    assert.equal(paid.receipt.look.status, 'ready');
+    assert.equal(paid.receipt.look.url, lookUrl);
+  } finally {
+    f.restore();
+  }
+});
+
+void test('a desk that refuses the request outright refuses the logo; a busy or absent one is asked again later', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  for (const [name, answer, status] of [
+    [
+      'bad hash',
+      () => Response.json({ code: 'LOGO_HASH', error: 'The logo does not match its hash.' }, { status: 400 }),
+      'refused',
+    ],
+    ['busy', () => Response.json({ code: 'BUSY', retryAfterMs: 5000 }, { status: 409 }), 'logo'],
+    ['down', () => Promise.reject(new TypeError('fetch failed')), 'logo'],
+  ]) {
+    await t.test(name, async () => {
+      const f = await fixture();
+      try {
+        const desk = withDesk(f, answer);
+        insertAsset(f, 'logo', capMeta());
+        await buyCap(f, desk.v);
+        const row = f.DB.sql.prepare('SELECT status,metadata FROM sponsor_assets WHERE id=?').get(ASSET);
+        assert.equal(row.status, status);
+        if (status === 'refused') assert.match(JSON.parse(row.metadata).reason, /does not match/);
+        assert.equal(JSON.parse(row.metadata).tailor.round, 1);
+      } finally {
+        f.restore();
+      }
+    });
+  }
+});
