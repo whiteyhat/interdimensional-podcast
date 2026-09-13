@@ -16,24 +16,44 @@ await build([
 ]);
 const { uploadSponsorAsset, sponsorAssetHealth } =
   await import('../work/tests/sponsor-assets.js');
-const png = Buffer.from('canonical-media-worker-output'),
-  logo = Buffer.from('normalized-original-mark');
+const PNG = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.from('an uploaded mark'),
+]);
+const normalised = Buffer.from('normalised-rgba-png');
 const hash = (b) => createHash('sha256').update(b).digest('hex');
-function request(ip = 'asset-test', origin = 'https://show.test') {
+const PALETTE = {
+  clusters: [{ hex: '#112233', share: 1 }],
+  primary: '#112233',
+  secondary: '#112233',
+  accent: '#112233',
+  monochrome: false,
+};
+function request({
+  ip = 'asset-test',
+  origin = 'https://show.test',
+  bytes = PNG,
+  kind = 'cap',
+  target = 'host',
+} = {}) {
   const form = new FormData();
-  form.set('image', new File([png], 'logo.png', { type: 'image/png' }));
-  form.set('kind', 'cap');
-  form.set('target', 'host');
+  form.set('image', new File([bytes], 'logo.png', { type: 'image/png' }));
+  form.set('kind', kind);
+  form.set('target', target);
   return new Request('https://show.test/api/sponsorship/assets', {
     method: 'POST',
     headers: { origin, 'cf-connecting-ip': ip },
     body: form,
   });
 }
-void test('canonical uploads bind qualification and original logo into immutable asset identities', async () => {
+/** A site with a desk address, a token, a database and an in-memory bucket. */
+function siteVars() {
   const DB = d1(),
-    objects = new Map(),
-    v = {
+    objects = new Map();
+  return {
+    DB,
+    objects,
+    v: {
       DB,
       SITE_URL: 'https://show.test',
       SPONSOR_MEDIA_URL: 'https://media.test',
@@ -43,56 +63,116 @@ void test('canonical uploads bind qualification and original logo into immutable
           objects.set(key, Buffer.from(bytes));
         },
       },
-    };
-  const originalFetch = globalThis.fetch;
-  let qualified = false,
-    corrupt = false;
-  globalThis.fetch = async () =>
-    Response.json({
-      preview: png.toString('base64'),
-      logo: logo.toString('base64'),
-      sha256: corrupt ? 'corrupted' : hash(png),
-      logoSha256: hash(logo),
-      templateId: 'pepe-cap-v1',
-      templateVersion: 'caps-v1',
-      qualificationVersion: qualified ? 'caps-v1' : null,
+    },
+  };
+}
+const ASSET_ID = hash(JSON.stringify([hash(normalised), 'host', 'looks-v1']));
+const LOGO_URL = `https://show.test/api/sponsorship/assets/${ASSET_ID}?part=logo`;
+void test('an upload is normalised by the desk and stored as a logo waiting for its look', async (t) => {
+  const { DB, objects, v } = siteVars();
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    calls.push({ url: String(url), init });
+    return Response.json({
+      logo: normalised.toString('base64'),
+      logoSha256: hash(normalised),
+      width: 640,
+      height: 200,
+      palette: PALETTE,
     });
-  try {
-    const preview = await (await uploadSponsorAsset(request(), v)).json();
-    assert.equal(preview.status, 'preview');
-    qualified = true;
-    const accepted = await (await uploadSponsorAsset(request(), v)).json();
-    assert.equal(accepted.status, 'qualified');
-    assert.notEqual(accepted.id, preview.id);
-    assert.equal(
-      DB.sql
-        .prepare('SELECT status FROM sponsor_assets WHERE id=?')
-        .get(preview.id).status,
-      'preview',
-      'qualification never rewrites the earlier design',
-    );
-    const repeated = await (await uploadSponsorAsset(request(), v)).json();
-    assert.equal(repeated.id, accepted.id);
-    assert.equal(
-      DB.sql.prepare('SELECT count(*) n FROM sponsor_assets').get().n,
-      2,
-    );
-    assert.deepEqual(objects.get(`${accepted.id}/logo.png`), logo);
-    corrupt = true;
-    const invalid = await uploadSponsorAsset(request(), v);
-    assert.equal(invalid.status, 502);
-    assert.equal(
-      DB.sql.prepare('SELECT count(*) n FROM sponsor_assets').get().n,
-      2,
-      'corrupt media cannot enter inventory',
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  });
+  const response = await uploadSponsorAsset(request(), v);
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body));
+  assert.deepEqual(body, { id: ASSET_ID, status: 'logo', url: LOGO_URL, logoUrl: LOGO_URL });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://media.test/logo?target=host');
+  assert.equal(calls[0].init.headers.authorization, `Bearer ${'a'.repeat(32)}`);
+  assert.equal(calls[0].init.headers['content-type'], 'image/png');
+  assert.deepEqual(Buffer.from(calls[0].init.body), PNG, 'the raw upload travels to the desk');
+  assert.deepEqual(objects.get(`${ASSET_ID}/logo.png`), normalised);
+  assert.equal(objects.size, 1, 'nothing but the normalised logo is stored');
+  const row = DB.sql.prepare('SELECT * FROM sponsor_assets WHERE id=?').get(ASSET_ID);
+  assert.equal(row.status, 'logo');
+  assert.equal(row.url, LOGO_URL);
+  assert.equal(row.mime, 'image/png');
+  assert.deepEqual(JSON.parse(row.metadata), {
+    kind: 'cap',
+    target: 'host',
+    logoSha256: hash(normalised),
+    logoUrl: LOGO_URL,
+    palette: PALETTE,
+    templateVersion: 'looks-v1',
+  });
+  // The same logo again is the same asset, and a look already made for it is answered at once.
+  DB.sql
+    .prepare("UPDATE sponsor_assets SET status='qualified',url=? WHERE id=?")
+    .run('https://show.test/look', ASSET_ID);
+  const again = await (await uploadSponsorAsset(request({ ip: 'asset-test-2' }), v)).json();
+  assert.equal(again.id, ASSET_ID);
+  assert.equal(again.status, 'qualified');
+  assert.equal(again.url, 'https://show.test/look');
+  assert.equal(DB.sql.prepare('SELECT count(*) n FROM sponsor_assets').get().n, 1);
+  // A spotlight logo is its own asset and is ready at once: nothing to tailor.
+  const spotlight = await (await uploadSponsorAsset(request({ ip: 'spot', kind: 'logo' }), v)).json();
+  assert.equal(spotlight.status, 'qualified');
+  assert.notEqual(spotlight.id, ASSET_ID);
+  assert.equal(JSON.parse(DB.sql.prepare('SELECT metadata FROM sponsor_assets WHERE id=?').get(spotlight.id).metadata).kind, 'logo');
+});
+void test('what the desk refuses is relayed to the buyer, and nothing is stored', async (t) => {
+  const { DB, objects, v } = siteVars();
+  t.mock.method(globalThis, 'fetch', async () =>
+    Response.json(
+      { error: 'This logo is too thin to print.', code: 'LOGO_TOO_THIN' },
+      { status: 422 },
+    ),
+  );
+  const r = await uploadSponsorAsset(request({ ip: 'thin' }), v);
+  assert.equal(r.status, 422);
+  assert.deepEqual(await r.json(), {
+    error: 'This logo is too thin to print.',
+    code: 'LOGO_TOO_THIN',
+  });
+  assert.equal(objects.size, 0);
+  assert.equal(DB.sql.prepare('SELECT count(*) n FROM sponsor_assets').get().n, 0);
+});
+void test('a file that is not an image never reaches the desk, and a desk that is down says so', async (t) => {
+  const { v } = siteVars();
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    throw new TypeError('fetch failed');
+  });
+  const junk = await uploadSponsorAsset(
+    request({ ip: 'junk', bytes: Buffer.from('not an image at all') }),
+    v,
+  );
+  assert.equal(junk.status, 422);
+  assert.equal(calls, 0, 'the magic bytes are checked here');
+  const down = await uploadSponsorAsset(request({ ip: 'down' }), v);
+  assert.equal(down.status, 503);
+  assert.match((await down.json()).error, /try again in a minute/);
+  assert.equal(calls, 1);
+});
+void test('a desk answer that does not hash to what it says is refused', async (t) => {
+  const { DB, objects, v } = siteVars();
+  t.mock.method(globalThis, 'fetch', async () =>
+    Response.json({
+      logo: normalised.toString('base64'),
+      logoSha256: 'corrupted',
+      width: 1,
+      height: 1,
+      palette: PALETTE,
+    }),
+  );
+  const r = await uploadSponsorAsset(request({ ip: 'corrupt' }), v);
+  assert.equal(r.status, 502);
+  assert.equal(objects.size, 0);
+  assert.equal(DB.sql.prepare('SELECT count(*) n FROM sponsor_assets').get().n, 0);
 });
 void test('cross-origin artwork requests fail before storage or worker calls', async () => {
   const response = await uploadSponsorAsset(
-    request('other', 'https://attacker.test'),
+    request({ ip: 'other', origin: 'https://attacker.test' }),
     {},
   );
   assert.equal(response.status, 403);
