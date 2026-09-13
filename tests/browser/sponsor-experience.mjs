@@ -17,6 +17,8 @@ let online = true,
 // One stored logo for the whole rehearsal: the desk's id is the sha of (logo, host, version).
 const assetId = 'b'.repeat(64);
 const logoUrl = `/api/sponsorship/assets/${assetId}?part=logo`;
+const lookUrl = `/api/sponsorship/assets/${assetId}?part=look&v=${'c'.repeat(64)}`;
+const replacements = [];
 /** True once an <img> has loaded real pixels; false for a broken image. */
 const loaded = (img) =>
   img.evaluate((el) =>
@@ -174,6 +176,11 @@ async function setup(viewport, reducedMotion = 'no-preference') {
         };
         receipt.attempts = [attempt];
         result = { receipt, attempt, solanaPayUrl: attempt.solanaPayUrl };
+      } else if (body.action === 'replaceLogo') {
+        replacements.push(body);
+        receipt.draft.assetId = body.assetId;
+        receipt.look = { status: 'tailoring' };
+        result = { receipt };
       } else result = { receipt };
     }
     return route.fulfill({ json: result });
@@ -406,6 +413,152 @@ try {
     await cap.getByRole('button', { name: 'Change your logo' }).count(),
     1,
   );
+  await fitting.page
+    .locator('#sponsor-message')
+    .fill('Canvas is where trench builders keep their receipts.');
+  await cap.getByRole('button', { name: 'Continue to payment' }).click();
+  await cap.getByRole('button', { name: 'Scan to pay' }).waitFor();
+  assert.equal(receipt.draft.assetId, assetId, 'the order carries the logo');
+  // Payment lands; the desk starts tailoring. The card keeps the still and the swatch.
+  receipt.status = 'paid';
+  receipt.paidAt = Date.now();
+  receipt.queuePosition = 1;
+  receipt.look = { status: 'tailoring' };
+  await cap
+    .getByRole('heading', { name: 'Your tee and cap are being tailored' })
+    .waitFor({ timeout: 10000 });
+  assert.match(await card.locator('.sponsor-preview-label').innerText(), /TAILORING/);
+  assert.match(
+    await cap.locator('.sponsor-receipt > .sponsor-kicker').innerText(),
+    /TAILORING/,
+  );
+  assert.equal(
+    await cap.locator('.sponsor-receipt > p:not(.sponsor-kicker)').first().innerText(),
+    'Tailoring your tee and cap · usually one to two minutes',
+  );
+  assert.ok(await card.evaluate((el) => el.classList.contains('tailoring')));
+  assert.match(
+    await card.locator('.sponsor-host-art').getAttribute('src'),
+    /\/pepe-video\.avif$/,
+    'the still, never the stored asset URL, while the tailor works',
+  );
+  assert.equal(
+    await card.locator('.sponsor-preview-caption small').innerText(),
+    'Tailoring your tee and cap · usually one to two minutes',
+  );
+  assert.equal(
+    await cap.getByRole('button', { name: 'Use a different logo' }).count(),
+    0,
+  );
+  // A reload during tailoring shows the still and the swatch, never a broken image.
+  await fitting.page.reload({ waitUntil: 'networkidle' });
+  await cap
+    .getByRole('heading', { name: 'Your tee and cap are being tailored' })
+    .waitFor({ timeout: 10000 });
+  await card.locator('.sponsor-logo-swatch').waitFor();
+  for (const img of await card.locator('img').all())
+    assert.ok(await loaded(img), 'every image on the card after a reload is real');
+  assert.match(
+    await card.locator('.sponsor-host-art').getAttribute('src'),
+    /\/pepe-video\.avif$/,
+  );
+  // The receipt's clock, not the desk, drives the waiting copy.
+  receipt.paidAt = Date.now() - 130000;
+  await card
+    .locator('.sponsor-preview-caption small', {
+      hasText: 'Still tailoring — trying another fit',
+    })
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    await cap.getByRole('button', { name: 'Use a different logo' }).count(),
+    0,
+  );
+  receipt.paidAt = Date.now() - 11 * 60000;
+  await card
+    .locator('.sponsor-preview-caption small', {
+      hasText: 'This is taking longer than usual',
+    })
+    .waitFor({ timeout: 10000 });
+  await cap.getByRole('button', { name: 'Use a different logo' }).waitFor();
+  // A different logo goes through the same check; the order points at it and the clock restarts.
+  await cap.locator('#sponsor-replace-logo').setInputFiles('public/logo.png');
+  await card
+    .locator('.sponsor-preview-caption small', {
+      hasText: 'Tailoring your tee and cap · usually one to two minutes',
+    })
+    .waitFor({ timeout: 10000 });
+  assert.equal(replacements.length, 1);
+  assert.deepEqual(replacements[0], {
+    action: 'replaceLogo',
+    orderId: 'order-browser-rehearsal',
+    token: 'a'.repeat(64),
+    assetId,
+  });
+  assert.equal(uploads, 3);
+  assert.equal(
+    await cap.getByRole('button', { name: 'Use a different logo' }).count(),
+    0,
+  );
+  // The look lands: it replaces the still, the swatch goes, the label becomes the pass.
+  receipt.look = { status: 'ready', url: lookUrl };
+  await card.locator('.sponsor-host-art.look').waitFor({ timeout: 10000 });
+  assert.match(
+    await card.locator('.sponsor-host-art.look').getAttribute('src'),
+    /part=look&v=/,
+  );
+  assert.equal(
+    await card.locator('.sponsor-host-art.look').getAttribute('alt'),
+    'Pepe wearing your tee and cap',
+  );
+  assert.ok(await loaded(card.locator('.sponsor-host-art.look')));
+  assert.match(
+    await card.locator('.sponsor-preview-label').innerText(),
+    /YOUR ON-AIR PASS/,
+  );
+  assert.equal(await card.locator('.sponsor-logo-swatch').count(), 0);
+  assert.equal(await card.evaluate((el) => el.classList.contains('tailoring')), false);
+  await cap
+    .getByRole('heading', { name: 'You’re in the queue' })
+    .waitFor({ timeout: 10000 });
+  assert.match(
+    await cap.locator('.sponsor-receipt > .sponsor-kicker').innerText(),
+    /YOUR ON-AIR PASS/,
+  );
+  assert.equal(
+    await cap.getByRole('button', { name: 'Use a different logo' }).count(),
+    0,
+  );
+  // A fallback look airs, says so, and still offers a better fit.
+  receipt.look = { status: 'ready', url: lookUrl, fallback: 'cap-v1' };
+  await cap
+    .locator('.sponsor-look-replace', { hasText: "We'll keep improving the fit" })
+    .waitFor({ timeout: 10000 });
+  await cap.getByRole('button', { name: 'Use a different logo' }).waitFor();
+  assert.match(
+    await card.locator('.sponsor-host-art.look').getAttribute('src'),
+    /part=look&v=/,
+  );
+  // A refused logo says why and asks for another; nothing pulses.
+  receipt.look = {
+    status: 'refused',
+    reason: 'This logo could not be dressed. Use a different logo.',
+  };
+  await cap
+    .locator('.sponsor-look-replace', { hasText: 'This logo could not be dressed.' })
+    .waitFor({ timeout: 10000 });
+  assert.match(await card.locator('.sponsor-preview-label').innerText(), /TAILORING/);
+  assert.equal(await card.evaluate((el) => el.classList.contains('tailoring')), false);
+  assert.match(
+    await card.locator('.sponsor-host-art').getAttribute('src'),
+    /\/pepe-video\.avif$/,
+  );
+  await fitting.page.evaluate(() =>
+    window.scrollTo({ top: 0, behavior: 'instant' }),
+  );
+  await fitting.page.screenshot({
+    path: 'work/sponsor-browser/desktop-fitting.png',
+    fullPage: true,
+  });
   await fitting.context.close();
   online = false;
   receipt = null;

@@ -82,6 +82,9 @@ export function SponsorPanel() {
   // The clock the tailoring copy reads. It moves with every receipt poll (4 s while an
   // order is live), which is as often as the copy needs to advance.
   const [clock, setClock] = useState(() => Date.now());
+  // When the customer swaps the logo after paying, tailoring starts again from now, not
+  // from the payment; the receipt has no field for that, so the page keeps the moment.
+  const [replacedAt, setReplacedAt] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const form = useRef<HTMLFormElement>(null);
@@ -206,6 +209,7 @@ export function SponsorPanel() {
         updateReceipt(next);
         if (touchedToken.current !== token) {
           setDraft(next.draft);
+          setReplacedAt(null);
           setStep(3);
           const attempt =
             next.attempts.find((a) => a.status === 'verified') ||
@@ -248,7 +252,7 @@ export function SponsorPanel() {
   }, [token, updateReceipt]);
   const received =
     !!receipt && !['draft', 'payment-pending'].includes(receipt.status);
-  const look = receipt ? lookView(receipt, clock) : null;
+  const look = receipt ? lookView(receipt, clock, replacedAt) : null;
   // Celebrate the payment the viewer watched confirm, once, and only that: a receipt that
   // was already paid when the page opened is a return visit, not a moment.
   const seenStatus = useRef<{ id: string; status: string } | null>(null);
@@ -423,6 +427,35 @@ export function SponsorPanel() {
       setBusy(false);
     }
   }
+  /**
+   * After payment the order keeps its place; only its logo changes. The new logo goes
+   * through the same desk check, then the order is pointed at it and tailoring starts
+   * again. The desk's refusal, or the site's, lands in the panel's alert.
+   */
+  async function replaceLogo(selected: File) {
+    if (!receipt || operation.current) return;
+    operation.current = true;
+    setBusy(true);
+    setError('');
+    try {
+      const uploaded = await uploadLogo(selected, receipt.draft.target);
+      const result = await sponsorAction({
+        action: 'replaceLogo',
+        orderId: receipt.id,
+        token: receipt.token,
+        assetId: uploaded.id,
+      });
+      setReplacedAt(Date.now());
+      if (result.receipt) updateReceipt(result.receipt);
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : 'Your logo could not be replaced.',
+      );
+    } finally {
+      operation.current = false;
+      setBusy(false);
+    }
+  }
   function goStep(next: 1 | 2 | 3) {
     navigated.current = true;
     setStep(next);
@@ -441,6 +474,7 @@ export function SponsorPanel() {
     receiptRef.current = null;
     setToken(null);
     setQr('');
+    setReplacedAt(null);
     navigated.current = true;
     setStep(back);
     setMethod('wallet');
@@ -475,7 +509,9 @@ export function SponsorPanel() {
         <SponsorReceipt
           receipt={receipt}
           busy={busy}
+          look={look}
           onAction={act}
+          onReplaceLogo={(chosen) => void replaceLogo(chosen)}
           onNew={() => newOrder(1)}
         />
       ) : (
