@@ -2,23 +2,27 @@
 export const videoFrames = {
   host: {
     image: '/pepe-video.png',
-    poster: '/pepe-video.webp',
+    poster: '/pepe-video.avif',
     source:
       'https://v3b.fal.media/files/b/0aa9a903/QCxe-llC5mNr7pB3T3HsK_pepe-video.png',
     width: 1344,
     height: 768,
     original: 'public/pepe-cartoon.png',
+    originalUrl:
+      'https://v3b.fal.media/files/b/0aa99e7e/ViWtBAcKK0DXjM7kBLIvD_eid12yRD.png',
     originalSha256:
       'a0a82631870c4ae63d3f1091e1cd4c9342950bbbc7ac23d0f25b1528fae80e99',
   },
   guest: {
     image: '/gigachad-video.png',
-    poster: '/gigachad-video.webp',
+    poster: '/gigachad-video.avif',
     source:
       'https://v3b.fal.media/files/b/0aa9a8eb/l-pQ87NUGdsXuCoOUFdQS_gigachad-video.png',
     width: 1344,
     height: 768,
     original: 'public/gigachad-cartoon.png',
+    originalUrl:
+      'https://v3b.fal.media/files/b/0aa99e9a/UUct9hv94FEzgs2dz2H26_JZaGMdjK.png',
     originalSha256:
       'dd9ed2c82268750bf66d142a15fab301a7ddeffa7d2e01b5b86c860e3c1a0521',
   },

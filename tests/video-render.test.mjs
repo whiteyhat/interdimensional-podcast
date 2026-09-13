@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { build } from './build.mjs';
 
 await build([
@@ -16,6 +17,7 @@ await build([
   'services',
 ]);
 const show = await import('../work/tests/show.js');
+const { videoFrames } = await import('../work/tests/video-frames.js');
 const { createServices } = await import('../work/tests/services.js');
 
 void test('generate on the native canvas and uniformly scale only the output height', () => {
@@ -43,6 +45,34 @@ void test('generate on the native canvas and uniformly scale only the output hei
     undefined,
   ])
     assert.throws(() => show.scaleInput(url), /video URL/i);
+});
+
+// The tailor edits the uncropped 1376×768 original of each host, so the model's 16:9 1K
+// answer lines up pixel for pixel with the still it was handed. That original was uploaded
+// to fal once, when the stills were branded (character-assets.json); the generated frames
+// module is where the show and the desk read it, so it is pinned to that source here.
+void test('each host carries the fal URL of its uncropped original, the still the tailor edits', async () => {
+  const { sources } = JSON.parse(await readFile('character-assets.json', 'utf8'));
+  assert.equal(videoFrames.host.originalUrl, sources['pepe-cartoon']);
+  assert.equal(videoFrames.guest.originalUrl, sources['gigachad-cartoon']);
+  for (const role of ['host', 'guest']) {
+    const url = new URL(videoFrames[role].originalUrl);
+    assert.equal(url.protocol, 'https:');
+    assert.ok(
+      url.hostname === 'fal.media' || url.hostname.endsWith('.fal.media'),
+      url.href,
+    );
+    assert.notEqual(
+      videoFrames[role].originalUrl,
+      videoFrames[role].source,
+      'the original is not the cropped 1344×768 conditioning frame',
+    );
+    assert.equal(videoFrames[role].width, 1344);
+  }
+  // The next regeneration must keep writing the field from the same source.
+  const generator = await readFile('scripts/video-frames.mjs', 'utf8');
+  assert.match(generator, /character-assets\.json/);
+  assert.match(generator, /\boriginalUrl\b/);
 });
 
 void test('a pinned cap keeps its canonical reference and defers obstructing gestures', () => {
