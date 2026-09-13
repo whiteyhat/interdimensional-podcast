@@ -17,8 +17,8 @@ void test('one failed cap health check does not take the cap off air; a long out
       if (!healthy) throw new TypeError('fetch failed');
       return Response.json({
         ready: true,
-        capQualified: true,
-        templateVersion: 'caps-v1',
+        tailor: true,
+        templateVersion: 'looks-v1',
       });
     }
     const body = JSON.parse(options.body);
@@ -57,11 +57,12 @@ void test('a site that says the cap is not ready is believed at once', async (t)
     if (String(url).startsWith('/api/sponsorship/assets'))
       return Response.json({
         ready,
-        capQualified: ready,
-        templateVersion: 'caps-v1',
+        tailor: ready,
+        templateVersion: 'looks-v1',
       });
     const body = JSON.parse(options.body);
-    if (body.action === 'heartbeat') offered.push(body.capabilities.cap);
+    if (body.action === 'heartbeat')
+      offered.push([body.capabilities.cap, body.capabilities.capTemplateVersion]);
     return Response.json(
       body.action === 'pull' ? { orders: [] } : { ok: true },
     );
@@ -71,5 +72,8 @@ void test('a site that says the cap is not ready is believed at once', async (t)
   ready = false;
   now += 21_000;
   await services.sync();
-  assert.deepEqual(offered, [true, false]);
+  assert.deepEqual(offered, [
+    [true, 'looks-v1'],
+    [false, 'looks-v1'],
+  ]);
 });
