@@ -30,7 +30,31 @@ const run = promisify(execFile);
 // The renderer, its templates and the qualification proof ship beside this file. Resolving
 // them from here means the service works whatever directory a platform starts it in.
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+// The tracker's template, now only what /render and /preview validate against.
 const TEMPLATE_VERSION = 'caps-v1';
+// The look the tailor makes. lib/sponsorship.ts exports the same literal as LOOK_VERSION; the site
+// compares it in leaseOrders and the asset gate, and a desk test pins the two together.
+const LOOK_VERSION = 'looks-v1';
+const FAL_ORIGIN = 'https://queue.fal.run';
+const TAILOR_MODEL = 'fal-ai/nano-banana-pro/edit';
+const JUDGE_ENDPOINT = 'openrouter/router/vision';
+const JUDGE_MODEL = 'google/gemini-2.5-flash';
+const FITS = 3;
+const MAX_TAILOR_BODY = 16 * 1024;
+// The stills the model dresses: the uncropped 1376×768 originals, byte for byte what fal already
+// hosts (character-assets.json `sources`) and what lib/video-frames.ts hashes as originalSha256.
+// The judge crops the answer the way scripts/video-frames.mjs crops these, so a look lines up
+// pixel for pixel with the frame every other shot is conditioned on.
+export const BASE_STILLS = {
+  host: {
+    path: 'public/pepe-cartoon.png',
+    url: 'https://v3b.fal.media/files/b/0aa99e7e/ViWtBAcKK0DXjM7kBLIvD_eid12yRD.png',
+  },
+  guest: {
+    path: 'public/gigachad-cartoon.png',
+    url: 'https://v3b.fal.media/files/b/0aa99e9a/UUct9hv94FEzgs2dz2H26_JZaGMdjK.png',
+  },
+};
 const MAX_UPLOAD = 4 * 1024 * 1024,
   MAX_VIDEO = 40 * 1024 * 1024,
   MAX_RENDER_BODY = 8 * 1024 * 1024;
@@ -79,6 +103,25 @@ const DEFAULTS = {
   drainMs: 100_000,
   // The height a verified composite is scaled to before it leaves; 0 sends it as rendered.
   broadcastHeight: BROADCAST_HEIGHT,
+  // The tailor's own lane; /render keeps its 95 s lane. A fit is one nano-banana edit (submit,
+  // queue and download inside tailorSubmitMs) judged inside judgeMs. Three fits and the tail
+  // (fetching the logo, the fallback print and the callback) make the deadline: 3 × 65 + 15 =
+  // 210 s, so a job settles inside it by construction. The site asks again after four minutes.
+  tailorDeadlineMs: 210_000,
+  tailorFitMs: 65_000,
+  tailorSubmitMs: 40_000,
+  judgeMs: 25_000,
+  tailorTailMs: 15_000,
+  tailorConcurrency: 2,
+  tailorQueue: 6,
+  logoFetchMs: 15_000,
+  // Every settlement is told to the site: three attempts of 20 s, 5 s apart.
+  callbackMs: 20_000,
+  callbackAttempts: 3,
+  callbackRetryMs: 5_000,
+  // fal is asked once at boot whether it answers at all; a desk it does not answer sells no cap.
+  falProbeMs: 5_000,
+  falPollMs: 2_000,
 };
 /** The desk's clock, for anything that has to agree with it. */
 export const MEDIA_DEFAULTS = Object.freeze({ ...DEFAULTS });
@@ -288,6 +331,7 @@ async function serviceVersion() {
       'broadcast/sponsor-media.mjs',
       'scripts/wearable-render.py',
       'scripts/wearable_panel.py',
+      'scripts/wardrobe.py',
     ])
       digest.update(await readFile(join(ROOT, path)));
     return digest.digest('hex').slice(0, 12);
@@ -665,7 +709,9 @@ export function createMediaService(options = {}) {
   const workdir = resolve(cfg.workdir || 'work/sponsor-media'),
     cacheDir = join(workdir, 'cache');
   const siteOrigin = originOf(cfg.siteOrigin),
-    testOrigin = testVideoOrigin(cfg.videoOriginForTests);
+    testOrigin = testVideoOrigin(cfg.videoOriginForTests),
+    // Tests stand in for fal's queue on loopback, through the same test-only door as takes.
+    falOrigin = testVideoOrigin(cfg.falOriginForTests) || FAL_ORIGIN;
   const inflight = new Map(),
     queue = [],
     active = new Set(),
@@ -691,11 +737,12 @@ export function createMediaService(options = {}) {
     },
     toolsOk: false,
     decoder: { mode: null },
+    fal: false,
     templates: null,
     version: null,
     booted: false,
   };
-  const checks = { tools: 0, decoder: 0 },
+  const checks = { tools: 0, decoder: 0, fal: 0 },
     retries = new Set();
   function again(check, ms) {
     if (closing) return;
@@ -766,14 +813,45 @@ export function createMediaService(options = {}) {
     if (!found.mode && cfg.decoder === undefined)
       again(checkDecoder, cfg.decoderRetryMs);
   }
+  // Whether fal answers at all, asked once at boot with the key it will be asked with. A desk
+  // without a key or a site to call back has no tailor and sells no cap; one fal will not answer
+  // is measured again until it does. The key goes in the header and nowhere else.
+  async function checkFal() {
+    checks.fal++;
+    if (!cfg.falKey || !siteOrigin) {
+      machine.fal = false;
+      return;
+    }
+    try {
+      const response = await fetch(`${falOrigin}/${TAILOR_MODEL}`, {
+        method: 'HEAD',
+        headers: { authorization: `Key ${cfg.falKey}` },
+        redirect: 'error',
+        signal: AbortSignal.timeout(cfg.falProbeMs),
+      });
+      await response.body?.cancel().catch(() => {});
+      machine.fal = true;
+    } catch (error) {
+      machine.fal = false;
+      log({
+        level: 'warn',
+        event: 'fal-probe',
+        attempt: checks.fal,
+        error: String(error?.message || error).slice(0, 120),
+      });
+      again(checkFal, cfg.toolRetryMs);
+    }
+  }
   const toolsChecked = checkTools();
   const decoding = prepared.then(checkDecoder);
+  const falChecked = checkFal();
   const booted = Promise.all([
     prepared,
     qualification,
     version,
     toolsChecked,
     decoding,
+    falChecked,
   ]).then(() => {
     machine.booted = true;
   });
@@ -791,11 +869,10 @@ export function createMediaService(options = {}) {
     const states = machine.templates ?? [];
     return {
       ready,
-      // No refunds means no selling a cap this desk cannot deliver: the qualification holds
-      // only where the renderer sees the pixels it was qualified on.
-      capQualified:
-        ready && states.length > 0 && states.every((t) => t.qualified),
-      templateVersion: TEMPLATE_VERSION,
+      // No refunds means no selling a cap this desk cannot deliver: a look needs a key for
+      // fal, a site to call back, and fal answering. The tracker's trials no longer gate a sale.
+      tailor: ready && !!cfg.falKey && !!siteOrigin && machine.fal === true,
+      templateVersion: LOOK_VERSION,
       templates: states,
       tools: machine.tools,
       decoder: machine.decoder.mode,
@@ -1739,6 +1816,9 @@ export function createMediaService(options = {}) {
       queued: queue.length,
       inflight: inflight.size,
       previews,
+      tailoring: 0,
+      tailorQueued: 0,
+      callbacks: 0,
       toolProbes: checks.tools,
       decoderProbes: checks.decoder,
       draining: closing,
@@ -1766,10 +1846,14 @@ export function configFromEnv(env = process.env) {
     python: env.WEARABLE_PYTHON || 'python3',
     workdir: env.SPONSOR_MEDIA_WORKDIR || 'work/sponsor-media',
     siteOrigin: env.SPONSOR_SITE_ORIGIN || undefined,
+    // The tailor's key. Only this desk holds it; the Cloudflare Worker never does.
+    falKey: env.FAL_KEY || undefined,
     concurrency: count(env.MEDIA_CONCURRENCY, DEFAULTS.concurrency, 1, 16),
     queue: count(env.MEDIA_QUEUE, DEFAULTS.queue, 0, 100),
     videoOriginForTests:
       env.NODE_ENV === 'test' ? env.SPONSOR_MEDIA_TEST_VIDEO_HOST : undefined,
+    falOriginForTests:
+      env.NODE_ENV === 'test' ? env.SPONSOR_MEDIA_TEST_FAL_HOST : undefined,
   };
 }
 
@@ -1902,7 +1986,8 @@ if (
       level: state.ready ? 'info' : 'warn',
       event: 'boot',
       ready: state.ready,
-      capQualified: state.capQualified,
+      tailor: state.tailor,
+      templateVersion: state.templateVersion,
       decoder: state.decoder,
       version: state.version,
       tools: state.tools,

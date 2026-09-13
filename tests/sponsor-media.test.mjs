@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import http from 'node:http';
 import {
+  BASE_STILLS,
   createMediaService,
   handleMediaRequest,
   MAX_LOGO,
@@ -116,7 +117,7 @@ void test('qualification requires matching trial proof and a working runtime, no
     const unavailable = missing.health();
     await missing.close();
     assert.equal(unavailable.ready, false);
-    assert.equal(unavailable.capQualified, false);
+    assert.equal(unavailable.tailor, false);
     assert.equal(unavailable.decoder, null);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -188,6 +189,118 @@ function take(bytes = Buffer.from(`take-${++takes}-${Date.now()}`)) {
   files.set(path, bytes);
   return `${FAL}${path}`;
 }
+
+// A stand-in for the site: it serves the normalized logo the desk fetches, and it receives the
+// look. `siteAnswers` are the statuses the next PUTs get, in order; then 200.
+const logos = new Map();
+const looks = [];
+let siteAnswers = [];
+const site = http.createServer((req, res) => {
+  const url = new URL(req.url, 'http://site');
+  const id = url.pathname.split('/').pop();
+  if (req.method === 'GET' && url.searchParams.get('part') === 'logo') {
+    const body = logos.get(url.pathname);
+    if (!body) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'image/png', 'content-length': body.length });
+    res.end(body);
+    return;
+  }
+  if (req.method === 'PUT' && url.searchParams.get('part') === 'look') {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      looks.push({ id, url: req.url, headers: req.headers, body: Buffer.concat(chunks) });
+      const status = siteAnswers.shift() ?? 200;
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ status: status === 200 ? 'qualified' : 'refused' }));
+    });
+    return;
+  }
+  res.writeHead(404);
+  res.end();
+});
+await new Promise((ready) => site.listen(0, '127.0.0.1', ready));
+const SITE = `http://127.0.0.1:${site.address().port}`;
+after(() => new Promise((done) => site.close(done)));
+
+// A stand-in for queue.fal.run: submit, status, response and cancel, for the edit and for the
+// vision judge. Each edit answers with a fresh picture on the fal.media stand-in above.
+const PASS_JUDGE = {
+  shirtLogo: true,
+  logoFidelity: 9,
+  legibility: 8,
+  capPresent: true,
+  capColourMatchesPlan: true,
+  capExtraText: false,
+  identityUnchanged: true,
+  sceneUnchanged: true,
+  extraText: false,
+};
+const falPlan = { hang: false, fail: false, foreign: false, head: 200, judgeAnswers: [] };
+const submissions = [];
+let statusPolls = 0,
+  cancels = 0;
+const falQueue = http.createServer((req, res) => {
+  const url = new URL(req.url, 'http://fal');
+  const json = (value, status = 200) => {
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(value));
+  };
+  if (req.method === 'HEAD') {
+    res.writeHead(falPlan.head);
+    res.end();
+    return;
+  }
+  if (req.method === 'POST') {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      const id = `req-${submissions.push({ endpoint: url.pathname.slice(1), input, authorization: req.headers.authorization, url: req.url })}`;
+      const origin = falPlan.foreign ? 'http://127.0.0.1:1' : FALQ;
+      json({
+        request_id: id,
+        status_url: `${origin}/requests/${id}/status`,
+        response_url: `${FALQ}/requests/${id}`,
+        cancel_url: `${FALQ}/requests/${id}/cancel`,
+      });
+    });
+    return;
+  }
+  const found = /^\/requests\/(req-\d+)(\/status|\/cancel)?$/.exec(url.pathname);
+  if (!found) {
+    res.writeHead(404);
+    res.end();
+    return;
+  }
+  const { endpoint, input } = submissions[Number(found[1].slice(4)) - 1];
+  if (found[2] === '/cancel') {
+    cancels++;
+    json({});
+    return;
+  }
+  if (found[2] === '/status') {
+    statusPolls++;
+    json({ status: falPlan.hang ? 'IN_QUEUE' : falPlan.fail ? 'FAILED' : 'COMPLETED' });
+    return;
+  }
+  if (endpoint === 'openrouter/router/vision') {
+    const answer = falPlan.judgeAnswers.shift() ?? PASS_JUDGE;
+    json({ output: `\`\`\`json\n${JSON.stringify(answer)}\n\`\`\``, usage: {} });
+    return;
+  }
+  const bytes = Buffer.concat([PNG_HEADER, Buffer.from(`fit:${input.seed}:${submissions.length}`)]);
+  const path = `/files/fit-${submissions.length}.png`;
+  files.set(path, bytes);
+  json({ images: [{ url: `${FAL}${path}`, width: 1376, height: 768, content_type: 'image/png' }], description: '' });
+});
+await new Promise((ready) => falQueue.listen(0, '127.0.0.1', ready));
+const FALQ = `http://127.0.0.1:${falQueue.address().port}`;
+after(() => new Promise((done) => falQueue.close(done)));
 
 // Stands in for scripts/wearable-render.py: waits, then writes an output and a report the way
 // the real one does for each of its three modes, or hangs holding a child of its own, or
@@ -440,8 +553,8 @@ void test('the desk listens on the port Railway injects and says it is not ready
   const state = await response.json();
   assert.equal(response.status, 503);
   assert.equal(state.ready, false);
-  assert.equal(state.capQualified, false);
-  assert.equal(state.templateVersion, 'caps-v1');
+  assert.equal(state.tailor, false);
+  assert.equal(state.templateVersion, 'looks-v1');
   assert.equal(state.tools.node, process.versions.node);
   assert.match(state.version, /^[a-f0-9]{12}$/);
   assert.ok(await waitFor('request'));
@@ -558,7 +671,7 @@ void test('a desk is not ready until it decodes the way caps were qualified, and
   // Railway's healthcheck reads this 503 and keeps the deployment it has.
   assert.equal(broken.status, 503);
   assert.equal(state.ready, false);
-  assert.equal(state.capQualified, false);
+  assert.equal(state.tailor, false);
   assert.equal(state.decoder, null);
   assert.equal(state.tools.cv2, TOOLS.cv2);
   const refused = await post(media, order(take()));
@@ -582,7 +695,7 @@ void test('a desk is not ready until it decodes the way caps were qualified, and
   );
   const healed = await (await fetch(`${media.url}/health`)).json();
   assert.equal(healed.ready, true);
-  assert.equal(healed.capQualified, true);
+  assert.equal(healed.templateVersion, 'looks-v1');
   assert.equal(healed.decoder, 'direct');
   // A measurement that passed is not taken again.
   await pause(300);
@@ -600,7 +713,8 @@ void test(
     const state = await response.json();
     assert.equal(response.status, 200);
     assert.equal(state.ready, true);
-    assert.equal(state.capQualified, true);
+    assert.equal(state.tailor, false, 'no FAL_KEY on this desk');
+    assert.equal('capQualified' in state, false);
     for (const tool of ['python', 'cv2', 'numpy', 'ffmpeg', 'node'])
       assert.match(state.tools[tool], /^\S+$/, `${tool} version missing`);
     // Either OpenCV decodes like the qualification run, or ffmpeg can be made to.
@@ -611,7 +725,7 @@ void test(
     const closedState = await refused.json();
     assert.equal(refused.status, 503);
     assert.equal(closedState.ready, false);
-    assert.equal(closedState.capQualified, false);
+    assert.equal(closedState.tailor, false);
     const short = await desk(t, { token: 'too-short' });
     assert.equal((await fetch(`${short.url}/health`)).status, 503);
   },
@@ -674,6 +788,44 @@ void test('/logo relays the script’s refusal as 422 and hides a machine fault 
   assert.equal(ok.json().logoSha256, sha(LOGO));
   assert.equal(ok.json().palette.primary, '#1B2A6B');
   assert.equal(ok.json().target, 'guest');
+});
+
+void test('/health says whether this desk can tailor, and which look version it makes', async (t) => {
+  const python = await fakeWardrobe('health-tailor');
+  const bare = await desk(t, { python });
+  const state = await (await fetch(`${bare.url}/health`)).json();
+  assert.equal(state.templateVersion, 'looks-v1');
+  assert.equal(state.tailor, false, 'no FAL_KEY, no tailor');
+  assert.equal('capQualified' in state, false);
+  // The site compares this literal in leaseOrders and the asset gate: the two must never drift.
+  const sponsorship = await readFile('lib/sponsorship.ts', 'utf8');
+  assert.equal(
+    /export const LOOK_VERSION = '([\w-]+)' as const;/.exec(sponsorship)?.[1],
+    state.templateVersion,
+    'lib/sponsorship.ts LOOK_VERSION and the desk disagree',
+  );
+  const dressed = await desk(t, { python, siteOrigin: SITE, falKey: 'fal-test-key', falOriginForTests: FALQ });
+  const ready = await (await fetch(`${dressed.url}/health`)).json();
+  assert.equal(ready.ready, true);
+  assert.equal(ready.tailor, true);
+  const keyOnly = await desk(t, { python, falKey: 'fal-test-key', falOriginForTests: FALQ });
+  assert.equal(keyOnly.service.health().tailor, false, 'nowhere to call back, no tailor');
+  const unreachable = await desk(t, { python, siteOrigin: SITE, falKey: 'fal-test-key', falOriginForTests: 'http://127.0.0.1:1' });
+  assert.equal(unreachable.service.health().tailor, false, 'fal never answered');
+  assert.ok(unreachable.logs.some((l) => l.event === 'fal-probe' && l.level === 'warn'));
+  assert.ok(!JSON.stringify(unreachable.logs).includes('fal-test-key'), 'the key was logged');
+});
+
+void test('the base stills the tailor shows fal are the uncropped originals fal already holds', async () => {
+  const assets = JSON.parse(await readFile('character-assets.json', 'utf8'));
+  assert.equal(BASE_STILLS.host.url, assets.sources['pepe-cartoon']);
+  assert.equal(BASE_STILLS.guest.url, assets.sources['gigachad-cartoon']);
+  const frames = await readFile('lib/video-frames.ts', 'utf8');
+  for (const [target, still] of Object.entries(BASE_STILLS)) {
+    assert.equal(still.path, `public/${target === 'host' ? 'pepe' : 'gigachad'}-cartoon.png`);
+    const pinned = new RegExp(`${target}: \\{[\\s\\S]*?originalSha256:\\s*'([a-f0-9]{64})'`).exec(frames)?.[1];
+    assert.equal(sha(await readFile(still.path)), pinned, `${still.path} is not the still lib/video-frames.ts hashes`);
+  }
 });
 
 void test('scratch left behind by a desk that died mid-take is swept at boot', async () => {
@@ -1163,7 +1315,7 @@ void test('a desk that cannot decode the way caps were qualified refuses to rend
   assert.equal(r.json().code, 'NOT_QUALIFIED');
   const state = await (await fetch(`${media.url}/health`)).json();
   assert.equal(state.decoder, null);
-  assert.equal(state.capQualified, false);
+  assert.equal(state.templateVersion, 'looks-v1');
   assert.equal(media.spawns.length, 0);
 });
 
