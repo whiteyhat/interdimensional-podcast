@@ -35,9 +35,9 @@ async function setup({ saved, available = assets, receipt = null, holdCatalog = 
           state.catalogCalls++;
           await gate;
           return route.fulfill({ json: {
-            products: ['message', 'spotlight', 'cap'].map(id => ({ id, title: id, priceCents: state.priceCents, frogPriceCents: state.frogPriceCents, available: state.available.size > 0, reason: state.available.size ? null : 'Payment services are unavailable.' })),
+            products: ['spotlight', 'cap'].map(id => ({ id, title: id, priceCents: state.priceCents, frogPriceCents: state.frogPriceCents, available: state.available.size > 0, reason: state.available.size ? null : 'Payment services are unavailable.' })),
             assets: ['USDC', 'SOL', 'FROGCLENCH'].map(id => ({ id, mint: id === 'SOL' || !state.available.has(id) ? null : '11111111111111111111111111111111', decimals: 6, available: state.available.has(id), reason: state.available.has(id) ? null : id === 'FROGCLENCH' ? 'FROGCLENCH mint is not configured.' : `${id} is temporarily unavailable.`, priceUsd: state.available.has(id) ? '1' : null })),
-            studioOnline: true, capabilities: { message: true, spotlight: true, cap: true }, capQueue: { host: 0, guest: 0 }, treasury: '11111111111111111111111111111111', clientRpcUrl: '/api/rpc', now: Date.now(),
+            studioOnline: true, capabilities: { message: false, spotlight: true, cap: true }, capQueue: { host: 0, guest: 0 }, treasury: '11111111111111111111111111111111', clientRpcUrl: '/api/rpc', now: Date.now(),
           } });
         }
         return route.fulfill({ json: url.searchParams.get('action') === 'activity' ? { orders: [] } : { receipt: state.receipt } });

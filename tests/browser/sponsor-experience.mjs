@@ -34,7 +34,6 @@ const loaded = (img) =>
 const assetList = ['USDC', 'SOL', 'FROGCLENCH'];
 const catalog = () => ({
   products: [
-    ['message', 500],
     ['spotlight', 2500],
     ['cap', 10000],
   ].map(([id, priceCents]) => ({
@@ -208,6 +207,16 @@ try {
     });
   assert.match(await tile('spotlight').innerText(), /Top seller/i);
   assert.match(await tile('cap').innerText(), /Most value/i);
+  assert.equal(
+    await panel.locator('.sponsor-product').count(),
+    2,
+    'only the spotlight and the podcast sponsorship are for sale',
+  );
+  assert.match(await tile('cap').innerText(), /Dress the host/);
+  assert.match(
+    await tile('cap').innerText(),
+    /Your logo on the tee, a cap in your colours/,
+  );
   // Choosing a product may never move what the customer is aiming at.
   const anchors = () =>
     page.evaluate(() => {
@@ -216,7 +225,7 @@ try {
       return [top('.sponsor-products'), top('.sponsor-form .sponsor-button')];
     });
   const resting = await anchors();
-  for (const value of ['cap', 'message', 'spotlight']) {
+  for (const value of ['cap', 'spotlight']) {
     await panel
       .locator(`input[name="sponsor-product"][value="${value}"]`)
       .check({ force: true });

@@ -5,7 +5,6 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
-  MessageCircle,
   ScanLine,
   Shirt,
   Sparkles,
@@ -13,7 +12,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import {
-  sponsorProducts,
+  sponsorOffers,
   validateSponsorDraft,
   type SponsorAsset,
   type SponsorCatalog,
@@ -57,7 +56,11 @@ const SponsorQR = dynamic(
     loading: () => <p className="sponsor-working">Preparing your QR…</p>,
   },
 );
-const ICONS = { message: MessageCircle, spotlight: Sparkles, cap: Shirt };
+const ICONS = { spotlight: Sparkles, cap: Shirt };
+const LINES = {
+  spotlight: 'Four turns. Your project.',
+  cap: productCopy.cap.short,
+};
 const BADGES: Partial<Record<SponsorDraft['product'], string>> = {
   spotlight: 'Top seller',
   cap: 'Most value',
@@ -332,7 +335,7 @@ export function SponsorPanel() {
     e.preventDefault();
     if (operation.current) return;
     const fields: Record<string, string> = {};
-    if (draft.product !== 'message' && !draft.projectName?.trim())
+    if (!draft.projectName?.trim())
       fields.projectName = 'Give your project a name.';
     if (draft.message.trim().length < 3)
       fields.message = 'Give the hosts a little more to work with.';
@@ -460,6 +463,12 @@ export function SponsorPanel() {
   }
   function newOrder(back: 1 | 2 = 1) {
     if (signing) return;
+    // A pass for a placement that came off sale is edited under an offer that is on sale.
+    setDraft((d) =>
+      sponsorOffers.some((p) => p.id === d.product)
+        ? d
+        : { ...d, product: emptyDraft.product },
+    );
     setReceipt(null);
     receiptRef.current = null;
     setToken(null);
@@ -487,7 +496,10 @@ export function SponsorPanel() {
       </legend>
       <div>
         {ASSETS.map((a) => (
-          <label key={a} className={asset === a ? 'selected' : ''}>
+          <label
+            key={a}
+            className={`${a === 'FROGCLENCH' ? 'frog' : 'alt'}${asset === a ? ' selected' : ''}`}
+          >
             <input
               type="radio"
               name="sponsor-asset"
@@ -515,7 +527,7 @@ export function SponsorPanel() {
       </div>
       <h2 id="sponsor-title">Be part of the show.</h2>
       <p className="sponsor-lead">
-        A thought. A project. A tee and cap with your name on it.
+        A project. A tee and cap with your name on it.
       </p>
       {received && receipt ? (
         <SponsorReceipt
@@ -539,7 +551,7 @@ export function SponsorPanel() {
               <>
                 <fieldset className="sponsor-products" disabled={locked}>
                   <legend className="sr-only">Choose your sponsorship</legend>
-                  {sponsorProducts.map((p, i) => {
+                  {sponsorOffers.map((p) => {
                     const Icon = ICONS[p.id];
                     const selected = draft.product === p.id;
                     return (
@@ -566,19 +578,13 @@ export function SponsorPanel() {
                               </span>
                             )}
                           </span>
-                          <small>
-                            {i === 0
-                              ? 'A message, answered on air'
-                              : i === 1
-                                ? 'Four turns. Your project.'
-                                : 'Your logo on Pepe or Chad'}
-                          </small>
+                          <small>{LINES[p.id]}</small>
                         </span>
-                        <span className="sponsor-product-price">
+                        <span
+                          className={`sponsor-product-price${asset === 'FROGCLENCH' ? ' discounted' : ''}`}
+                        >
                           {dollars(catalogPriceCents(catalog, p.id, asset))}
-                          <small>
-                            {asset === 'FROGCLENCH' ? 'with FROGCLENCH' : 'USD'}
-                          </small>
+                          <small>{asset === 'FROGCLENCH' ? '−30%' : 'USD'}</small>
                         </span>
                         <span className="sponsor-radio" aria-hidden="true">
                           {selected && <Check size={10} />}
@@ -629,29 +635,24 @@ export function SponsorPanel() {
                     ))}
                   </fieldset>
                 )}
-                {draft.product !== 'message' && (
-                  <label
-                    className="sponsor-field"
-                    htmlFor="sponsor-projectName"
-                  >
-                    <span>Project or token name</span>
-                    <input
-                      id="sponsor-projectName"
-                      name="projectName"
-                      value={draft.projectName || ''}
-                      maxLength={20}
-                      placeholder="Your project, in plain words"
-                      onChange={(e) => change({ projectName: e.target.value })}
-                      aria-invalid={!!fieldErrors.projectName}
-                      aria-describedby={
-                        fieldErrors.projectName
-                          ? 'sponsor-projectName-error'
-                          : undefined
-                      }
-                    />
-                    {errorFor('projectName')}
-                  </label>
-                )}
+                <label className="sponsor-field" htmlFor="sponsor-projectName">
+                  <span>Project or token name</span>
+                  <input
+                    id="sponsor-projectName"
+                    name="projectName"
+                    value={draft.projectName || ''}
+                    maxLength={20}
+                    placeholder="Your project, in plain words"
+                    onChange={(e) => change({ projectName: e.target.value })}
+                    aria-invalid={!!fieldErrors.projectName}
+                    aria-describedby={
+                      fieldErrors.projectName
+                        ? 'sponsor-projectName-error'
+                        : undefined
+                    }
+                  />
+                  {errorFor('projectName')}
+                </label>
                 {draft.product === 'cap' && (
                   <div className="sponsor-upload">
                     <input
@@ -693,9 +694,7 @@ export function SponsorPanel() {
                 )}
                 <label className="sponsor-field" htmlFor="sponsor-message">
                   <span>
-                    {draft.product === 'message'
-                      ? 'Give them something to talk about'
-                      : 'What should they know?'}
+                    What should they know?
                     <small>{draft.message.length}/240</small>
                   </span>
                   <textarea
@@ -704,11 +703,7 @@ export function SponsorPanel() {
                     value={draft.message}
                     maxLength={240}
                     rows={4}
-                    placeholder={
-                      draft.product === 'message'
-                        ? 'A question, a hot take, a story from the trenches…'
-                        : 'Tell us what you’re building. Keep claims specific and accurate.'
-                    }
+                    placeholder="Tell us what you’re building. Keep claims specific and accurate."
                     onChange={(e) => change({ message: e.target.value })}
                     aria-invalid={!!fieldErrors.message}
                     aria-describedby={
