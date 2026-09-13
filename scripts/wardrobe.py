@@ -188,15 +188,70 @@ def palette(image):
     }
 
 
+def padded(zone):
+    x0, y0, x1, y1 = zone
+    return max(0, x0 - ZONE_PAD), max(0, y0 - ZONE_PAD), min(FRAME[1] - 2 * CROP[0], x1 + ZONE_PAD), min(FRAME[0], y1 + ZONE_PAD)
+
+
+def judge(base_path, candidate_path, target, palette, output):
+    """A gross-failure veto on one fit, on the broadcast crop of both pictures: outside the wardrobe
+    zones the frame must be the still it was edited from, and the logo's inks must be on the chest.
+    The cropped candidate is written whatever the verdict, so a refused fit can still be looked at."""
+    base = cv2.imread(str(base_path), cv2.IMREAD_COLOR)
+    if base is None or base.shape[:2] != FRAME:
+        raise Refusal('GEOMETRY', 'The base still is not 1376x768.')
+    candidate = cv2.imread(str(candidate_path), cv2.IMREAD_COLOR)
+    if candidate is None or candidate.shape[:2] != FRAME:
+        shape = 'undecodable' if candidate is None else '%dx%d' % (candidate.shape[1], candidate.shape[0])
+        raise Refusal('GEOMETRY', 'The fit is %s, not 1376x768 (1344x768 after the crop).' % shape)
+    base = base[:, CROP[0]:CROP[1]]
+    candidate = candidate[:, CROP[0]:CROP[1]]
+    data = encode_png(candidate, output)
+    drift = np.abs(candidate.astype(np.int16) - base.astype(np.int16)).mean(axis=2)
+    outside = np.ones(drift.shape, bool)
+    for zone in ZONES[target].values():
+        x0, y0, x1, y1 = padded(zone)
+        outside[y0:y1, x0:x1] = False
+    agreement = float((drift[outside] <= DRIFT_PIXEL).mean())
+    mean_drift = float(drift[outside].mean())
+    x0, y0, x1, y1 = padded(ZONES[target]['torso'])
+    torso = candidate[y0:y1, x0:x1]
+    present = True
+    for cluster in palette['clusters']:
+        if cluster['share'] < INK_SHARE:
+            continue
+        if int((lab_distance(torso, hex_to_bgr(cluster['hex'])) <= INK_DE).sum()) < INK_PIXELS:
+            present = False
+    result = {
+        'pixelAgreement': round(agreement, 4),
+        'meanDrift': round(mean_drift, 3),
+        'inkPresent': present,
+        'sha256': sha256(data),
+        'width': int(candidate.shape[1]),
+        'height': int(candidate.shape[0]),
+    }
+    if agreement < DRIFT_AGREEMENT or mean_drift > DRIFT_MEAN:
+        return {'ok': False, 'code': 'DRIFT', 'message': 'The frame changed outside the tee and cap.', **result}
+    if not present:
+        return {'ok': False, 'code': 'INK', 'message': "The logo's colours are not on the chest.", **result}
+    return {'ok': True, **result}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=['normalize', 'zones'])
+    parser.add_argument('mode', choices=['normalize', 'judge', 'zones'])
     parser.add_argument('--input')
     parser.add_argument('--output')
+    parser.add_argument('--base')
+    parser.add_argument('--candidate')
+    parser.add_argument('--target', choices=['host', 'guest'])
+    parser.add_argument('--palette')
     args = parser.parse_args(argv)
     try:
         if args.mode == 'zones':
             result = {'ok': True, 'zones': ZONES, 'wearers': WEARERS, 'pad': ZONE_PAD}
+        elif args.mode == 'judge':
+            result = judge(args.base, args.candidate, args.target, json.loads(Path(args.palette).read_text()), args.output)
         else:
             image = normalize(args.input)
             data = encode_png(image, args.output)

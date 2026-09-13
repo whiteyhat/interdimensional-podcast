@@ -214,5 +214,83 @@ class PaletteTest(unittest.TestCase):
         self.assertEqual(a, b)
 
 
+class JudgeTest(unittest.TestCase):
+    """Calibrated on the committed stills (their sha256 are pinned in lib/video-frames.ts)."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = Path(self.dir.name)
+        self.base = ROOT / 'public/pepe-cartoon.png'
+        self.assertEqual(hashlib.sha256(self.base.read_bytes()).hexdigest(), 'a0a82631870c4ae63d3f1091e1cd4c9342950bbbc7ac23d0f25b1528fae80e99')
+        self.pixels = cv2.imread(str(self.base))
+        self.assertEqual(self.pixels.shape, (768, 1376, 3))
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def judge(self, candidate, palette_hex='#294CA0', target='host', base=None):
+        cand = self.path / 'candidate.png'
+        cv2.imwrite(str(cand), candidate)
+        palette = self.path / 'palette.json'
+        palette.write_text(json.dumps({'clusters': [{'hex': palette_hex, 'share': 1.0}], 'primary': palette_hex, 'secondary': palette_hex, 'accent': palette_hex, 'monochrome': False}))
+        output = self.path / 'look.png'
+        code, report = run('judge', '--base', str(base or self.base), '--candidate', str(cand), '--target', target, '--palette', str(palette), '--output', str(output))
+        self.assertEqual(code, 0, report)
+        return report, output
+
+    def dressed(self, zones=w.ZONES['host'], print_colour=(107, 42, 27)):
+        """The base with only the tee and cap zones changed, and a flat print on the chest."""
+        cand = self.pixels.copy()
+        x0, y0, x1, y1 = zones['torso']
+        cand[y0:y1, 16 + x0:16 + x1] = (cand[y0:y1, 16 + x0:16 + x1] * 0.5).astype(np.uint8)
+        cand[y0 + 120:y0 + 220, 16 + x0 + 230:16 + x0 + 380] = print_colour
+        x0, y0, x1, y1 = zones['cap']
+        cand[y0:y1, 16 + x0:16 + x1] = (cand[y0:y1, 16 + x0:16 + x1] * 0.6).astype(np.uint8)
+        return cand
+
+    def test_the_untouched_still_passes_and_its_crop_is_the_video_frame(self):
+        report, output = self.judge(self.pixels)
+        self.assertTrue(report['ok'], report)
+        self.assertEqual(report['pixelAgreement'], 1.0)
+        self.assertEqual(report['meanDrift'], 0.0)
+        self.assertTrue(report['inkPresent'])
+        self.assertEqual((report['width'], report['height']), (1344, 768))
+        self.assertEqual(report['sha256'], hashlib.sha256(output.read_bytes()).hexdigest())
+        video = cv2.imread(str(ROOT / 'public/pepe-video.png'))
+        self.assertTrue(np.array_equal(cv2.imread(str(output)), video), 'the crop is not the one video-frames.mjs made')
+
+    def test_a_dressed_still_passes_when_the_print_carries_the_ink(self):
+        report, _ = self.judge(self.dressed(), palette_hex='#1B2A6B')
+        self.assertTrue(report['ok'], report)
+        self.assertGreaterEqual(report['pixelAgreement'], 0.9)
+        self.assertLessEqual(report['meanDrift'], 6)
+
+    def test_a_dressed_still_without_the_ink_on_the_chest_fails_ink(self):
+        report, _ = self.judge(self.dressed(), palette_hex='#FF00FF')
+        self.assertEqual((report['ok'], report['code']), (False, 'INK'))
+        self.assertFalse(report['inkPresent'])
+        self.assertGreaterEqual(report['pixelAgreement'], 0.9)
+
+    def test_a_frame_that_changed_everywhere_fails_drift(self):
+        brighter = np.clip(self.pixels.astype(int) + 20, 0, 255).astype(np.uint8)
+        report, _ = self.judge(brighter)
+        self.assertEqual((report['ok'], report['code']), (False, 'DRIFT'))
+        self.assertLess(report['pixelAgreement'], 0.5)
+        self.assertGreater(report['meanDrift'], 6)
+
+    def test_the_wrong_geometry_is_refused_never_resized(self):
+        report, output = self.judge(cv2.imread(str(ROOT / 'public/pepe-video.png')))
+        self.assertEqual((report['ok'], report['code']), (False, 'GEOMETRY'))
+        self.assertIn('1344x768', report['message'])
+        self.assertFalse(output.exists())
+
+    def test_the_guest_still_passes_against_its_own_zones(self):
+        guest = ROOT / 'public/gigachad-cartoon.png'
+        pixels = cv2.imread(str(guest))
+        self.pixels = pixels
+        report, _ = self.judge(self.dressed(zones=w.ZONES['guest']), palette_hex='#1B2A6B', target='guest', base=guest)
+        self.assertTrue(report['ok'], report)
+
+
 if __name__ == '__main__':
     unittest.main()
