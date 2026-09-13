@@ -31,8 +31,11 @@ void test('init cannot overwrite configuration, and prelaunch reports need no ke
 void test('launch checks reject omitted or altered public declarations', async () => {
   const config = { ...template, website: 'https://example.com' };
   const report = { schemaVersion: 1, name: config.name, symbol: config.symbol, network: config.network, disclosure: DISCLOSURE, wallets: config.wallets };
-  await checkDisclosure(config, async (_url, json = true) => json ? report : undefined);
-  await assert.rejects(() => checkDisclosure(config, async (_url,json = true) => json ? { ...report, wallets: [] } : undefined), /declarations/i);
+  await checkDisclosure(config, async url => {
+    assert.equal(url, 'https://example.com/launch/report.json');
+    return report;
+  });
+  await assert.rejects(() => checkDisclosure(config, async () => ({ ...report, wallets: [] })), /declarations/i);
   await assert.rejects(() => checkDisclosure(config, async () => ({ ...report, disclosure: 'Independent holders' })), /register/i);
 });
 void test('metadata/config digests do not depend on JSON object property order', () => {

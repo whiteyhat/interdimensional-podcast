@@ -38,19 +38,18 @@ const help = `Usage: node scripts/launch.mjs <command> [options]
 The tool reads SOLANA_RPC_URL and PINATA_JWT from environment or .dev.vars.
 No creator private key is accepted. Deployment is a separate explicit operation.
 `;
-async function fetchPublic(url, json = true) {
+async function fetchPublic(url) {
   let response;
   try { response = await fetch(url, { signal: AbortSignal.timeout(15000), redirect: 'error' }); }
   catch { throw new Error('The configured public website or metadata is unreachable.'); }
   if (!response.ok) throw new Error(`Public launch resource returned HTTP ${response.status}.`);
-  if (!json) { await response.body?.cancel(); return; }
   const data = await response.text();
   if (data.length > 1_000_000) throw new Error('Public launch document is too large.');
   try { return JSON.parse(data); } catch { throw new Error('Public launch resource is not valid JSON.'); }
 }
 export async function checkDisclosure(config, fetcher = fetchPublic) {
   const origin = new URL(config.website).origin;
-  const [, report] = await Promise.all([fetcher(`${origin}/allocations`, false), fetcher(`${origin}/launch/report.json`)]);
+  const report = await fetcher(`${origin}/launch/report.json`);
   if (report?.schemaVersion !== 1 || report.disclosure !== DISCLOSURE || report.network !== config.network || report.name !== config.name || report.symbol !== config.symbol || !Array.isArray(report.wallets)) throw new Error('The public wallet register does not match this launch.');
   const declarations = report.wallets.map(w => ({ address: w.address, label: w.label, purpose: w.purpose, plannedTokens: w.plannedTokens, maySell: w.maySell }));
   if (digest(declarations) !== digest(config.wallets)) throw new Error('Publish the current project wallet declarations before launch.');

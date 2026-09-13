@@ -16,7 +16,7 @@ void test('checkout persistence retains an unfinished draft and asset without tr
   assert.equal(saved.draft.product, 'cap');
   assert.equal(saved.asset, 'FROGCLENCH');
   assert.equal(saved.token, 'a'.repeat(48));
-  assert.equal(C.readCheckout('{broken').draft.product, 'message');
+  assert.equal(C.readCheckout('{broken').draft.product, 'spotlight');
   assert.equal(
     C.readCheckout(
       JSON.stringify({ version: 1, asset: 'BTC', draft: { product: 'scam' } }),
@@ -28,6 +28,14 @@ void test('checkout persistence retains an unfinished draft and asset without tr
       .token,
     null,
   );
+});
+void test('checkout restores drafts for all currently offered placements', () => {
+  for (const product of ['message', 'spotlight', 'cap']) {
+    const saved = C.readCheckout(
+      JSON.stringify({ version: 1, draft: { product, name: 'ser' } }),
+    );
+    assert.equal(saved.draft.product, product);
+  }
 });
 void test('an ambiguous wallet response stays attached to its receipt and must not offer payment again', () => {
   const receipt = {
