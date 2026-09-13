@@ -15,6 +15,9 @@ COIN_MINT=
 COIN_NAME=Frogclench
 COIN_TICKER=FROGCLENCH
 # Operator-side only: scripts/launch.mjs uses Pinata for image and metadata uploads.
+# The launch CLI authenticates with PINATA_JWT. Keep all three credentials private.
+PINATA_API_KEY=
+PINATA_API_SECRET=
 PINATA_JWT=
 # Wallet that receives every five-dollar payment. It must already hold a token account
 # for the coin (buy a dust amount once) or quotes answer 409 TREASURY.
