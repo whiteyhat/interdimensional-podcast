@@ -57,7 +57,7 @@ GigaChad takes a sip of tea about every 70 seconds of playback, and Pepe lights 
 
 Shots generate at native 768P with matching first and last frames, then receive a uniform upscale to 1080 pixels high. H3's [1080P latent refinement](https://fal.ai/models/minimax/h3-max-turbo/image-to-video/api) changes horizontal and vertical geometry between the boundary images and the generated interior. Exact references reduce that stretch but do not eliminate it. The [deterministic scaler](https://fal.ai/models/fal-ai/workflow-utilities/scale-video/api) receives only a target height, preserving the source aspect ratio, frame timing and audio. Current output is 1890×1080 and fills the fixed 16:9 stage with a consistent crop. These are upscaled native frames, without the provider's generative 1080P refinement. Generation and scaling jobs are cached separately so a retry does not pay for the same speech twice.
 
-`lib/video-frames.ts` points to prepared 1344×768 references, matching the native generation canvas. After regenerating artwork, run `node scripts/video-frames.mjs` (requires ffmpeg and `FAL_KEY`) to prepare and upload both frames again. This preserves the original artwork and updates the generated frame manifest. Restart the studio run to clear footage made with the old pipeline. Files such as `work/continuity/current.mp4`, `continuous.mp4` and `aligned.mp4` are retained diagnostic failures; they are not loaded by the studio. Verified replacement examples live in `work/continuity/verified/`.
+`lib/video-frames.ts` points to prepared 1344×768 references, matching the native generation canvas, and to the uncropped 1376×768 original of each host (`originalUrl`), which the media desk tailors a sponsor's tee and cap onto. After regenerating artwork, run `node scripts/video-frames.mjs` (requires ffmpeg and `FAL_KEY`) to prepare and upload both frames again. This preserves the original artwork and updates the generated frame manifest. Restart the studio run to clear footage made with the old pipeline. Files such as `work/continuity/current.mp4`, `continuous.mp4` and `aligned.mp4` are retained diagnostic failures; they are not loaded by the studio. Verified replacement examples live in `work/continuity/verified/`.
 
 Conversational rhythm is directed, not left to the writer. Asked for variety it returns four turns of the same size every time, so `turnPlan` in `lib/show.ts` hands each batch an explicit shape: who speaks, and whether each turn is a beat (2-7 words), a normal turn (9-16) or a run (18-25). The shapes rotate, so the rhythm never becomes a pattern of its own, and a character may hold the floor for two turns but never three (`runsOk`). The writer names its own speakers with a `Pepe:` or `GigaChad:` prefix; if it forgets one or tries to monologue, `parseLines` quietly falls back to alternating rather than discarding the exchange. `shotDuration` keeps every shot at least 10 seconds so the full render, upscale, and download pipeline can keep up. A longer line can use 11 seconds. A beat renders as a reaction shot: the character says its few words at a normal pace and then listens on camera.
 
@@ -104,9 +104,10 @@ Only one of them may be on air at a time, and the site enforces it.
 
 ## Checks
 
-The premium sponsorship catalog, payment/recovery services, cap qualification and staging release
-checks are documented in [Sponsorship operations](docs/SPONSORSHIP.md). New sponsorship checkout
-is opt-in; keep `SPONSOR_ENABLED=false` until the staging rehearsal passes.
+The premium sponsorship catalog, payment/recovery services, the tailored tee and cap (one still
+per logo and host, made after payment and judged before it airs) and staging release checks are
+documented in [Sponsorship operations](docs/SPONSORSHIP.md). New sponsorship checkout is opt-in;
+keep `SPONSOR_ENABLED=false` until the staging rehearsal passes.
 
 ```sh
 node --test tests/engine.test.mjs tests/gestures.test.mjs tests/video-render.test.mjs tests/topics.test.mjs tests/gnews.test.mjs tests/requests.test.mjs tests/coin.test.mjs tests/pumpchat.test.mjs tests/air.test.mjs
