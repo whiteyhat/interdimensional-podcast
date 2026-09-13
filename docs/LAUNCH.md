@@ -41,6 +41,8 @@ duration of a broadcast; deploying a replacement container interrupts the show.
 needs a rebuild, not just a redeploy**.
 
 ```sh
+(
+set -e
 git fetch origin
 test "$(git branch --show-current)" = main
 test -z "$(git status --porcelain)"
@@ -49,6 +51,7 @@ npm test && npx tsc --noEmit && npm run build
 node --test tests/launch-*.test.mjs tests/solana.test.mjs tests/rpcproxy.test.mjs
 # Continue only when every check above passed and both broadcast boxes are off.
 npm run deploy
+)
 ```
 
 Secrets, once each (`npx wrangler secret put NAME --config dist/server/wrangler.json`):
