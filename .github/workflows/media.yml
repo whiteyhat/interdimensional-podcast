@@ -88,15 +88,17 @@ jobs:
             echo "::error::Could not read both pins from broadcast/Dockerfile.sponsor-media."
             exit 1
           fi
-          python -m pip install --no-cache-dir $PINS pytest
+          python -m pip install --no-cache-dir $PINS
 
       - run: npm ci
 
       - name: Renderer
         run: python tests/wearable-render.test.py
 
+      # Run as a script, like the renderer test: pytest reads the dot in the file name as a
+      # package and refuses to import it.
       - name: Tailor scripts
-        run: python -m pytest -q tests/wardrobe.test.py
+        run: python tests/wardrobe.test.py
 
       # The media tests skip themselves when the vision runtime is missing, which is right on a
       # laptop and wrong here: a skip in this job would mean it checked nothing.

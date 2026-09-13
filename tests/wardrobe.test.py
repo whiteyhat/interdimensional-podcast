@@ -1,5 +1,5 @@
 """scripts/wardrobe.py: the tailor's deterministic half, on synthetic logos and the committed stills."""
-import hashlib, importlib.util, json, subprocess, sys, tempfile, unittest
+import hashlib, importlib.util, json, re, subprocess, sys, tempfile, unittest
 from pathlib import Path
 import cv2
 import numpy as np
@@ -221,7 +221,11 @@ class JudgeTest(unittest.TestCase):
         self.dir = tempfile.TemporaryDirectory()
         self.path = Path(self.dir.name)
         self.base = ROOT / 'public/pepe-cartoon.png'
-        self.assertEqual(hashlib.sha256(self.base.read_bytes()).hexdigest(), 'a0a82631870c4ae63d3f1091e1cd4c9342950bbbc7ac23d0f25b1528fae80e99')
+        # The still the tailor dresses is the one lib/video-frames.ts hashes (and fal holds);
+        # a regenerated still must be re-pinned there first, which is where the studio reads it.
+        frames = (ROOT / 'lib/video-frames.ts').read_text()
+        pinned = re.search(r"host: \{[\s\S]*?originalSha256:\s*'([a-f0-9]{64})'", frames).group(1)
+        self.assertEqual(hashlib.sha256(self.base.read_bytes()).hexdigest(), pinned)
         self.pixels = cv2.imread(str(self.base))
         self.assertEqual(self.pixels.shape, (768, 1376, 3))
 
