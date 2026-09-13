@@ -532,3 +532,160 @@ void test('settlement says whether this is the payment that paid the order', asy
     'both transfers are still on record',
   );
 });
+// ---- looks: one sponsor_assets row per (logo, character), moved along by the tailor's callbacks.
+const ASSET = 'a'.repeat(64);
+const LOOK_SHA = 'b'.repeat(64);
+const PALETTE = {
+  clusters: [{ hex: '#112233', share: 1 }],
+  primary: '#112233',
+  secondary: '#112233',
+  accent: '#112233',
+  monochrome: false,
+};
+const logoMeta = (extra = {}) => ({
+  kind: 'cap',
+  target: 'host',
+  templateVersion: 'looks-v1',
+  logoSha256: 'c'.repeat(64),
+  logoUrl: `https://show.test/api/sponsorship/assets/${ASSET}?part=logo`,
+  palette: PALETTE,
+  ...extra,
+});
+function insertAsset(d, status, meta, createdAt = 100) {
+  d.sql
+    .prepare(
+      'INSERT OR REPLACE INTO sponsor_assets(id,status,url,mime,created_at,metadata) VALUES(?,?,?,?,?,?)',
+    )
+    .run(ASSET, status, meta.logoUrl, 'image/png', createdAt, JSON.stringify(meta));
+}
+const readAsset = (d) => {
+  const row = d.sql.prepare('SELECT * FROM sponsor_assets WHERE id=?').get(ASSET);
+  return { ...row, metadata: JSON.parse(row.metadata) };
+};
+const lookUrl = (sha) =>
+  `https://show.test/api/sponsorship/assets/${ASSET}?part=look&v=${sha}`;
+const look = (sha, extra = {}) => ({
+  kind: 'look',
+  sha256: sha,
+  url: lookUrl(sha),
+  sourceUrl: lookUrl(sha),
+  look: {
+    sha256: sha,
+    model: 'fal-ai/nano-banana-pro/edit',
+    fit: 1,
+    round: 1,
+    verdict: { judge: 'ok' },
+    ...extra,
+  },
+  round: 1,
+});
+
+void test('a tailor request is written whole, once per round', async () => {
+  const d = await fixture();
+  insertAsset(d, 'logo', logoMeta());
+  await db.markTailorRequested(d, ASSET, { round: 1, requestedAt: 500 });
+  assert.deepEqual(readAsset(d).metadata.tailor, { round: 1, requestedAt: 500 });
+  await db.markTailorRequested(d, ASSET, {
+    round: 2,
+    requestedAt: 900,
+    reasons: ['blurry'],
+  });
+  const { metadata } = readAsset(d);
+  assert.deepEqual(metadata.tailor, {
+    round: 2,
+    requestedAt: 900,
+    reasons: ['blurry'],
+  });
+  assert.equal(metadata.kind, 'cap', 'the rest of the metadata is untouched');
+});
+
+void test('a look moves the asset through the allowed transitions and never downgrades a finished one', async () => {
+  const d = await fixture();
+  insertAsset(d, 'logo', logoMeta({ tailor: { round: 1, requestedAt: 500 } }));
+  // A deadline is not a verdict on the logo: the status stays logo, the outcome is recorded.
+  assert.equal(
+    await db.applyLook(d, ASSET, { kind: 'deferred', outcome: 'deadline', round: 1 }),
+    'logo',
+  );
+  let a = readAsset(d);
+  assert.equal(a.status, 'logo');
+  assert.equal(a.metadata.tailor.outcome, 'deadline');
+  assert.equal(typeof a.metadata.tailor.at, 'number');
+  // logo -> refused: the reason is kept for the receipt and appended for the audit.
+  assert.equal(
+    await db.applyLook(d, ASSET, { kind: 'refused', reason: 'Too thin.', round: 2 }),
+    'refused',
+  );
+  a = readAsset(d);
+  assert.equal(a.status, 'refused');
+  assert.equal(a.metadata.reason, 'Too thin.');
+  assert.deepEqual(a.metadata.tailor.reasons, ['Too thin.']);
+  assert.equal(a.metadata.tailor.round, 2);
+  // The same refusal again changes nothing.
+  const refusedRow = d.sql.prepare('SELECT metadata FROM sponsor_assets WHERE id=?').get(ASSET);
+  await db.applyLook(d, ASSET, { kind: 'refused', reason: 'Too thin.', round: 2 });
+  assert.deepEqual(d.sql.prepare('SELECT metadata FROM sponsor_assets WHERE id=?').get(ASSET), refusedRow);
+  // refused -> qualified: a later round that lands a look rescues the asset.
+  assert.equal(await db.applyLook(d, ASSET, { ...look(LOOK_SHA), round: 3 }), 'qualified');
+  a = readAsset(d);
+  assert.equal(a.status, 'qualified');
+  assert.equal(a.url, lookUrl(LOOK_SHA), 'the public URL is now the look');
+  assert.equal(a.metadata.sourceUrl, lookUrl(LOOK_SHA));
+  assert.equal(a.metadata.sha256, LOOK_SHA);
+  assert.equal(a.metadata.look.sha256, LOOK_SHA);
+  assert.equal(a.metadata.reason, undefined, 'a rescued asset carries no refusal');
+  assert.equal(a.metadata.tailor.outcome, 'look');
+  assert.equal(a.metadata.tailor.round, 3);
+  // A finished asset never changes: not for a new look, a refusal, or a deadline.
+  const before = d.sql
+    .prepare('SELECT status,url,metadata FROM sponsor_assets WHERE id=?')
+    .get(ASSET);
+  assert.equal(await db.applyLook(d, ASSET, { ...look('d'.repeat(64)), round: 3 }), 'qualified');
+  assert.equal(
+    await db.applyLook(d, ASSET, { kind: 'refused', reason: 'Late verdict.', round: 3 }),
+    'qualified',
+  );
+  assert.equal(
+    await db.applyLook(d, ASSET, { kind: 'deferred', outcome: 'error', round: 3 }),
+    'qualified',
+  );
+  assert.deepEqual(
+    d.sql.prepare('SELECT status,url,metadata FROM sponsor_assets WHERE id=?').get(ASSET),
+    before,
+  );
+});
+
+void test('a fallback look is replaced by a real fit, but not while the cap is on air', async () => {
+  const d = await fixture();
+  insertAsset(d, 'logo', logoMeta());
+  assert.equal(
+    await db.applyLook(d, ASSET, { ...look(LOOK_SHA, { fallback: 'cap-v1' }), round: 1 }),
+    'qualified',
+  );
+  assert.equal(readAsset(d).metadata.look.fallback, 'cap-v1');
+  // Another fallback for the same asset is no improvement: nothing changes.
+  const other = 'e'.repeat(64);
+  assert.equal(
+    await db.applyLook(d, ASSET, { ...look(other, { fallback: 'cap-v1' }), round: 2 }),
+    'qualified',
+  );
+  assert.equal(readAsset(d).metadata.look.sha256, LOOK_SHA);
+  // An order wearing this asset is on air: the look must not change under it.
+  await paidCap(d, 'wearing', 'host', 300);
+  d.sql
+    .prepare(
+      "UPDATE sponsor_orders SET draft=json_set(draft,'$.assetId',?),status='playing',lease_owner='studio',lease_token='t',lease_until=? WHERE id='wearing'",
+    )
+    .run(ASSET, Date.now() + 45000);
+  assert.equal(await db.assetOnAir(d, ASSET), true);
+  assert.equal(await db.applyLook(d, ASSET, { ...look(other), round: 2 }), 'qualified');
+  assert.equal(readAsset(d).metadata.look.sha256, LOOK_SHA, 'kept while playing');
+  d.sql.prepare("UPDATE sponsor_orders SET status='fulfilled' WHERE id='wearing'").run();
+  assert.equal(await db.assetOnAir(d, ASSET), false);
+  assert.equal(await db.applyLook(d, ASSET, { ...look(other), round: 2 }), 'qualified');
+  const a = readAsset(d);
+  assert.equal(a.metadata.look.sha256, other, 'the real fit replaced the fallback');
+  assert.equal(a.metadata.look.fallback, undefined);
+  assert.equal(a.metadata.sha256, other);
+  assert.equal(a.url, lookUrl(other));
+});
