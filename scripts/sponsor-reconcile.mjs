@@ -31,6 +31,8 @@ if (process.argv.includes('--watch')) {
     } catch (e) {
       console.error(e instanceof Error ? e.message : 'Reconciliation failed.');
     }
-    if (!stopped) await new Promise((resolve) => setTimeout(resolve, 20000));
+    // A pass with nothing to do costs a few reads and no writes, so a minute between passes is
+    // about the browser's own confirm poll and the lease clock, not the database.
+    if (!stopped) await new Promise((resolve) => setTimeout(resolve, 60000));
   }
 } else await reconcile();

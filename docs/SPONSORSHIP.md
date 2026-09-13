@@ -78,7 +78,7 @@ Reconciliation can also run by hand, independently of the studio:
 node scripts/sponsor-reconcile.mjs --watch
 ```
 
-The loop waits 20 seconds after each completed pass, uses a bounded HTTP request, and logs only counts/errors. Without `--watch`, it performs one pass for an external scheduler. Do not couple this process to studio polling or broadcast uptime.
+The loop waits 60 seconds after each completed pass, uses a bounded HTTP request, and logs only counts/errors. A pass reads first and writes only for what has moved: an open quote, an expired quote still inside its day of grace (rechecked at most every ten minutes), a lapsed lease, a paused order whose cooldown is over, or stale rate-limit rows. A verified payment is never re-checked. An idle pass costs four reads and no writes, which matters on a database with a daily write allowance. Without `--watch`, it performs one pass for an external scheduler. Do not couple this process to studio polling or broadcast uptime.
 
 ## Delivery and recovery
 

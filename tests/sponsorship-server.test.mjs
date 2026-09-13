@@ -815,6 +815,99 @@ void test('a held builder lock prevents recovery from expiring its in-flight att
   }
 });
 
+// SQLite counts every row an INSERT, UPDATE or DELETE touched on this connection: the exact
+// thing D1 bills against a daily allowance, and what an idle reconciler must not spend.
+const rowsWritten = (f) =>
+  f.DB.sql.prepare('SELECT total_changes() AS n').get().n;
+async function quoted(f, product = 'message') {
+  const { receipt } = await (
+    await post(f.v, {
+      action: 'draft',
+      draft: { product, name: 'Joe', message: 'Hello everyone' },
+    })
+  ).json();
+  const q = await (
+    await post(f.v, {
+      action: 'quote',
+      token: receipt.token,
+      asset: 'SOL',
+      wallet: f.wallet.publicKey.toBase58(),
+    })
+  ).json();
+  return { receipt, attempt: q.attempt };
+}
+
+void test('a reconcile pass with nothing to do reads, and writes nothing', async (t) => {
+  const f = await fixture();
+  try {
+    const { receipt, attempt } = await quoted(f);
+    await db.settlePayment(
+      f.DB,
+      attempt.id,
+      { signature: 'sig', payer: 'payer', blockTime: 150 },
+      Date.now(),
+    );
+    const scans = t.mock.method(f.c, 'getSignaturesForAddress');
+    const before = rowsWritten(f);
+    const result = await server.reconcileSponsorships(f.v);
+    assert.deepEqual(result, { ok: true, idle: true, checked: 0, errors: 0 });
+    assert.equal(rowsWritten(f), before, 'not one row written');
+    assert.equal(
+      scans.mock.callCount(),
+      0,
+      'a verified payment is never re-read from the chain',
+    );
+    // Confirming a paid order again costs nothing either.
+    const again = await (
+      await post(f.v, {
+        action: 'confirm',
+        token: receipt.token,
+        attemptId: attempt.id,
+      })
+    ).json();
+    assert.equal(again.receipt.status, 'paid');
+    assert.equal(scans.mock.callCount(), 0);
+  } finally {
+    f.restore();
+  }
+});
+
+void test('an open quote is still recovered, and an expired one only inside its day of grace', async (t) => {
+  const f = await fixture();
+  try {
+    const { attempt } = await quoted(f);
+    const scans = t.mock.method(f.c, 'getSignaturesForAddress');
+    const open = await server.reconcileSponsorships(f.v);
+    assert.equal(open.checked, 1, 'an issued quote is checked');
+    assert.equal(scans.mock.callCount(), 1);
+    // Expired an hour ago and checked five minutes ago: left alone.
+    const set = (fields) =>
+      f.DB.sql
+        .prepare(
+          `UPDATE sponsor_payment_attempts SET status='expired', issued_at=?, last_checked_at=? WHERE id=?`,
+        )
+        .run(fields.issued_at, fields.last_checked_at, attempt.id);
+    set({
+      issued_at: Date.now() - 3600000,
+      last_checked_at: Date.now() - 300000,
+    });
+    assert.equal((await server.reconcileSponsorships(f.v)).idle, true);
+    // Checked eleven minutes ago: looked at once more, in case a late payment landed.
+    set({
+      issued_at: Date.now() - 3600000,
+      last_checked_at: Date.now() - 660000,
+    });
+    assert.equal((await server.reconcileSponsorships(f.v)).checked, 1);
+    assert.equal(scans.mock.callCount(), 2);
+    // A day later: never again.
+    set({ issued_at: Date.now() - 90000000, last_checked_at: 0 });
+    assert.equal((await server.reconcileSponsorships(f.v)).idle, true);
+    assert.equal(scans.mock.callCount(), 2);
+  } finally {
+    f.restore();
+  }
+});
+
 void test('devnet pricing is refused on a deployment that is not on devnet', async () => {
   const f = await fixture();
   try {

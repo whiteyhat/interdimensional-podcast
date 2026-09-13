@@ -11,7 +11,7 @@
 //
 // sponsor-media-<env> normalizes logos, previews caps and composites the paid take; the site
 // calls it with a shared token and stores what it returns. sponsor-reconcile-<env> asks the site
-// to recover payments and reschedule paused placements every 20 seconds, so neither job waits on
+// to recover payments and reschedule paused placements every minute, so neither job waits on
 // a studio being on air. Neither service holds a payment key.
 //
 // They share the box's Railway project and never touch the box. Each is found by name, reads its

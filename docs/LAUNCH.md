@@ -309,7 +309,7 @@ payment, and ten verified minutes on air.
 
 Two small services per site run next to the box on Railway. `sponsor-media-<site>` normalizes
 logos, draws the cap previews and composites the paid take. `sponsor-reconcile-<site>` asks the
-site every 20 seconds to recover payments and reschedule paused placements, whether or not a
+site every minute to recover payments and reschedule paused placements, whether or not a
 studio is on air. Neither holds a payment key. Each shares one token with the site, and the
 same `RAILWAY_TOKEN` as the box drives both.
 

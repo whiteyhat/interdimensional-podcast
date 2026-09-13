@@ -420,6 +420,10 @@ async function recoverAttempt(
   offered?: string,
   deadlineAt = Date.now() + 15000,
 ) {
+  // A verified attempt has nothing left to recover: no lock, no RPC calls, no write. Left in,
+  // every pass re-read the chain and re-stamped the ten oldest attempts, day and night, which
+  // is what spent the database's daily write allowance on a devnet holding eight orders.
+  if (input.status === 'verified') return input;
   const lock = await db.acquireLock(
     d,
     `attempt:${input.id}`,
@@ -718,26 +722,59 @@ async function submit(
     /* Always reconcile this immutable signature, including ambiguous RPC errors. */
   }
 }
+/** How long an expired quote is still watched for a late payment, and how often. */
+const LATE_PAYMENT_WINDOW_MS = 86400000,
+  LATE_PAYMENT_RECHECK_MS = 600000;
 export async function reconcileSponsorships(v: SponsorVars) {
   const d = await sponsorDatabase(v),
-    now = Date.now(),
-    lock = await db.acquireLock(d, 'reconcile', now, 90000);
+    now = Date.now();
+  // Reads first, and writes only for what has actually moved. An idle pass used to take the
+  // lock, run three sweeps and re-check the ten oldest attempts, every twenty seconds, forever:
+  // sixty thousand writes a day for a database with nothing to do. Reads are plentiful; writes
+  // are the allowance that ran out.
+  const [leases, resumes, stale, attempts] = await Promise.all([
+    d
+      .prepare(
+        `SELECT 1 AS n FROM sponsor_orders WHERE status IN ('leased','prepared','playing') AND lease_until<? LIMIT 1`,
+      )
+      .bind(now)
+      .first(),
+    d
+      .prepare(
+        `SELECT 1 AS n FROM sponsor_orders WHERE status='paused' AND retry_after<=? LIMIT 1`,
+      )
+      .bind(now)
+      .first(),
+    d
+      .prepare(
+        'SELECT 1 AS n FROM sponsor_rate_limits WHERE window_at<? LIMIT 1',
+      )
+      .bind(now - 3600000)
+      .first(),
+    // Open quotes always; an expired one only while a late payment could still arrive, and
+    // then no more than every few minutes; a verified one never.
+    d
+      .prepare(
+        `SELECT * FROM sponsor_payment_attempts WHERE status IN ('issued','submitted') OR (status='expired' AND issued_at>? AND last_checked_at<?) ORDER BY CASE WHEN status IN ('issued','submitted') THEN 0 ELSE 1 END,last_checked_at ASC LIMIT 10`,
+      )
+      .bind(now - LATE_PAYMENT_WINDOW_MS, now - LATE_PAYMENT_RECHECK_MS)
+      .all<db.AttemptRow>(),
+  ]);
+  if (!leases && !resumes && !stale && !attempts.results.length)
+    return { ok: true, idle: true, checked: 0, errors: 0 };
+  const lock = await db.acquireLock(d, 'reconcile', now, 90000);
   if (!lock) return { ok: true, busy: true };
   let checked = 0,
     errors = 0;
   try {
-    await db.pauseExpired(d, now);
-    await db.resumeDue(d, now);
-    await d
-      .prepare('DELETE FROM sponsor_rate_limits WHERE window_at<?')
-      .bind(now - 3600000)
-      .run();
-    const attempts = await d
-      .prepare(
-        `SELECT * FROM sponsor_payment_attempts ORDER BY CASE WHEN status IN ('issued','submitted') THEN 0 WHEN issued_at>? THEN 1 ELSE 2 END,last_checked_at ASC LIMIT 10`,
-      )
-      .bind(now - 86400000)
-      .all<db.AttemptRow>();
+    if (leases) await db.pauseExpired(d, now);
+    // A lease that just lapsed may have paused an order whose cooldown is already over.
+    if (resumes || leases) await db.resumeDue(d, now);
+    if (stale)
+      await d
+        .prepare('DELETE FROM sponsor_rate_limits WHERE window_at<?')
+        .bind(now - 3600000)
+        .run();
     for (const a of attempts.results) {
       if (Date.now() - now > 40000) break;
       try {
