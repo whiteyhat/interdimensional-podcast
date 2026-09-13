@@ -14,8 +14,9 @@ await build([
   'producer-lease',
   'throttle',
 ]);
-const { uploadSponsorAsset, sponsorAssetHealth, readSponsorAsset } =
+const { uploadSponsorAsset, sponsorAssetHealth, readSponsorAsset, receiveLook } =
   await import('../work/tests/sponsor-assets.js');
+const { ensureSponsorSchema } = await import('../work/tests/sponsor-db.js');
 const PNG = Buffer.concat([
   Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
   Buffer.from('an uploaded mark'),
@@ -544,4 +545,174 @@ void test('the logo and each look are served immutable and cross-origin; a bare 
     reason: 'Too thin.',
     tailor,
   });
+});
+// ---- the desk's callback: every tailor round ends in one PUT.
+const MEDIA_TOKEN = 'm'.repeat(32);
+const lookBytes = Buffer.from('a tailored look png');
+const LOOK = hash(lookBytes);
+const verdict = {
+  model: 'fal-ai/nano-banana-pro/edit',
+  fit: 2,
+  round: 1,
+  palette: PALETTE,
+  plan: { shirtHex: '#F2EFE8', capHex: '#112233' },
+  judge: { shirtLogo: true, logoFidelity: 9 },
+  candidateUrl: 'https://v3.fal.media/files/candidate.png',
+};
+function callback({
+  token = MEDIA_TOKEN,
+  outcome = 'look',
+  round = 1,
+  bytes = lookBytes,
+  sha = hash(bytes),
+  verdictBody = verdict,
+  reason = 'The tailor ran out of time.',
+  headers = {},
+} = {}) {
+  const h = {
+    ...(token !== null ? { authorization: `Bearer ${token}` } : {}),
+    'x-look-outcome': outcome,
+    'x-look-round': String(round),
+  };
+  if (outcome === 'look')
+    Object.assign(h, {
+      'content-type': 'image/png',
+      'x-look-sha256': sha,
+      'x-look-verdict': Buffer.from(JSON.stringify(verdictBody)).toString('base64'),
+    });
+  else h['x-look-reason'] = reason;
+  Object.assign(h, headers);
+  return new Request(`https://show.test/api/sponsorship/assets/${ASSET_ID}?part=look`, {
+    method: 'PUT',
+    headers: h,
+    body: outcome === 'look' ? bytes : null,
+  });
+}
+async function tailoringSite() {
+  const DB = d1(),
+    assets = bucket();
+  await ensureSponsorSchema(DB);
+  const v = {
+    DB,
+    SITE_URL: 'https://show.test',
+    SPONSOR_MEDIA_URL: 'https://media.test',
+    SPONSOR_MEDIA_TOKEN: MEDIA_TOKEN,
+    SPONSOR_ASSETS: assets,
+  };
+  const row = () => {
+    const r = DB.sql.prepare('SELECT * FROM sponsor_assets WHERE id=?').get(ASSET_ID);
+    return r && { ...r, metadata: JSON.parse(r.metadata) };
+  };
+  return { DB, assets, v, row };
+}
+const logoMeta = (extra = {}) => ({
+  kind: 'cap',
+  target: 'host',
+  templateVersion: 'looks-v1',
+  logoSha256: hash(normalised),
+  logoUrl: LOGO_URL,
+  palette: PALETTE,
+  tailor: { round: 1, requestedAt: 5 },
+  ...extra,
+});
+const lookUrlFor = (sha) =>
+  `https://show.test/api/sponsorship/assets/${ASSET_ID}?part=look&v=${sha}`;
+
+void test('a look callback must carry the desk secret and the hash of what it sends', async (t) => {
+  const site = await tailoringSite();
+  assetRow(site.DB, 'logo', LOGO_URL, logoMeta());
+  for (const [name, request, vars, status] of [
+    ['no token', callback({ token: null }), site.v, 401],
+    ['the wrong token', callback({ token: 'x'.repeat(32) }), site.v, 401],
+    ['no secret configured on the site', callback(), { ...site.v, SPONSOR_MEDIA_TOKEN: undefined }, 401],
+    ['a hash that is not the body', callback({ sha: 'f'.repeat(64) }), site.v, 400],
+    ['no hash', callback({ headers: { 'x-look-sha256': '' } }), site.v, 400],
+    ['an outcome the site does not know', callback({ outcome: 'maybe' }), site.v, 400],
+    ['a round outside 1..3', callback({ round: 7 }), site.v, 400],
+  ]) {
+    await t.test(name, async () => {
+      assert.equal((await receiveLook(request, vars, ASSET_ID)).status, status);
+      assert.equal(site.row().status, 'logo', 'nothing changed');
+      assert.equal(site.assets.objects.size, 0, 'nothing stored');
+    });
+  }
+});
+
+void test('a look lands: stored under its hash, the asset qualified and its address rewritten', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  const site = await tailoringSite();
+  assetRow(site.DB, 'logo', LOGO_URL, logoMeta());
+  const r = await receiveLook(callback(), site.v, ASSET_ID);
+  assert.equal(r.status, 200, await r.clone().text());
+  assert.deepEqual(await r.json(), { status: 'qualified' });
+  assert.deepEqual(site.assets.objects.get(`${ASSET_ID}/look-${LOOK}.png`), lookBytes);
+  const row = site.row();
+  assert.equal(row.status, 'qualified');
+  assert.equal(row.url, lookUrlFor(LOOK));
+  assert.equal(row.metadata.sourceUrl, row.url);
+  assert.equal(row.metadata.sha256, LOOK);
+  assert.deepEqual(row.metadata.look, { sha256: LOOK, model: verdict.model, fit: 2, round: 1, verdict });
+  assert.equal(row.metadata.tailor.outcome, 'look');
+  assert.equal(row.metadata.logoUrl, LOGO_URL, 'the logo stays where it was');
+  // The same look again is a no-op; a different look for a finished asset is superseded.
+  assert.deepEqual(await (await receiveLook(callback(), site.v, ASSET_ID)).json(), { status: 'qualified' });
+  const other = Buffer.from('another fit');
+  assert.deepEqual(
+    await (await receiveLook(callback({ bytes: other, round: 2 }), site.v, ASSET_ID)).json(),
+    { status: 'qualified' },
+  );
+  assert.equal(site.assets.objects.has(`${ASSET_ID}/look-${hash(other)}.png`), false, 'not stored');
+  assert.equal(site.row().metadata.sha256, LOOK);
+  // Nor does a late refusal or deadline touch it.
+  await receiveLook(callback({ outcome: 'refused', round: 2, reason: 'Late.' }), site.v, ASSET_ID);
+  await receiveLook(callback({ outcome: 'deadline', round: 2 }), site.v, ASSET_ID);
+  assert.equal(site.row().status, 'qualified');
+  assert.equal(site.row().metadata.reason, undefined);
+});
+
+void test('refusals and non-verdicts are recorded without touching the logo', async () => {
+  const site = await tailoringSite();
+  assetRow(site.DB, 'logo', LOGO_URL, logoMeta());
+  assert.deepEqual(
+    await (await receiveLook(callback({ outcome: 'deadline' }), site.v, ASSET_ID)).json(),
+    { status: 'logo' },
+  );
+  let row = site.row();
+  assert.equal(row.status, 'logo');
+  assert.equal(row.metadata.tailor.outcome, 'deadline');
+  assert.equal(row.url, LOGO_URL);
+  assert.deepEqual(
+    await (
+      await receiveLook(
+        callback({ outcome: 'refused', round: 2, reason: 'Too thin to print.' }),
+        site.v,
+        ASSET_ID,
+      )
+    ).json(),
+    { status: 'refused' },
+  );
+  row = site.row();
+  assert.equal(row.status, 'refused');
+  assert.equal(row.metadata.reason, 'Too thin to print.');
+  assert.deepEqual(row.metadata.tailor.reasons, ['Too thin to print.']);
+  // A later round that lands a look rescues a refused asset.
+  assert.deepEqual(await (await receiveLook(callback({ round: 3 }), site.v, ASSET_ID)).json(), {
+    status: 'qualified',
+  });
+  assert.equal(site.row().metadata.reason, undefined);
+  assert.equal(site.assets.objects.size, 1);
+});
+
+void test('a fallback look is upgraded by a real fit once', async () => {
+  const site = await tailoringSite();
+  assetRow(site.DB, 'logo', LOGO_URL, logoMeta());
+  await receiveLook(callback({ verdictBody: { ...verdict, fallback: 'cap-v1' } }), site.v, ASSET_ID);
+  assert.equal(site.row().metadata.look.fallback, 'cap-v1');
+  const fit = Buffer.from('a real fit');
+  await receiveLook(callback({ bytes: fit, round: 2 }), site.v, ASSET_ID);
+  const row = site.row();
+  assert.equal(row.metadata.sha256, hash(fit), 'the real fit replaced the fallback');
+  assert.equal(row.metadata.look.fallback, undefined);
+  assert.equal(row.url, lookUrlFor(hash(fit)));
+  assert.ok(site.assets.objects.has(`${ASSET_ID}/look-${hash(fit)}.png`));
 });

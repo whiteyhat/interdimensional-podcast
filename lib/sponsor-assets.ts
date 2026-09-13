@@ -1,4 +1,5 @@
 import {
+  sameSponsorToken,
   sponsorDatabase,
   sponsorFailure,
   sponsorMediaConfig,
@@ -518,4 +519,123 @@ export async function readSponsorAsset(
     headers['content-length'] = String(object.range.length);
   } else headers['content-length'] = String(object.size);
   return new Response(object.body, { status, headers });
+}
+const LOOK_OUTCOMES = ['look', 'refused', 'deadline', 'shutdown', 'error'] as const;
+const MAX_LOOK = 8 * 1024 * 1024;
+/** The desk's verdict header: base64 JSON, kept whole for the audit; only model, fit and fallback are read here. */
+function verdictHeader(value: string | null): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const raw: unknown = JSON.parse(
+      new TextDecoder().decode(
+        Uint8Array.from(atob(value), (c) => c.charCodeAt(0)),
+      ),
+    );
+    return raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+/**
+ * PUT /api/sponsorship/assets/{id}?part=look: the desk reporting how a tailor round ended.
+ * Only the desk may call it (its bearer), and a look must hash to what the desk says it
+ * sent. A look is stored under its hash and then recorded; nothing is stored for a look
+ * that would not be recorded (a finished asset keeps its look, except the fallback →
+ * real-fit upgrade while no order wearing it is on air).
+ */
+export async function receiveLook(
+  request: Request,
+  v: SponsorMediaVars,
+  id: string,
+) {
+  try {
+    if (!HEX64.test(id)) throw new SponsorError(404, 'Artwork not found.');
+    const bearer = (request.headers.get('authorization') ?? '').replace(
+      /^Bearer\s+/i,
+      '',
+    );
+    if (!v.SPONSOR_MEDIA_TOKEN || !sameSponsorToken(bearer, v.SPONSOR_MEDIA_TOKEN))
+      throw new SponsorError(401, 'Wardrobe desk token rejected.');
+    if (!v.SPONSOR_ASSETS)
+      throw new SponsorError(
+        503,
+        'Artwork storage is not connected yet.',
+        'ASSETS',
+      );
+    const outcome = request.headers.get('x-look-outcome') ?? '';
+    const round = Number(request.headers.get('x-look-round'));
+    if (
+      !(LOOK_OUTCOMES as readonly string[]).includes(outcome) ||
+      !Number.isInteger(round) ||
+      round < 1 ||
+      round > 3
+    )
+      throw new SponsorError(400, 'A look callback names its round and outcome.');
+    const d = await sponsorDatabase(v);
+    if (outcome === 'refused') {
+      const reason =
+        (request.headers.get('x-look-reason') ?? '').trim().slice(0, 300) ||
+        'The tailor could not dress this logo.';
+      return json({
+        status: await db.applyLook(d, id, { kind: 'refused', reason, round }),
+      });
+    }
+    if (outcome !== 'look')
+      return json({
+        status: await db.applyLook(d, id, {
+          kind: 'deferred',
+          outcome: outcome as 'deadline' | 'shutdown' | 'error',
+          round,
+        }),
+      });
+    const declared = request.headers.get('x-look-sha256') ?? '';
+    if (!HEX64.test(declared) || !request.body)
+      throw new SponsorError(400, 'A look names its bytes by their hash.');
+    const bytes = await readBounded(request.body, MAX_LOOK, 'The look is too large.');
+    const sha256 = await sha256Hex(bytes);
+    if (sha256 !== declared)
+      throw new SponsorError(400, 'The look does not hash to what the desk says.');
+    const current = await db.getAsset(d, id);
+    if (!current) throw new SponsorError(404, 'Artwork not found.');
+    const verdict = verdictHeader(request.headers.get('x-look-verdict'));
+    const fallback = verdict.fallback === 'cap-v1' ? ('cap-v1' as const) : undefined;
+    let meta: Partial<LookAssetMetadata> = {};
+    try {
+      meta = JSON.parse(current.metadata);
+    } catch {}
+    if (
+      current.status === 'qualified' &&
+      (!meta.look?.fallback || fallback || (await db.assetOnAir(d, id)))
+    ) {
+      console.warn('[sponsorship] look-superseded', id, round);
+      return json({ status: 'qualified' });
+    }
+    const lookUrl = new URL(
+      `/api/sponsorship/assets/${id}?part=look&v=${sha256}`,
+      v.SITE_URL || request.url,
+    ).href;
+    await v.SPONSOR_ASSETS.put(`${id}/look-${sha256}.png`, bytes, {
+      httpMetadata: { contentType: 'image/png' },
+    });
+    const status = await db.applyLook(d, id, {
+      kind: 'look',
+      sha256,
+      url: lookUrl,
+      sourceUrl: lookUrl,
+      round,
+      look: {
+        sha256,
+        model: typeof verdict.model === 'string' ? verdict.model : 'unknown',
+        fit: typeof verdict.fit === 'number' ? verdict.fit : 0,
+        round,
+        verdict,
+        ...(fallback ? { fallback } : {}),
+      },
+    });
+    return json({ status });
+  } catch (e) {
+    return sponsorFailure(e);
+  }
 }
