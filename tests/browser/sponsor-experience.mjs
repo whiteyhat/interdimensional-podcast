@@ -511,6 +511,26 @@ try {
     'Pepe wearing your tee and cap',
   );
   assert.ok(await loaded(card.locator('.sponsor-host-art.look')));
+  // Premium motion: the look rises 12 px over 400 ms on one curve, its shadow 50 ms behind.
+  assert.deepEqual(
+    await card.locator('.sponsor-host-art.look').evaluate((el) => {
+      const s = getComputedStyle(el);
+      return [
+        s.animationName,
+        s.animationDuration,
+        s.animationDelay,
+        s.animationTimingFunction,
+        s.position,
+      ];
+    }),
+    [
+      'sponsor-look-in, sponsor-look-shadow',
+      '0.4s, 0.4s',
+      '0s, 0.05s',
+      'cubic-bezier(0.4, 0, 0.2, 1), cubic-bezier(0.4, 0, 0.2, 1)',
+      'relative',
+    ],
+  );
   assert.match(
     await card.locator('.sponsor-preview-label').innerText(),
     /YOUR ON-AIR PASS/,
@@ -552,6 +572,46 @@ try {
     await card.locator('.sponsor-host-art').getAttribute('src'),
     /\/pepe-video\.avif$/,
   );
+  // While the tailor works the card's label breathes and the swatch sits on the still;
+  // with reduced motion nothing on the card moves, and the state still reads.
+  receipt.look = { status: 'tailoring' };
+  receipt.paidAt = Date.now();
+  await fitting.page
+    .locator('.sponsor-preview.cap.tailoring')
+    .waitFor({ timeout: 10000 });
+  const pulse = () =>
+    fitting.page
+      .locator('.sponsor-preview.cap .sponsor-preview-label svg')
+      .evaluate((el) => getComputedStyle(el).animationName);
+  const swatchStyle = () =>
+    card.locator('.sponsor-logo-swatch').evaluate((el) => {
+      const s = getComputedStyle(el);
+      return [s.animationName, s.position, s.objectFit];
+    });
+  assert.equal(await pulse(), 'sponsor-tailoring');
+  assert.deepEqual(await swatchStyle(), [
+    'sponsor-swatch-in',
+    'absolute',
+    'contain',
+  ]);
+  assert.equal(
+    await card
+      .locator('.sponsor-host-art')
+      .evaluate((el) => getComputedStyle(el).filter),
+    'saturate(0.72) brightness(0.94)',
+  );
+  await fitting.page.emulateMedia({ reducedMotion: 'reduce' });
+  assert.equal(await pulse(), 'none');
+  assert.equal((await swatchStyle())[0], 'none');
+  receipt.look = { status: 'ready', url: lookUrl };
+  await card.locator('.sponsor-host-art.look').waitFor({ timeout: 10000 });
+  assert.equal(
+    await card
+      .locator('.sponsor-host-art.look')
+      .evaluate((el) => getComputedStyle(el).animationName),
+    'none',
+  );
+  await fitting.page.emulateMedia({ reducedMotion: 'no-preference' });
   await fitting.page.evaluate(() =>
     window.scrollTo({ top: 0, behavior: 'instant' }),
   );

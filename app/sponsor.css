@@ -1176,6 +1176,13 @@ aside.sponsor-rail {
     transition: none !important;
     scroll-behavior: auto !important;
   }
+  /* Covered by the rule above; named so a narrowing of it cannot bring these back. The
+     look keeps its resting shadow and the still its desaturation, so the state still reads. */
+  .sponsor-host-art.look,
+  .sponsor-logo-swatch,
+  .sponsor-preview.tailoring .sponsor-preview-label svg {
+    animation: none !important;
+  }
   .sponsor-preview-light {
     display: none;
   }
@@ -1243,6 +1250,91 @@ aside.sponsor-rail {
 .sponsor-cap-ahead {
   font-size: 12px;
   color: #bdc7ae;
+}
+/* ---- The wardrobe card. Premium motion: one curve, cubic-bezier(0.4, 0, 0.2, 1), no
+   overshoot. The look and the swatch rise 12px over 400ms; the look's shadow lands 50ms
+   behind it; the label breathes for 1600ms cycles while the tailor works and stops the
+   moment the look is in. Reduced motion turns all three off in the block below. */
+.sponsor-look-frame {
+  position: relative;
+}
+.sponsor-logo-swatch {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: 58px;
+  height: 58px;
+  padding: 7px;
+  object-fit: contain;
+  border: 1px solid #ffffff2e;
+  border-radius: 8px;
+  background: #f2efe8;
+  box-shadow: 0 6px 16px #0007;
+  z-index: 2;
+  animation: sponsor-swatch-in 400ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+/* Not yet dressed: the still sits back a little so the finished look reads as the event. */
+.sponsor-preview.tailoring .sponsor-host-art {
+  filter: saturate(0.72) brightness(0.94);
+}
+.sponsor-preview.tailoring .sponsor-preview-label svg {
+  color: #e2b98a;
+  animation: sponsor-tailoring var(--dur-breathe) var(--ease-breathe) infinite;
+}
+.sponsor-host-art.look {
+  position: relative;
+  z-index: 1;
+  box-shadow: 0 10px 24px #0007;
+  animation:
+    sponsor-look-in 400ms cubic-bezier(0.4, 0, 0.2, 1) both,
+    sponsor-look-shadow 400ms cubic-bezier(0.4, 0, 0.2, 1) 50ms both;
+}
+.sponsor-look-replace {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+.sponsor-look-replace p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #bdc7ae;
+}
+.sponsor-look-replace .sponsor-button {
+  margin-top: 0;
+}
+@keyframes sponsor-look-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes sponsor-look-shadow {
+  from {
+    box-shadow: 0 0 0 #0000;
+  }
+  to {
+    box-shadow: 0 10px 24px #0007;
+  }
+}
+@keyframes sponsor-swatch-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes sponsor-tailoring {
+  50% {
+    opacity: 0.3;
+  }
 }
 .sponsor-legacy-receipt {
   padding: 12px 0;
