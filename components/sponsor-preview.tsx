@@ -61,7 +61,7 @@ export function SponsorPreview({
         <>
           <img
             className="sponsor-host-art"
-            src={artwork || `/wearables/${target}-cap-v1.png`}
+            src={artwork || `/wearables/${target}-cap-v1.avif`}
             alt={`${hostName} wearing the selected cap${artwork ? ' with your design' : ''}`}
           />
           <div className="sponsor-preview-caption">
@@ -76,8 +76,8 @@ export function SponsorPreview({
               broadcast while the hosts talk, drawn like the real one. */}
           <div className="sponsor-preview-stage">
             <div className="sponsor-preview-hosts" aria-hidden="true">
-              <img src="/pepe-video.webp" alt="" loading="lazy" />
-              <img src="/gigachad-video.webp" alt="" loading="lazy" />
+              <img src="/pepe-video.avif" alt="" loading="lazy" />
+              <img src="/gigachad-video.avif" alt="" loading="lazy" />
             </div>
             <div className="sponsor-preview-banner">
               <span>SPONSORED</span>
@@ -100,8 +100,8 @@ export function SponsorPreview({
       ) : (
         <>
           <div className="sponsor-preview-hosts" aria-hidden="true">
-            <img src="/pepe-video.webp" alt="" loading="lazy" />
-            <img src="/gigachad-video.webp" alt="" loading="lazy" />
+            <img src="/pepe-video.avif" alt="" loading="lazy" />
+            <img src="/gigachad-video.avif" alt="" loading="lazy" />
           </div>
           <div className="sponsor-cue">
             <span className="sponsor-cue-label">FROM THE TRENCHES</span>

@@ -64,7 +64,7 @@ export function StreamEmbed({
     <div className="stage stream-embed">
       <img src={poster} alt="" />
       <div className="stream-poster">
-        <img className="opening-mark" src="/logo.webp" alt={show.name} />
+        <img className="opening-mark" src="/logo.avif" alt={show.name} />
         <p className="eyebrow">
           {warmingUp
             ? 'STARTING'
