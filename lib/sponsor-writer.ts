@@ -163,8 +163,8 @@ function placementLine(brief: SponsorBrief) {
     return `This is a paid spotlight for ${project}. ${stay}`;
   const wearer = brief.wearingHost ?? 'the host';
   return brief.mention === 'callback'
-    ? `This is the callback for ${project}'s cap on ${wearer}: a natural second mention of the same sponsor, still disclosed in turn 1. ${stay}`
-    : `This is the introduction of ${project}'s cap on ${wearer}; the first cut to ${wearer} shows the cap. ${stay}`;
+    ? `This is the callback for ${project}'s tee and cap on ${wearer}: a natural second mention of the same sponsor, still disclosed in turn 1. ${stay}`
+    : `This is the introduction of ${project}'s tee and cap on ${wearer}; the first cut to ${wearer} shows the logo printed on his T-shirt and cap. ${stay}`;
 }
 
 /** What each planned turn has to do, bound to the speaker the plan gives it. */
@@ -204,10 +204,12 @@ function obligations(
       (turn) => cast[turn.speaker].name === brief.wearingHost,
     );
     if (wearer >= 0 && wearer < duties.length)
-      duties[wearer].push(`Mention the ${project} cap you are wearing.`);
+      duties[wearer].push(
+        `Mention the ${project} tee and cap you are wearing.`,
+      );
     else if (brief.wearingHost)
       duties[0].push(
-        `Mention the ${project} cap ${brief.wearingHost} is wearing.`,
+        `Mention the ${project} tee and cap ${brief.wearingHost} is wearing.`,
       );
   }
   return duties.map((list) => list.join(' '));
@@ -667,9 +669,9 @@ export function judgePrompt(
       (line, i) =>
         `${i + 1}. ${cast[line.speaker]?.name ?? line.speaker}: ${JSON.stringify(line.text)}`,
     ),
-    'TASK 1. List only statements that assert, as fact, something about the sponsor, its product, its team, or any real company, token, project or person, that the advertiser text does not support: launches, products, features, materials, games, partners, users, numbers, dates, history, posts, news or rumours. Never list what a host says about himself (what he does, owns, wears or feels, including the cap he is wearing and how it feels), a question, a joke, an opinion, a maxim or verdict (such as "Discipline follows" or "This is the way"), praise or judgement of the sponsor by a host, including what he says it understands, knows, gets, respects or believes (such as "Frog Labs understands conviction"), a general remark about the world or about the habits of the hosts, a hypothetical, a paraphrase of the advertiser text, or the paid disclosure and thanks, even when it mentions the sponsor. When unsure, do not list it. Quote the exact words from the turn.',
+    'TASK 1. List only statements that assert, as fact, something about the sponsor, its product, its team, or any real company, token, project or person, that the advertiser text does not support: launches, products, features, materials, games, partners, users, numbers, dates, history, posts, news or rumours. Never list what a host says about himself (what he does, owns, wears or feels, including the tee and cap he is wearing and how they feel), a question, a joke, an opinion, a maxim or verdict (such as "Discipline follows" or "This is the way"), praise or judgement of the sponsor by a host, including what he says it understands, knows, gets, respects or believes (such as "Frog Labs understands conviction"), a general remark about the world or about the habits of the hosts, a hypothetical, a paraphrase of the advertiser text, or the paid disclosure and thanks, even when it mentions the sponsor. When unsure, do not list it. Quote the exact words from the turn.',
     project
-      ? `TASK 2. List a turn only if it has left ${JSON.stringify(project)} entirely: it talks about something with no connection to ${JSON.stringify(project)}, its product, its pitch or the cap. A turn that riffs on the pitch, reacts to it, or jokes about a host's own life in its terms is on topic. When unsure, do not list it.`
+      ? `TASK 2. List a turn only if it has left ${JSON.stringify(project)} entirely: it talks about something with no connection to ${JSON.stringify(project)}, its product, its pitch or the tee and cap. A turn that riffs on the pitch, reacts to it, or jokes about a host's own life in its terms is on topic. When unsure, do not list it.`
       : 'TASK 2. This is a message placement: return an empty offTopicTurns list.',
     'Return one JSON object shaped {"unsupported":[{"turn":<turn number>,"quote":"<exact words from that turn>"}],"offTopicTurns":[<turn numbers>]}. When nothing qualifies, return {"unsupported":[],"offTopicTurns":[]}.',
   ].join('\n');

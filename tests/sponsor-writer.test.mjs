@@ -754,7 +754,7 @@ void test('a spotlight request binds each obligation to the speaker the plan giv
   );
 });
 
-void test('the cap is mentioned on the wearer’s first turn, and a callback is still disclosed', () => {
+void test('the tee and cap are mentioned on the wearer’s first turn, and a callback is still disclosed', () => {
   const cap = {
     ...elixir,
     product: 'cap',
@@ -766,21 +766,35 @@ void test('the cap is mentioned on the wearer’s first turn, and a callback is 
   const chad = lines(cap);
   assert.match(
     chad.find((line) => line.startsWith('2. ')),
-    /^2\. GigaChad, .*Mention the Elixir Games cap you are wearing/,
+    /^2\. GigaChad, .*Mention the Elixir Games tee and cap you are wearing/,
   );
   assert.equal(
-    chad.filter((line) => /cap you are wearing/.test(line)).length,
+    chad.filter((line) => /tee and cap you are wearing/.test(line)).length,
     1,
   );
+  assert.match(
+    chad.join('\n'),
+    /This is the introduction of Elixir Games's tee and cap on GigaChad; the first cut to GigaChad shows the logo printed on his T-shirt and cap\./,
+  );
+  assert.doesNotMatch(chad.join('\n'), /Games cap you are wearing|shows the cap\./);
   const pepe = lines({ ...cap, wearingHost: 'Pepe' });
   assert.match(
     pepe.find((line) => line.startsWith('1. ')),
-    /^1\. Pepe, .*Mention the Elixir Games cap you are wearing/,
+    /^1\. Pepe, .*Mention the Elixir Games tee and cap you are wearing/,
+  );
+  // A wearer the plan does not seat (a name the cast does not know) is still mentioned, in turn 1.
+  const unseated = lines({ ...cap, wearingHost: 'Nobody' });
+  assert.match(
+    unseated.find((line) => line.startsWith('1. ')),
+    /Mention the Elixir Games tee and cap Nobody is wearing\./,
   );
   const callback = lines({ ...cap, mention: 'callback' }).join('\n');
-  assert.match(callback, /callback for Elixir Games's cap on GigaChad/);
+  assert.match(
+    callback,
+    /This is the callback for Elixir Games's tee and cap on GigaChad: a natural second mention/,
+  );
   assert.match(callback, /still disclosed in turn 1/);
-  assert.doesNotMatch(callback, /cap you are wearing/);
+  assert.doesNotMatch(callback, /tee and cap you are wearing/);
 });
 
 void test('a rewrite is told what the rejected draft got wrong', () => {
@@ -926,10 +940,14 @@ void test('the judge sees the advertiser text and the dialogue as data', () => {
   assert.ok(prompt.includes(JSON.stringify(grounded[1].text)));
   assert.match(prompt, /PREVIOUS LINE.*Volatility is a test of character/);
   // On devnet the judge rejected "I touch grass. Is that why my cap feels so good?": a host
-  // talking about himself and his cap is never a claim about the sponsor.
+  // talking about himself and what he is wearing is never a claim about the sponsor, and
+  // what he wears is now a tee and a cap.
   assert.match(prompt, /Never list what a host says about himself/);
+  assert.match(prompt, /including the tee and cap he is wearing and how they feel/);
+  assert.doesNotMatch(prompt, /the cap he is wearing/);
   assert.match(prompt, /When unsure, do not list it/);
   assert.match(prompt, /only if it has left "Elixir Games" entirely/);
+  assert.match(prompt, /its product, its pitch or the tee and cap\./);
   assert.match(prompt, /a maxim or verdict/);
   const read = W.judgePrompt(answered, message).prompt;
   assert.match(read, /empty offTopicTurns/);
@@ -1312,10 +1330,10 @@ void test('a cap introduction opens on the host not wearing it, and the wearer m
     cap,
     W.sponsorTurnPlan('guest', cap),
   );
-  // The cap is Pepe's to mention, on his first turn, which is turn 2.
+  // The tee and cap are Pepe's to mention, on his first turn, which is turn 2.
   assert.match(
     request,
-    /2\. Pepe[^\n]*Mention the Frog Labs cap you are wearing/,
+    /2\. Pepe[^\n]*Mention the Frog Labs tee and cap you are wearing/,
   );
   // A callback and a spotlight keep the plain alternation.
   assert.equal(
