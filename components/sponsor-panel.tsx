@@ -27,6 +27,7 @@ import {
   dollars,
   emptyDraft,
   hostName,
+  lookView,
   productCopy,
   readCheckout,
 } from '@/lib/sponsor-client';
@@ -78,7 +79,9 @@ export function SponsorPanel() {
   const [signing, setSigning] = useState(false);
   const [error, setError] = useState('');
   const [connectionError, setConnectionError] = useState('');
-  const [artwork, setArtwork] = useState<string | null>(null);
+  // The clock the tailoring copy reads. It moves with every receipt poll (4 s while an
+  // order is live), which is as often as the copy needs to advance.
+  const [clock, setClock] = useState(() => Date.now());
   const [uploading, setUploading] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const form = useRef<HTMLFormElement>(null);
@@ -94,6 +97,7 @@ export function SponsorPanel() {
     receiptRef.current = next;
     setReceipt(next);
     setToken(next.token);
+    setClock(Date.now());
     try {
       const url = new URL(window.location.href);
       url.searchParams.set('receipt', next.token);
@@ -139,11 +143,6 @@ export function SponsorPanel() {
       );
       setDraft(saved.draft);
       setAsset(saved.asset);
-      setArtwork(
-        saved.draft.assetId
-          ? `/api/sponsorship/assets/${encodeURIComponent(saved.draft.assetId)}`
-          : null,
-      );
       setToken(
         explicit && /^[a-zA-Z0-9_-]{32,180}$/.test(explicit)
           ? explicit
@@ -207,7 +206,6 @@ export function SponsorPanel() {
         updateReceipt(next);
         if (touchedToken.current !== token) {
           setDraft(next.draft);
-          setArtwork(next.assetUrl);
           setStep(3);
           const attempt =
             next.attempts.find((a) => a.status === 'verified') ||
@@ -250,6 +248,7 @@ export function SponsorPanel() {
   }, [token, updateReceipt]);
   const received =
     !!receipt && !['draft', 'payment-pending'].includes(receipt.status);
+  const look = receipt ? lookView(receipt, clock) : null;
   // Celebrate the payment the viewer watched confirm, once, and only that: a receipt that
   // was already paid when the page opened is a return visit, not a moment.
   const seenStatus = useRef<{ id: string; status: string } | null>(null);
@@ -275,53 +274,59 @@ export function SponsorPanel() {
     if (locked) return;
     if (patch.product || patch.target) {
       assetEpoch.current++;
-      setArtwork(null);
       patch.assetId = undefined;
     }
     setDraft((d) => ({ ...d, ...patch }));
     setFieldErrors({});
     setError('');
   }
-  async function upload(selected: File | undefined) {
-    if (!selected || uploading || locked) return;
+  /**
+   * The desk normalises the logo and refuses one it could never print (empty, hair-thin,
+   * undecodable) before any money moves; its reason comes back verbatim. Nothing is
+   * generated here: the tee and cap are tailored after payment, from the stored logo.
+   */
+  async function uploadLogo(
+    selected: File,
+    target: SponsorDraft['target'],
+  ): Promise<{ id: string; logoUrl: string }> {
     if (
       !['image/png', 'image/jpeg', 'image/webp'].includes(selected.type) ||
       selected.size > 4 * 1024 * 1024
-    ) {
-      setFieldErrors({ assetId: 'Use a PNG, JPG, or WebP image under 4 MB.' });
-      return;
-    }
+    )
+      throw Error('Use a PNG, JPG, or WebP image under 4 MB.');
+    const data = new FormData();
+    data.set('image', selected);
+    data.set('kind', 'cap');
+    data.set('target', target || 'host');
+    const response = await fetch('/api/sponsorship/assets', {
+      method: 'POST',
+      body: data,
+      signal: AbortSignal.timeout(45000),
+    });
+    const result = (await response.json()) as {
+      id?: string;
+      logoUrl?: string;
+      error?: string;
+    };
+    if (!response.ok || !result.id || !result.logoUrl)
+      throw Error(result.error || 'Your logo could not be prepared.');
+    return { id: result.id, logoUrl: result.logoUrl };
+  }
+  async function upload(selected: File | undefined) {
+    if (!selected || uploading || locked) return;
     setUploading(true);
     setError('');
     const epoch = ++assetEpoch.current;
     try {
-      const data = new FormData();
-      data.set('image', selected);
-      data.set('kind', draft.product === 'cap' ? 'cap' : 'logo');
-      data.set('target', draft.target || 'host');
-      const response = await fetch('/api/sponsorship/assets', {
-        method: 'POST',
-        body: data,
-        signal: AbortSignal.timeout(45000),
-      });
-      const result = (await response.json()) as {
-        id?: string;
-        url?: string;
-        error?: string;
-      };
-      if (!response.ok || !result.id || !result.url)
-        throw Error(result.error || 'Your artwork could not be prepared.');
+      const uploaded = await uploadLogo(selected, draft.target);
       if (epoch !== assetEpoch.current) return;
-      setDraft((d) => ({ ...d, assetId: result.id }));
-      setArtwork(result.url);
+      setDraft((d) => ({ ...d, assetId: uploaded.id }));
       setFieldErrors({});
     } catch (e) {
       if (epoch === assetEpoch.current)
         setFieldErrors({
           assetId:
-            e instanceof Error
-              ? e.message
-              : 'Your artwork could not be prepared.',
+            e instanceof Error ? e.message : 'Your logo could not be prepared.',
         });
     } finally {
       setUploading(false);
@@ -337,7 +342,7 @@ export function SponsorPanel() {
     if (draft.message.trim().length < 3)
       fields.message = 'Give the hosts a little more to work with.';
     if (draft.product === 'cap' && !draft.assetId)
-      fields.assetId = 'Add your logo to preview the cap.';
+      fields.assetId = 'Add your logo first.';
     if (Object.keys(fields).length) {
       setFieldErrors(fields);
       document.getElementById(`sponsor-${Object.keys(fields)[0]}`)?.focus();
@@ -793,10 +798,15 @@ export function SponsorPanel() {
           </div>
         </form>
       )}
+      {/* A cap's stored asset is the logo until the look lands, so it is never the card
+          image; only a spotlight's stored logo is artwork for the card. */}
       <SponsorPreview
         draft={draft}
-        artwork={artwork || receipt?.assetUrl}
+        artwork={
+          draft.product === 'spotlight' ? (receipt?.assetUrl ?? null) : null
+        }
         paid={received}
+        look={look}
       />
       <p className="sponsor-error" role="alert">
         {error}

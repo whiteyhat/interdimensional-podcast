@@ -11,7 +11,24 @@ const browser = await chromium.launch({
 });
 let online = true,
   receipt = null,
-  quotes = 0;
+  quotes = 0,
+  uploads = 0,
+  refuseUpload = false;
+// One stored logo for the whole rehearsal: the desk's id is the sha of (logo, host, version).
+const assetId = 'b'.repeat(64);
+const logoUrl = `/api/sponsorship/assets/${assetId}?part=logo`;
+/** True once an <img> has loaded real pixels; false for a broken image. */
+const loaded = (img) =>
+  img.evaluate((el) =>
+    el.complete
+      ? el.naturalWidth > 0
+      : new Promise((done) => {
+          el.addEventListener('load', () => done(el.naturalWidth > 0), {
+            once: true,
+          });
+          el.addEventListener('error', () => done(false), { once: true });
+        }),
+  );
 const assetList = ['USDC', 'SOL', 'FROGCLENCH'];
 const catalog = () => ({
   products: [
@@ -23,12 +40,8 @@ const catalog = () => ({
     title: id,
     priceCents,
     frogPriceCents: priceCents * 0.7,
-    available: online && id !== 'cap',
-    reason: !online
-      ? 'The studio is offline.'
-      : id === 'cap'
-        ? 'Caps are completing their broadcast trial.'
-        : null,
+    available: online,
+    reason: !online ? 'The studio is offline.' : null,
   })),
   assets: assetList.map((id) => ({
     id,
@@ -39,7 +52,12 @@ const catalog = () => ({
     priceUsd: '1',
   })),
   studioOnline: online,
-  capabilities: { message: true, spotlight: true, cap: false },
+  capabilities: {
+    message: true,
+    spotlight: true,
+    cap: true,
+    capTemplateVersion: 'looks-v1',
+  },
   capQueue: { host: 0, guest: 0 },
   treasury: '11111111111111111111111111111111',
   clientRpcUrl: '/api/rpc',
@@ -64,6 +82,29 @@ async function setup(viewport, reducedMotion = 'no-preference') {
       },
     }),
   );
+  // The mock desk: the upload is checked and stored (or refused with a reason), the stored
+  // logo and the finished look are real PNGs, so nothing on the card is ever a broken image.
+  await context.route(/\/api\/sponsorship\/assets(\/|$)/, async (route) => {
+    const request = route.request(),
+      url = new URL(request.url());
+    if (request.method() === 'POST') {
+      uploads++;
+      if (refuseUpload)
+        return route.fulfill({
+          status: 422,
+          json: { error: 'This logo is too thin to print.', code: 'LOGO_TOO_THIN' },
+        });
+      return route.fulfill({
+        json: { id: assetId, status: 'logo', url: logoUrl, logoUrl },
+      });
+    }
+    return route.fulfill({
+      path:
+        url.searchParams.get('part') === 'look'
+          ? 'public/pepe-video.png'
+          : 'public/logo.png',
+    });
+  });
   await context.route('**/api/sponsorship*', async (route) => {
     const request = route.request(),
       url = new URL(request.url());
@@ -88,7 +129,7 @@ async function setup(viewport, reducedMotion = 'no-preference') {
           token: 'a'.repeat(64),
           status: 'draft',
           draft: body.draft,
-          priceCents: 2500,
+          priceCents: body.draft.product === 'cap' ? 10000 : 2500,
           attempts: [],
           fulfillment: {
             visibleMs: 0,
@@ -309,6 +350,63 @@ try {
     /choose/i,
   );
   await context.close();
+  // ---- Dress the host. The logo is checked at upload; the tee and cap are tailored after payment.
+  receipt = null;
+  refuseUpload = false;
+  const fitting = await setup({ width: 1440, height: 1100 });
+  const cap = fitting.page.locator('.sponsor-panel');
+  await cap
+    .locator('input[name="sponsor-product"][value="cap"]')
+    .check({ force: true });
+  await cap.getByRole('button', { name: 'Continue', exact: true }).click();
+  await fitting.page.locator('#sponsor-projectName').fill('Canvas');
+  // Before any logo: the host's own still, no swatch, and the promise of what happens after payment.
+  const card = fitting.page.locator('.sponsor-preview.cap');
+  assert.match(
+    await card.locator('.sponsor-preview-caption').innerText(),
+    /Your tee and cap are tailored right after payment · usually one to two minutes/,
+  );
+  assert.match(
+    await card.locator('.sponsor-host-art').getAttribute('src'),
+    /\/pepe-video\.avif$/,
+  );
+  assert.equal(await card.locator('.sponsor-logo-swatch').count(), 0);
+  // A logo the desk cannot print is refused under the upload field, before any money moves.
+  refuseUpload = true;
+  await fitting.page
+    .locator('#sponsor-logo-file')
+    .setInputFiles('public/logo.png');
+  await cap.locator('#sponsor-assetId-error').waitFor();
+  assert.equal(
+    await cap.locator('#sponsor-assetId-error').innerText(),
+    'This logo is too thin to print.',
+  );
+  assert.equal(await card.locator('.sponsor-logo-swatch').count(), 0);
+  refuseUpload = false;
+  await fitting.page
+    .locator('#sponsor-logo-file')
+    .setInputFiles('public/logo.png');
+  await card.locator('.sponsor-logo-swatch').waitFor();
+  assert.equal(await cap.locator('#sponsor-assetId-error').count(), 0);
+  assert.equal(uploads, 2);
+  assert.match(
+    await card.locator('.sponsor-logo-swatch').getAttribute('src'),
+    new RegExp(`/api/sponsorship/assets/${assetId}\\?part=logo$`),
+  );
+  assert.ok(
+    await loaded(card.locator('.sponsor-logo-swatch')),
+    'the swatch is the stored logo, not a broken image',
+  );
+  assert.match(
+    await card.locator('.sponsor-host-art').getAttribute('src'),
+    /\/pepe-video\.avif$/,
+    'no look exists before payment',
+  );
+  assert.equal(
+    await cap.getByRole('button', { name: 'Change your logo' }).count(),
+    1,
+  );
+  await fitting.context.close();
   online = false;
   receipt = null;
   const mobile = await setup({ width: 320, height: 850 }, 'reduce');

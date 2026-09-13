@@ -3,16 +3,27 @@
 import { useEffect, useRef } from 'react';
 import { ArrowUpRight, Radio } from 'lucide-react';
 import type { SponsorDraft } from '@/lib/sponsorship';
+import {
+  LOOK_COPY,
+  baseStill,
+  logoSwatchUrl,
+  lookAlt,
+  type LookView,
+} from '@/lib/sponsor-client';
 
 /** A preview is deliberately labeled: it never represents something currently on air. */
 export function SponsorPreview({
   draft,
   artwork,
   paid = false,
+  look = null,
 }: {
   draft: SponsorDraft;
+  /** A spotlight's stored logo. A cap never passes one: its card is the still or the look. */
   artwork?: string | null;
   paid?: boolean;
+  /** A paid cap order's wardrobe state; null before payment and for every other product. */
+  look?: LookView | null;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -47,27 +58,56 @@ export function SponsorPreview({
       node.removeEventListener('pointerleave', leave);
     };
   }, []);
-  const target = draft.target === 'guest' ? 'gigachad' : 'pepe';
   const hostName = draft.target === 'guest' ? 'Chad' : 'Pepe';
+  // The card image, in order: the look once it is ready, otherwise the host's own still
+  // with the stored logo as a swatch. Never the asset URL (the logo while the tailor works)
+  // and never a local upload: nothing is generated before payment.
+  const lookUrl = look?.kind === 'ready' ? look.url : null;
+  const swatch = lookUrl ? null : logoSwatchUrl(draft.assetId);
   return (
-    <div ref={panel} className={`sponsor-preview ${draft.product}`}>
+    <div
+      ref={panel}
+      className={`sponsor-preview ${draft.product}${
+        look?.kind === 'tailoring' ? ' tailoring' : ''
+      }`}
+    >
       <div className="sponsor-preview-light" aria-hidden="true" />
       <div className="sponsor-preview-label">
         <Radio size={12} />
-        <span>{paid ? 'YOUR ON-AIR PASS' : 'PLACEMENT PREVIEW'}</span>
+        <span>
+          {look ? look.label : paid ? 'YOUR ON-AIR PASS' : 'PLACEMENT PREVIEW'}
+        </span>
         <span>001</span>
       </div>
       {draft.product === 'cap' ? (
         <>
-          <img
-            className="sponsor-host-art"
-            src={artwork || `/wearables/${target}-cap-v1.png`}
-            alt={`${hostName} wearing the selected cap${artwork ? ' with your design' : ''}`}
-          />
+          <div className="sponsor-look-frame">
+            {lookUrl ? (
+              <img
+                key={lookUrl}
+                className="sponsor-host-art look"
+                src={lookUrl}
+                alt={lookAlt(draft.target)}
+              />
+            ) : (
+              <img
+                className="sponsor-host-art"
+                src={baseStill(draft.target)}
+                alt={`${hostName}, not yet dressed`}
+              />
+            )}
+            {swatch ? (
+              <img className="sponsor-logo-swatch" src={swatch} alt="Your logo" />
+            ) : null}
+          </div>
           <div className="sponsor-preview-caption">
             <span>WARDROBE / {hostName.toUpperCase()}</span>
-            <b>{draft.projectName || 'Make the cap yours.'}</b>
-            <small>10 live minutes · 6+ appearances</small>
+            <b>{draft.projectName || 'Make the tee and cap yours.'}</b>
+            <small>
+              {look
+                ? (look.line ?? '10 live minutes · 6+ appearances')
+                : LOOK_COPY.previewCaption}
+            </small>
           </div>
         </>
       ) : draft.product === 'spotlight' ? (
