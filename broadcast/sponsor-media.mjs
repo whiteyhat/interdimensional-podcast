@@ -847,6 +847,134 @@ async function settledWithin(promises, ms) {
   clearTimeout(timer);
 }
 
+/** Settles after `ms`, or rejects at once when `signal` aborts. */
+function wait(ms, signal) {
+  return new Promise((done, fail) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', cancel);
+      done();
+    }, ms);
+    const cancel = () => {
+      clearTimeout(timer);
+      fail(new MediaError(502, 'FAL', 'The fal job was abandoned.'));
+    };
+    signal.addEventListener('abort', cancel, { once: true });
+  });
+}
+
+/**
+ * fal's queue in three hops: submit, poll, fetch. Each hop is bounded by its own timeout and by
+ * the caller's signal, the polling by the budget, and every URL fal hands back has to be fal's
+ * own before it is followed. The key travels in the Authorization header and nowhere else: not
+ * in a URL, not in a log line. A job nobody waits for any more is cancelled, best effort, so it
+ * neither holds fal's queue nor runs up the bill.
+ */
+export function falClient({ origin, key, log = () => {}, pollMs = 2_000 }) {
+  const headers = (json) => ({
+    authorization: `Key ${key}`,
+    ...(json ? { 'content-type': 'application/json' } : {}),
+  });
+  const own = (raw) => {
+    let url = null;
+    try {
+      url = new URL(String(raw));
+    } catch {
+      /* Not a URL at all. */
+    }
+    if (!url || url.origin !== origin)
+      throw new MediaError(502, 'FAL', 'fal answered with a foreign URL.');
+    return url;
+  };
+  async function hop(url, init, signal, ms, what) {
+    let response;
+    try {
+      response = await fetch(url, {
+        ...init,
+        redirect: 'error',
+        signal: AbortSignal.any([signal, AbortSignal.timeout(ms)]),
+      });
+    } catch {
+      throw new MediaError(
+        502,
+        'FAL',
+        signal.aborted ? `fal ${what} was abandoned.` : `fal ${what} did not answer in time.`,
+      );
+    }
+    const text = await response.text().catch(() => '');
+    let data = null;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      /* Not JSON; handled below. */
+    }
+    if (!response.ok || !data || typeof data !== 'object') {
+      log({
+        level: 'warn',
+        event: 'fal',
+        what,
+        status: response.status,
+        detail: String(data?.detail ?? text).slice(0, 200),
+      });
+      throw new MediaError(502, 'FAL', `fal ${what} returned ${response.status}.`);
+    }
+    return data;
+  }
+  return {
+    async run(endpoint, input, { signal, budgetMs }) {
+      const end = Date.now() + budgetMs;
+      const left = (cap) => Math.max(1, Math.min(cap, end - Date.now()));
+      const budget = AbortSignal.any([signal, AbortSignal.timeout(budgetMs)]);
+      const job = await hop(
+        `${origin}/${endpoint}`,
+        { method: 'POST', headers: headers(true), body: JSON.stringify(input) },
+        budget,
+        left(20_000),
+        'submit',
+      );
+      const statusUrl = own(job.status_url),
+        responseUrl = own(job.response_url),
+        cancelUrl = job.cancel_url ? own(job.cancel_url) : null;
+      try {
+        for (;;) {
+          const state = await hop(
+            statusUrl,
+            { method: 'GET', headers: headers(false) },
+            budget,
+            left(10_000),
+            'status',
+          );
+          if (state.status === 'COMPLETED') break;
+          if (state.status === 'FAILED')
+            throw new MediaError(502, 'FAL', 'fal reported the job failed.');
+          if (Date.now() + pollMs >= end)
+            throw new MediaError(502, 'FAL_TIMEOUT', 'fal took longer than the fit allows.');
+          await wait(pollMs, budget);
+        }
+        const output = await hop(
+          responseUrl,
+          { method: 'GET', headers: headers(false) },
+          budget,
+          left(15_000),
+          'response',
+        );
+        return {
+          requestId: typeof job.request_id === 'string' ? job.request_id : null,
+          output,
+        };
+      } catch (error) {
+        if (cancelUrl)
+          void fetch(cancelUrl, {
+            method: 'PUT',
+            headers: headers(false),
+            redirect: 'error',
+            signal: AbortSignal.timeout(3_000),
+          }).then((r) => r.body?.cancel().catch(() => {}), () => {});
+        throw error;
+      }
+    },
+  };
+}
+
 /**
  * One media desk: its queue, in-flight takes, result cache and the state it measured at boot.
  * The HTTP server and the tests both drive it through `handle`.

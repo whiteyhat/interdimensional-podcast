@@ -22,6 +22,7 @@ import {
   BASE_STILLS,
   createMediaService,
   deltaE76,
+  falClient,
   garmentPlan,
   handleMediaRequest,
   MAX_LOGO,
@@ -1775,3 +1776,57 @@ void test(
     assert.deepEqual(Object.keys(zones.zones), ['host', 'guest']);
   },
 );
+
+void test('the fal client makes three hops, stops polling the moment it is abandoned, and cancels the job', async () => {
+  const client = falClient({ origin: FALQ, key: 'fal-test-key', pollMs: 50 });
+  const before = submissions.length;
+  const done = await client.run(
+    'fal-ai/nano-banana-pro/edit',
+    { prompt: 'x', seed: 1, image_urls: [] },
+    { signal: new AbortController().signal, budgetMs: 5_000 },
+  );
+  assert.equal(done.output.images[0].width, 1376);
+  assert.match(done.requestId, /^req-\d+$/);
+  assert.equal(submissions.length, before + 1);
+  assert.equal(submissions.at(-1).authorization, 'Key fal-test-key');
+  assert.equal(submissions.at(-1).url.includes('fal-test-key'), false, 'the key was in a URL');
+
+  // Abandoned mid-poll: no more polls, the job is cancelled.
+  falPlan.hang = true;
+  const controller = new AbortController();
+  const polled = statusPolls,
+    cancelled = cancels;
+  const running = client.run(
+    'fal-ai/nano-banana-pro/edit',
+    { prompt: 'x', seed: 2, image_urls: [] },
+    { signal: controller.signal, budgetMs: 5_000 },
+  );
+  assert.ok(await until(() => statusPolls >= polled + 2));
+  controller.abort('deadline');
+  await assert.rejects(running, (e) => e.code === 'FAL');
+  const seen = statusPolls;
+  await pause(200);
+  assert.equal(statusPolls, seen, 'kept polling after it was abandoned');
+  assert.ok(await until(() => cancels === cancelled + 1), 'the job was not cancelled');
+
+  // Out of budget: the same, in its own words.
+  await assert.rejects(
+    client.run('fal-ai/nano-banana-pro/edit', { prompt: 'x', seed: 3, image_urls: [] }, { signal: new AbortController().signal, budgetMs: 300 }),
+    (e) => e.code === 'FAL_TIMEOUT' || e.code === 'FAL',
+  );
+  falPlan.hang = false;
+
+  // fal's own answers are checked: a status URL off fal's origin is never followed.
+  falPlan.foreign = true;
+  await assert.rejects(
+    client.run('fal-ai/nano-banana-pro/edit', { prompt: 'x', seed: 4, image_urls: [] }, { signal: new AbortController().signal, budgetMs: 5_000 }),
+    /foreign/,
+  );
+  falPlan.foreign = false;
+  falPlan.fail = true;
+  await assert.rejects(
+    client.run('fal-ai/nano-banana-pro/edit', { prompt: 'x', seed: 5, image_urls: [] }, { signal: new AbortController().signal, budgetMs: 5_000 }),
+    /failed/,
+  );
+  falPlan.fail = false;
+});
