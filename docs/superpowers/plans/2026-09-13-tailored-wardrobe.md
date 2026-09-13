@@ -78,7 +78,7 @@ Integrator notes (outside this section's files): `.github/workflows/media.yml` c
 - Consumes: nothing from other tasks (cv2 5.0.0.93, numpy 2.5.3 as pinned in the Dockerfile).
 - Produces: CLI `python3 scripts/wardrobe.py normalize --input <file> --output <png>` → stdout `{"ok":true,"sha256","width","height"}` (desk-2 adds `"palette"`) or `{"ok":false,"code","message"}`, exit 0; exit 2 with `{"ok":false,"code":"CRASH"}` on an exception. `python3 scripts/wardrobe.py zones` → `{"ok":true,"zones":ZONES,"wearers":WEARERS,"pad":24}`. Module constants `ZONES`, `ZONE_PAD`, `WEARERS`, `FRAME`, `CROP`; functions `decode(path) -> (bgra, transparent)`, `knock_out(image, transparent)`, `normalize(path)`, `encode_png(image, output) -> bytes`, `lab_distance(bgr, colour)`, `to_lab(bgr_u8)`, `lab_to_hex(lab)`, `hex_to_bgr(hex)`, `sha256(bytes)`, class `Refusal(code, message)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `tests/wardrobe.test.py`:
 
@@ -230,12 +230,12 @@ if __name__ == '__main__':
     unittest.main()
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `work/vision-venv/bin/python tests/wardrobe.test.py`
 Expected: FAIL at import — `FileNotFoundError` / `AttributeError` because `scripts/wardrobe.py` does not exist.
 
-- [ ] **Step 3: Write the script**
+- [x] **Step 3: Write the script**
 
 `scripts/wardrobe.py`:
 
@@ -428,12 +428,12 @@ if __name__ == '__main__':
     sys.exit(main())
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `work/vision-venv/bin/python tests/wardrobe.test.py`
 Expected: `Ran 7 tests … OK`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/wardrobe.py tests/wardrobe.test.py
@@ -454,7 +454,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `normalize`, `to_lab`, `lab_to_hex`, `INK_SHARE`, `CHROMA_MIN` (desk-1).
 - Produces: `palette(bgra) -> LookPalette` = `{'clusters': [{'hex', 'share'}], 'primary', 'secondary', 'accent', 'monochrome'}`; the normalize JSON gains `"palette"`. Rules: k = min(5, distinct colours); clusters ordered by share desc; ink clusters = share ≥ 0.10 (the largest cluster when none); `primary` = largest ink cluster; `secondary` = the second, else primary; `accent` = the ink cluster with the highest chroma C\*; `monochrome` = no ink cluster with C\* ≥ 15.
 
-- [ ] **Step 1: Write the failing tests** (append to `tests/wardrobe.test.py`, above `if __name__`)
+- [x] **Step 1: Write the failing tests** (append to `tests/wardrobe.test.py`, above `if __name__`)
 
 ```python
 def close_hex(a, b, tolerance=2):
@@ -530,12 +530,12 @@ class PaletteTest(unittest.TestCase):
         self.assertEqual(a, b)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `work/vision-venv/bin/python tests/wardrobe.test.py PaletteTest`
 Expected: FAIL with `KeyError: 'palette'` in every `PaletteTest`.
 
-- [ ] **Step 3: Add the palette**
+- [x] **Step 3: Add the palette**
 
 In `scripts/wardrobe.py`, after `encode_png` add:
 
@@ -580,12 +580,12 @@ with
             result = {'ok': True, 'sha256': sha256(data), 'width': int(image.shape[1]), 'height': int(image.shape[0]), 'palette': palette(image)}
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `work/vision-venv/bin/python tests/wardrobe.test.py`
 Expected: `Ran 12 tests … OK`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/wardrobe.py tests/wardrobe.test.py
@@ -606,7 +606,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `FRAME`, `CROP`, `ZONES`, `ZONE_PAD`, `encode_png`, `lab_distance`, `hex_to_bgr`, `sha256` (desk-1).
 - Produces: CLI `judge --base <png 1376x768> --candidate <png 1376x768> --target host|guest --palette <json file> --output <png>` → `{"ok":true,"pixelAgreement":float,"meanDrift":float,"inkPresent":bool,"sha256":<sha of the written 1344x768 PNG>,"width":1344,"height":768}` or `{"ok":false,"code":"GEOMETRY"|"DRIFT"|"INK",…same numbers when measured}`. `GEOMETRY` never resizes. The desk reads `ok`, `code`, `sha256`, `pixelAgreement`, `meanDrift`, `inkPresent`.
 
-- [ ] **Step 1: Write the failing tests** (append to `tests/wardrobe.test.py`)
+- [x] **Step 1: Write the failing tests** (append to `tests/wardrobe.test.py`)
 
 ```python
 class JudgeTest(unittest.TestCase):
@@ -687,12 +687,12 @@ class JudgeTest(unittest.TestCase):
         self.assertTrue(report['ok'], report)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `work/vision-venv/bin/python tests/wardrobe.test.py JudgeTest`
 Expected: FAIL — `argparse` exits 2 on `invalid choice: 'judge'`, so `run()` returns `(2, None)` and `assertEqual(code, 0)` fails.
 
-- [ ] **Step 3: Add the judge**
+- [x] **Step 3: Add the judge**
 
 In `scripts/wardrobe.py`, after `palette` add:
 
@@ -782,12 +782,12 @@ with
             image = normalize(args.input)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `work/vision-venv/bin/python tests/wardrobe.test.py`
 Expected: `Ran 18 tests … OK`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/wardrobe.py tests/wardrobe.test.py
@@ -808,7 +808,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `scripts/wardrobe.py normalize` (desk-1/2).
 - Produces: `POST /logo?target=host|guest` (bearer, raw PNG/JPEG/WebP body ≤ 4 MiB) → 200 `{ logo: <base64 PNG>, logoSha256, width, height, palette }`; 422 `{ code, error }` with code ∈ `INVALID_IMAGE | EMPTY_IMAGE | LOGO_TOO_THIN | LOGO_TOO_SMALL | LOGO_TOO_LARGE`; 413 `TOO_LARGE`; 400 `TARGET`; 401; 503 `RENDERER` (machine fault), 503 `DEADLINE` (past `logoMs`), 503 `BUSY` while draining. Desk internals: `spawnCapture(command, args, signal, onSpawn) -> { code, signal, stdout, stderr }`, `wardrobe(args, signal, dir) -> parsed JSON` (throws 503 `RENDERER` on exit ≠ 0 or no JSON). `DEFAULTS.logoMs = 10_000`. Test helpers `PNG_HEADER`, `fakeWardrobe(name, plan)` (stands in for both Python scripts; `plan.codeFile`, `plan.judgeFile`, `plan.countFile`, `plan.previewDelayMs`, `plan.fallback: 'refuse' | 'crash'`).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add after the `TOOLS` constant in `tests/sponsor-media.test.mjs`:
 
@@ -939,12 +939,12 @@ void test('/logo relays the script’s refusal as 422 and hides a machine fault 
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `node --test tests/sponsor-media.test.mjs`
 Expected: the two new tests FAIL with `404` (`NOT_FOUND`) instead of 200/422; everything else still passes.
 
-- [ ] **Step 3: Implement the route**
+- [x] **Step 3: Implement the route**
 
 In `broadcast/sponsor-media.mjs`:
 
@@ -1171,12 +1171,12 @@ with
           : handlePreview(request, url);
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `node --test tests/sponsor-media.test.mjs`
 Expected: all pass (the runtime-bound `/logo` test skips on a box without cv2, like its neighbours).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add broadcast/sponsor-media.mjs tests/sponsor-media.test.mjs
@@ -1197,7 +1197,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `fakeWardrobe` (desk-4).
 - Produces: desk constants `LOOK_VERSION = 'looks-v1'`, `FAL_ORIGIN = 'https://queue.fal.run'`, `TAILOR_MODEL = 'fal-ai/nano-banana-pro/edit'`, `JUDGE_ENDPOINT = 'openrouter/router/vision'`, `JUDGE_MODEL = 'google/gemini-2.5-flash'`, `FITS = 3`, exported `BASE_STILLS = { host: { path, url }, guest: { path, url } }`. `DEFAULTS` gains `tailorDeadlineMs: 210_000, tailorFitMs: 65_000, tailorSubmitMs: 40_000, judgeMs: 25_000, tailorTailMs: 15_000, tailorConcurrency: 2, tailorQueue: 6, logoFetchMs: 15_000, callbackMs: 20_000, callbackAttempts: 3, callbackRetryMs: 5_000, falProbeMs: 5_000, falPollMs: 2_000`. Config: `cfg.falKey`, `cfg.falOriginForTests` (loopback, `NODE_ENV=test` only; env `SPONSOR_MEDIA_TEST_FAL_HOST`); inside the service `falOrigin`. `/health` → `{ ready, tailor, templateVersion: 'looks-v1', templates, tools, decoder, version, starting, draining }` (no `capQualified`). `status()` gains `tailoring, tailorQueued, callbacks` (filled by desk-9; 0 here). Boot log line carries `tailor` and `templateVersion`. Test stand-ins: `SITE`, `logos` (Map path → bytes), `looks` (array of `{ id, url, headers, body }`), `siteAnswers` (array of statuses), `FALQ`, `falPlan`, `submissions`, `statusPolls`, `cancels`, `PASS_JUDGE`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/sponsor-media.test.mjs` after the `FAL` file server block (after `function take(...)`):
 
@@ -1370,12 +1370,12 @@ void test('the base stills the tailor shows fal are the uncropped originals fal 
 
 Add `BASE_STILLS` to the import list at the top of the test file (`import { BASE_STILLS, createMediaService, … } from '../broadcast/sponsor-media.mjs';`).
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `node --test tests/sponsor-media.test.mjs`
 Expected: FAIL — `BASE_STILLS` is not exported (SyntaxError at import). After a temporary `export const BASE_STILLS = {}` the health test fails on `templateVersion` (`'caps-v1'` ≠ `'looks-v1'`).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `broadcast/sponsor-media.mjs`:
 
@@ -1578,12 +1578,12 @@ and after the `videoOriginForTests:` entry add:
       templateVersion: state.templateVersion,
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `node --test tests/sponsor-media.test.mjs`
 Expected: all pass. Prerequisite: site-1 has landed (`lib/sponsorship.ts` exports `LOOK_VERSION`); never add that line here.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add broadcast/sponsor-media.mjs tests/sponsor-media.test.mjs
@@ -1604,7 +1604,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `scripts/wardrobe.py zones` (desk-1) for the cross-check.
 - Produces: exported `WEARERS` (same table as the Python), `NEUTRALS = { offWhite: '#F2EFE8', charcoal: '#23262B', heather: '#8B8F96' }`, `deltaE76(hexA, hexB) -> number`, `mutedHex(hex) -> hex`, `garmentPlan(palette, target) -> { shirt: { hex, candidate, inkDeltaE, forced }, cap: { hex, candidate, inkDeltaE, wearerDeltaE, shirtDeltaE, forced, brim } }`, `tailorPrompt(plan) -> string`. Plan rules (spec §1.3 step 2): tee candidates in order muted secondary, muted primary, off-white, charcoal, heather — first with ΔE76 ≥ 25 against every ink cluster (share ≥ 0.10); cap candidates primary, secondary, accent, charcoal, off-white, heather — first with ΔE ≥ 25 against every ink cluster, ≥ 20 against every wearer colour and ≥ 15 from the tee; dark brim (charcoal) when the cap's L\* > 80; when nothing passes, the candidate with the largest minimum ΔE wins and `forced` is true. `mutedHex` = L\* clamped to 38..78, chroma × 0.55.
 
-- [ ] **Step 1: Write the failing tests** (append; add `garmentPlan, tailorPrompt, WEARERS, NEUTRALS, deltaE76` to the import)
+- [x] **Step 1: Write the failing tests** (append; add `garmentPlan, tailorPrompt, WEARERS, NEUTRALS, deltaE76` to the import)
 
 ```js
 const PALETTES = {
@@ -1676,12 +1676,12 @@ void test(
 );
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `node --test tests/sponsor-media.test.mjs`
 Expected: SyntaxError — `garmentPlan` is not exported.
 
-- [ ] **Step 3: Implement** — after the `BASE_STILLS` export add:
+- [x] **Step 3: Implement** — after the `BASE_STILLS` export add:
 
 ```js
 // ---- the garment plan: colours for the tee and the cap, from the logo's ink ------------------
@@ -1835,12 +1835,12 @@ export function tailorPrompt(plan) {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `node --test tests/sponsor-media.test.mjs`
 Expected: all pass (the zones cross-check skips without the runtime).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add broadcast/sponsor-media.mjs tests/sponsor-media.test.mjs
@@ -1861,7 +1861,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: the `falQueue` stand-in (`FALQ`, `falPlan`, `submissions`, `statusPolls`, `cancels`) from desk-5; `MediaError`.
 - Produces: exported `falClient({ origin, key, log = () => {}, pollMs = 2_000 })` → `{ run(endpoint, input, { signal, budgetMs }) -> Promise<{ requestId: string | null, output: object }> }`. Hops: `POST ${origin}/${endpoint}` (JSON), `GET status_url` every `pollMs` until `COMPLETED`, `GET response_url`; each hop `redirect: 'error'`, bounded by `AbortSignal.any([budget, timeout])` where `budget = AbortSignal.any([signal, AbortSignal.timeout(budgetMs)])`; every URL fal hands back must be on `origin` (else 502 `FAL` "foreign URL"); on any failure after submit a best-effort `PUT cancel_url`. Errors are `MediaError(502, 'FAL' | 'FAL_TIMEOUT', …)`. `scripts/fal.mjs` is not imported.
 
-- [ ] **Step 1: Write the failing test** (append; add `falClient` to the import)
+- [x] **Step 1: Write the failing test** (append; add `falClient` to the import)
 
 ```js
 void test('the fal client makes three hops, stops polling the moment it is abandoned, and cancels the job', async () => {
@@ -1919,12 +1919,12 @@ void test('the fal client makes three hops, stops polling the moment it is aband
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `node --test tests/sponsor-media.test.mjs`
 Expected: SyntaxError — `falClient` is not exported.
 
-- [ ] **Step 3: Implement** — after `async function settledWithin(…) { … }` add:
+- [x] **Step 3: Implement** — after `async function settledWithin(…) { … }` add:
 
 ```js
 /** Settles after `ms`, or rejects at once when `signal` aborts. */
@@ -2056,12 +2056,12 @@ export function falClient({ origin, key, log = () => {}, pollMs = 2_000 }) {
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `node --test tests/sponsor-media.test.mjs`
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add broadcast/sponsor-media.mjs tests/sponsor-media.test.mjs
@@ -2082,7 +2082,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: the `site` stand-in (`SITE`, `looks`, `siteAnswers`) from desk-5.
 - Produces: exported `sendLook(url, { headers, body }, { attempts = 3, timeoutMs = 20_000, retryMs = 5_000 } = {}) -> Promise<number>` — the last HTTP status, `0` when the site never answered; `PUT`, `redirect: 'error'`; a 2xx or any 4xx ends the attempts, anything else is retried after `retryMs`.
 
-- [ ] **Step 1: Write the failing test** (append; add `sendLook` to the import)
+- [x] **Step 1: Write the failing test** (append; add `sendLook` to the import)
 
 ```js
 void test('a look callback is retried through outages, accepted once, and never retried after the site’s verdict', async () => {
@@ -2115,12 +2115,12 @@ void test('a look callback is retried through outages, accepted once, and never 
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `node --test tests/sponsor-media.test.mjs`
 Expected: SyntaxError — `sendLook` is not exported.
 
-- [ ] **Step 3: Implement** — after `falClient` add:
+- [x] **Step 3: Implement** — after `falClient` add:
 
 ```js
 /**
@@ -2155,12 +2155,12 @@ export async function sendLook(
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `node --test tests/sponsor-media.test.mjs`
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add broadcast/sponsor-media.mjs tests/sponsor-media.test.mjs
@@ -2181,7 +2181,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `wardrobe` (desk-4), `BASE_STILLS`, `LOOK_VERSION`, `TAILOR_MODEL`, `JUDGE_ENDPOINT`, `JUDGE_MODEL`, `FITS`, `MAX_TAILOR_BODY`, DEFAULTS (desk-5), `garmentPlan`, `tailorPrompt` (desk-6), `falClient` (desk-7), `sendLook` (desk-8), existing `download`, `cached`, `remember`, `checkedUrl`, `bytesLimited`, `busy`.
 - Produces: `POST /tailor` per CONTRACT (202 `{ key, queued: true }` | 200 `{ key, cached: true }` | 409 `{ code: 'BUSY', retryAfterMs }` | 400 `ASSET_ID | ROUND | TARGET | LOGO_HASH | HOST | PALETTE | JSON` | 503 `TAILOR_UNAVAILABLE`); exported `tailorKey(logoSha256, target, round) = sha256(`${logoSha256}|${target}|${LOOK_VERSION}|${round}`)`, `judgePrompt({ plan, pixels })`, `judgePasses(judge)`; the callback per CONTRACT with `x-look-verdict` = base64 JSON `{ model, fit, round, seed, requestId, palette, plan, judge, pixels, candidateUrl, fits }` (`fallback` added by desk-10); `status()` counters `tailoring, tailorQueued, callbacks`; log events `tailor` (per settlement) and `fal`. The vision request is `POST ${falOrigin}/openrouter/router/vision` with body `{ model: 'google/gemini-2.5-flash', prompt: judgePrompt(...), system_prompt: JUDGE_SYSTEM, image_urls: [baseStillUrl, logoUrl, candidateUrl], temperature: 0, max_tokens: 400 }`; the edit is `POST ${falOrigin}/fal-ai/nano-banana-pro/edit` with `{ prompt, image_urls: [baseStillUrl, logoUrl], aspect_ratio: '16:9', resolution: '1K', output_format: 'png', num_images: 1, seed }`. Test helpers `PALETTE`, `tailorDesk(t, plan, options)`, `tailorOrder(extra)`, `landed(assetId, count)`.
 
-- [ ] **Step 1: Write the failing tests** (append; add `tailorKey, judgePasses, judgePrompt` to the import)
+- [x] **Step 1: Write the failing tests** (append; add `tailorKey, judgePasses, judgePrompt` to the import)
 
 ```js
 // The palette every /tailor test sends (its plan: a #57567D tee and a #8B8F96 cap, see desk-6).
@@ -2425,12 +2425,12 @@ void test('the tailor has its own lane: BUSY when it is full, /render untouched,
 
 Add `randomBytes` to the `node:crypto` import at the top of the test file.
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `node --test tests/sponsor-media.test.mjs`
 Expected: SyntaxError — `tailorKey` is not exported.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `broadcast/sponsor-media.mjs`, module level, after `sendLook` add:
 
@@ -3048,12 +3048,12 @@ with
     await settledWithin([...runs, ...tailorRuns, ...callbacks], 3_000);
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `node --test tests/sponsor-media.test.mjs`
 Expected: all pass. Then `npx oxlint broadcast/sponsor-media.mjs` clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add broadcast/sponsor-media.mjs tests/sponsor-media.test.mjs
@@ -3074,7 +3074,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `renderer(args, report, signal, dir)` (existing; its `preview` mode is the unmodified qualification-bound `scripts/wearable-render.py preview`), `templates`, `job.fits`, `summarize`, `deliver`, `rememberOutcome` (desk-9); `fakeWardrobe` plans `fallback: 'refuse' | 'crash'`, `previewDelayMs` (desk-4).
 - Produces: `fallbackLook(job, dir, logo, plan)` → `{ kind: 'look', bytes, sha256, verdict: { model: 'cap-v1', fit: 0, round, palette, plan, judge: null, candidateUrl: null, fallback: 'cap-v1', fits } }` from `scripts/wearable-render.py preview --manifest public/wearables/<template>.json --asset <logo> --output <png> --report <json>` (blank cap + logo in the front panel, identity matrix, no judge); `{ kind: 'refused', reason }` when the renderer's verdict on the artwork is a 422; a machine fault (503) becomes the `error` outcome. Outcomes `deadline | shutdown | error` carry `x-look-reason` and no body; all of them are cached by key for `cacheTtlMs`.
 
-- [ ] **Step 1: Write the failing tests** (append)
+- [x] **Step 1: Write the failing tests** (append)
 
 ```js
 void test('three failed fits fall back to the cap print, so the paid order still airs dressed', async (t) => {
@@ -3218,12 +3218,12 @@ void test('the callback lands only on SPONSOR_SITE_ORIGIN, survives a short outa
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `node --test tests/sponsor-media.test.mjs`
 Expected: the fallback test FAILS (`x-look-outcome` is `'error'`, no `preview` spawn); the refused test FAILS the same way; deadline, drain and callback tests pass or fail on the fallback path only.
 
-- [ ] **Step 3: Implement** — replace the desk-9 stub
+- [x] **Step 3: Implement** — replace the desk-9 stub
 
 ```js
   // Until desk-10 lands the cap print, three failed fits are an error the site re-requests.
@@ -3295,12 +3295,12 @@ with
   }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `node --test tests/sponsor-media.test.mjs`
 Expected: all pass, on a box with or without cv2 (these desks use the stand-in). Then `npx oxlint broadcast/sponsor-media.mjs tests/sponsor-media.test.mjs`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add broadcast/sponsor-media.mjs tests/sponsor-media.test.mjs
@@ -3321,7 +3321,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `media.uploadFiles('media')` (`scripts/media.mjs`), `BASE_STILLS` paths and the `'scripts/….py'` literals in the desk (desk-5).
 - Produces: the media image contains `scripts/wardrobe.py`, `public/pepe-cartoon.png`, `public/gigachad-cartoon.png` beside what it had.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `tests/railway.test.mjs`, in the test `'the media upload is exactly what its Dockerfile copies…'`, extend the list
 
@@ -3359,12 +3359,12 @@ void test('every Python script the desk spawns, and every still it judges agains
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `node --test tests/railway.test.mjs`
 Expected: FAIL — `scripts/wardrobe.py is uploaded` and `scripts/wardrobe.py is named by the desk but not uploaded`.
 
-- [ ] **Step 3: Update the Dockerfile**
+- [x] **Step 3: Update the Dockerfile**
 
 Replace
 
@@ -3393,12 +3393,12 @@ and after the tini comment block (before `RUN apt-get update`) add:
 # fit (about $0.15) is lost per collision; the paid order is never lost.
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `node --test tests/railway.test.mjs`
 Expected: all pass (`names.length < 40` still holds: 19 files).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add broadcast/Dockerfile.sponsor-media tests/railway.test.mjs
@@ -3419,7 +3419,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `devVar('FAL_KEY')` (`scripts/devvars.mjs`); desk `/health` `{ ready, tailor, templateVersion }` (desk-5).
 - Produces: `mediaVariables(env, token, falKey)` adds `FAL_KEY`; `setup` throws `FAL_KEY is missing from .dev.vars…` before touching Railway; `status` prints `tailor     FAL_KEY set|not set`; `health` prints `Ready to tailor looks.` or `Up, but FAL_KEY is missing or fal did not answer, so the cap stays off sale.` and still returns `ready`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/railway.test.mjs`, in `'setup gives both devnet services their own tokens…'`, replace
 
@@ -3471,12 +3471,12 @@ void test('setup refuses to make a desk without the tailor’s key, and creates 
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `node --test tests/railway.test.mjs`
 Expected: the setup deepEqual FAILS (no `FAL_KEY`), the health test FAILS on `/Ready to tailor looks/`, the refusal test FAILS (setup resolves).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `scripts/media.mjs`:
 
@@ -3571,12 +3571,12 @@ with
   else console.log('\nReady to tailor looks.');
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `node --test tests/railway.test.mjs`
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/media.mjs tests/railway.test.mjs
@@ -3596,7 +3596,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `configFromEnv` (`FAL_KEY`, `SPONSOR_MEDIA_TEST_FAL_HOST`), the boot log line (desk-5), `/tailor` (desk-9/10), the `site`/`falQueue` stand-ins.
 - Produces: nothing new; a regression guard that the tailor writes to stdout only through `log()`.
 
-- [ ] **Step 1: Write the test** (append)
+- [x] **Step 1: Write the test** (append)
 
 ```js
 void test('the desk process tailors a look with every stdout line a JSON object, and never prints its key', async (t) => {
@@ -3658,17 +3658,17 @@ void test('the desk process tailors a look with every stdout line a JSON object,
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it passes**
+- [x] **Step 2: Run the test to verify it passes**
 
 Run: `node --test tests/sponsor-media.test.mjs`
 Expected: PASS. If `NOT_JSON` lines appear, some path in the tailor writes to stdout directly (a `console.log`, or a stand-in that inherited stdout): route it through `log()` and rerun — that is the point of this guard.
 
-- [ ] **Step 3: Run the whole suite and the linter**
+- [x] **Step 3: Run the whole suite and the linter**
 
 Run: `npm test && npx oxlint broadcast/sponsor-media.mjs scripts/media.mjs tests/sponsor-media.test.mjs tests/railway.test.mjs && work/vision-venv/bin/python tests/wardrobe.test.py`
 Expected: every suite green; the runtime-bound tests skip on a box without cv2 and run on the studio machine and in CI.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tests/sponsor-media.test.mjs
@@ -3741,7 +3741,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   - `SponsorReceipt.look?: SponsorLook`
   - `validateSponsorDraft` cap-without-asset error text: `'Add your logo first.'`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `tests/sponsorship.test.mjs`, change the first assertion of the existing test `'validates immutable drafts before money movement'` (line 23) from `/asset/i` to the new copy, and append a test for the constant:
 
@@ -3767,12 +3767,12 @@ void test('the wardrobe has one version string, and a cap draft asks for a logo 
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/sponsorship.test.mjs`
 Expected: FAIL — `validates immutable drafts before money movement` (message is still "Upload and qualify a cap asset first.") and the new test (`s.LOOK_VERSION` is `undefined`).
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `lib/sponsorship.ts`, insert after line 6 (`export type SponsorTarget = 'host' | 'guest';`):
 
@@ -3839,12 +3839,12 @@ At lines 296-297 replace the cap error:
       throw new SponsorError(400, 'Add your logo first.');
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/sponsorship.test.mjs`
 Expected: PASS (all tests in the file).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsorship.ts tests/sponsorship.test.mjs
@@ -3866,7 +3866,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: nothing new.
 - Produces: `settlePayment(d: D1Database, attemptId: string, p: { signature: string; payer: string; blockTime: number }, now: number): Promise<{ orderId: string; orderPaidNow: boolean }>` — `orderPaidNow` is `meta.changes === 1` on the order UPDATE (second statement of the batch). Test fakes' `batch()` now returns `{ results, meta: { changes } }` per statement.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/sponsorship-db.test.mjs`:
 
@@ -3903,12 +3903,12 @@ void test('settlement says whether this is the payment that paid the order', asy
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/sponsorship-db.test.mjs`
 Expected: FAIL — `settlement says whether this is the payment that paid the order`: `deepEqual(undefined, { orderId: 'order', orderPaidNow: true })`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Replace the `batch` method in all three fakes with this (same text in `tests/fixtures/d1.mjs`, `tests/sponsorship-db.test.mjs`, `tests/sponsorship-server.test.mjs`):
 
@@ -3990,12 +3990,12 @@ export async function settlePayment(
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/sponsorship-db.test.mjs tests/sponsorship-server.test.mjs tests/sponsor-assets.test.mjs tests/sponsor-context.test.mjs`
 Expected: PASS (the three fakes still satisfy every existing test).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsor-db.ts tests/sponsorship-db.test.mjs tests/sponsorship-server.test.mjs tests/fixtures/d1.mjs
@@ -4020,7 +4020,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   - `export type LookOutcome = { kind: 'look'; sha256: string; url: string; sourceUrl: string; look: NonNullable<LookAssetMetadata['look']>; round: number } | { kind: 'refused'; reason: string; round: number } | { kind: 'deferred'; outcome: 'deadline' | 'shutdown' | 'error'; round: number };`
   - `applyLook(d: D1Database, id: string, outcome: LookOutcome): Promise<string>` — returns the resulting `status`. Transitions: `logo → qualified`, `logo → refused`, `refused → qualified`, fallback look → real fit (while `!assetOnAir`); a `qualified` asset otherwise never changes; idempotent per sha256 and per round.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/sponsorship-db.test.mjs`:
 
@@ -4184,12 +4184,12 @@ void test('a fallback look is replaced by a real fit, but not while the cap is o
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/sponsorship-db.test.mjs`
 Expected: FAIL — the three new tests: `db.markTailorRequested is not a function`, `db.applyLook is not a function`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `lib/sponsor-db.ts`, extend the import from `'./sponsorship'` (lines 3-12):
 
@@ -4349,12 +4349,12 @@ export async function applyLook(
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/sponsorship-db.test.mjs && npx tsc --noEmit`
 Expected: PASS; tsc clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsor-db.ts tests/sponsorship-db.test.mjs
@@ -4378,7 +4378,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   - `tailorProbe(d: D1Database, now: number): Promise<{ orderId: string; assetId: string; nextRound: number; upgrade: boolean }[]>` — reads only, `LIMIT 5`. `nextRound = tailor.round + 1` (a `logo` asset with `nextRound > 3` is for the caller to refuse); `upgrade` is true for a `qualified` asset with `look.fallback`, `tailor.round < 2`, `tailor.at < now − 10 min`, and nothing wearing it on air.
 - Also pins (no code change): `leaseOrders` refuses `logo` / `refused` assets and an older `capTemplateVersion`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/sponsorship-db.test.mjs`:
 
@@ -4467,12 +4467,12 @@ void test('the lease refuses a cap whose logo is still tailoring or was refused,
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/sponsorship-db.test.mjs`
 Expected: FAIL — `the tailor probe …`: `db.tailorProbe is not a function`. The lease pin PASSES already (unchanged SQL); that is expected.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Append to `lib/sponsor-db.ts` after `applyLook`:
 
@@ -4514,12 +4514,12 @@ export async function tailorProbe(
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/sponsorship-db.test.mjs && npx tsc --noEmit`
 Expected: PASS; tsc clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsor-db.ts tests/sponsorship-db.test.mjs
@@ -4545,7 +4545,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   - `export async function qualifiedSponsorAsset(d: D1Database, draft: ReturnType<typeof validateSponsorDraft>, caps?: SponsorCapabilities, stage: 'order' | 'air' = 'order'): Promise<db.AssetRow | null>`.
   - Error copy: missing row → 409 `ASSET` "Add your logo first."; `refused` → 409 `ASSET` "This logo could not be dressed (<reason>). Use a different logo."; wrong host/version/kind → 409 `ASSET` "This logo is not ready for this host on the current wardrobe."; `air` on a look not in place → 409 `ASSET` "This look is still being tailored."
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/sponsorship-server.test.mjs`:
 
@@ -4705,12 +4705,12 @@ void test('the air gate refuses a cap whose look is not in place, even when the 
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/sponsorship-server.test.mjs`
 Expected: FAIL — `the order gate …` (a `logo` asset is refused today: "This artwork is not qualified for broadcast."), and in `the air gate …` the sub-tests `still tailoring`/`refused by the tailor` happen to pass while `qualified but the look and the source disagree` and `qualified without a source image` FAIL (today's gate does not read `look`/`sourceUrl`) and `a finished look …` FAILS (today's gate demands `qualificationVersion`).
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `lib/sponsor-server.ts` — extend the `'./sponsorship'` import:
 
@@ -4895,12 +4895,12 @@ const tooMany = perMinuteCounter();
 
 and delete the whole `sponsorMediaConfig` function and its doc comment from `lib/sponsor-assets.ts` (the block starting `/**\n * Where the media service lives and the secret its /preview and /render calls carry.` through `return { url, token: v.SPONSOR_MEDIA_TOKEN };\n}`). `lib/sponsor-media.ts` keeps importing both names from `./sponsor-assets` through the re-export until site-17 deletes it.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/sponsorship-server.test.mjs tests/sponsor-assets.test.mjs tests/sponsor-render.test.mjs tests/sponsor-context.test.mjs && npx tsc --noEmit`
 Expected: PASS. (`tests/sponsor-render.test.mjs` still passes: its fixture inserts a `qualified` row with `sourceUrl`/`sha256`/`templateVersion`, and `renderSponsorMedia` reads `qualificationVersion` itself, not through the gate.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsor-server.ts lib/sponsor-assets.ts tests/sponsorship-server.test.mjs
@@ -4921,7 +4921,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `SponsorLook`, `LookAssetMetadata` (site-1); `db.AssetRow`.
 - Produces: `receipt.look?: SponsorLook` on cap orders: `{ status: 'tailoring', round? }` while the asset is `logo`; `{ status: 'ready', url, round?, fallback? }` when `qualified`; `{ status: 'refused', reason?, round? }` when `refused`. `assetUrl` stays `asset.url`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 void test('a cap receipt says where its look stands', async () => {
@@ -4963,12 +4963,12 @@ void test('a cap receipt says where its look stands', async () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/sponsorship-server.test.mjs`
 Expected: FAIL — `a cap receipt says where its look stands`: `deepEqual(undefined, { status: 'tailoring', round: 2 })`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Add `type SponsorLook,` to the `'./sponsorship'` import in `lib/sponsor-server.ts`. Insert above `export async function sponsorReceipt(`:
 
@@ -5004,12 +5004,12 @@ In the object `sponsorReceipt` returns, after `capAhead,` add:
     ...(o.product === 'cap' && asset ? { look: lookState(asset) } : {}),
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/sponsorship-server.test.mjs && npx tsc --noEmit`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsor-server.ts tests/sponsorship-server.test.mjs
@@ -5030,7 +5030,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: desk `POST /logo?target=host|guest` (contract: raw body, `content-type` image/*, 200 `{ logo, logoSha256, width, height, palette }`, 422 `{ error, code }`); `LOOK_VERSION`, `LookPalette` (site-1); `sponsorMediaConfig` (site-5); `db.getAsset`.
 - Produces: `uploadSponsorAsset(request, v): Promise<Response>` answering `{ id, status, url, logoUrl }` — `status: 'logo'` and `url === logoUrl` for a new cap asset; the standing row's `status`/`url` for a repeat upload; `kind=logo` (spotlight) rows are `qualified` at once. R2 key `${id}/logo.png`; metadata `{ kind, target, logoSha256, logoUrl, palette, templateVersion: LOOK_VERSION }`. 422 from the desk relayed verbatim; desk unreachable / malformed → 503 "Artwork is not available right now; try again in a minute."; wrong magic bytes → 422 `INVALID_IMAGE` without a desk call.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Replace lines 19-99 of `tests/sponsor-assets.test.mjs` (from `const png = …` through the end of the cross-origin test) with:
 
@@ -5198,12 +5198,12 @@ void test('cross-origin artwork requests fail before storage or worker calls', a
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/sponsor-assets.test.mjs`
 Expected: FAIL — the four new upload tests (today's upload posts to `/preview`, demands `preview` in the answer, and stores `preview.png`); the cross-origin test and the health tests still pass.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `lib/sponsor-assets.ts` change the two imports:
 
@@ -5379,12 +5379,12 @@ export async function uploadSponsorAsset(
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/sponsor-assets.test.mjs && npx tsc --noEmit`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsor-assets.ts tests/sponsor-assets.test.mjs
@@ -5405,7 +5405,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: desk `GET /health` now reporting `{ ready, tailor, templateVersion: 'looks-v1', … }` (contract); `capQualified` is gone.
 - Produces: `MediaHealth = { ready: boolean; tailor: boolean; templateVersion?: string }`; `notReady()` → `{ ready: false, tailor: false }`; `healthFrom(data)` keeps `tailor: data.tailor === true`. Same JSON out of `GET /api/sponsorship/assets?action=health`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `tests/sponsor-assets.test.mjs` replace every health fixture that mentions the tracker:
 
@@ -5449,12 +5449,12 @@ void test('a desk that is up but cannot tailor is reported as such, on the curre
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/sponsor-assets.test.mjs`
 Expected: FAIL — every health test that expects `tailor` (the answer still carries `capQualified: false`).
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `lib/sponsor-assets.ts`:
 
@@ -5481,12 +5481,12 @@ and in `healthFrom`:
   };
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/sponsor-assets.test.mjs && npx tsc --noEmit`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsor-assets.ts tests/sponsor-assets.test.mjs
@@ -5507,7 +5507,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: the health JSON of site-8.
 - Produces: heartbeat `capabilities: { message: true, spotlight: true, cap: health.ready === true && health.tailor === true, capTemplateVersion: health.templateVersion }`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `tests/sponsor-heartbeat.test.mjs`, both mocked health answers become the desk's new shape, and the second test also records the version the heartbeat carries:
 
@@ -5535,12 +5535,12 @@ In `tests/sponsor-heartbeat.test.mjs`, both mocked health answers become the des
   ]);
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/sponsor-heartbeat.test.mjs`
 Expected: FAIL — both tests offer `cap: false` (the client still keys on `capQualified`).
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `lib/sponsor-delivery-client.ts`:
 
@@ -5560,12 +5560,12 @@ and in the heartbeat call:
 
 (`capTemplateVersion: health.templateVersion` is already sent when present; leave it.)
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/sponsor-heartbeat.test.mjs tests/sponsor-playback-recovery.test.mjs && npx tsc --noEmit`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsor-delivery-client.ts tests/sponsor-heartbeat.test.mjs
@@ -5588,7 +5588,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   - `?part=logo` → `${id}/logo.png`; `?part=look&v=<hex64>` → `${id}/look-<v>.png`; both `image/png`, `public,max-age=31536000,immutable`, `access-control-allow-origin: *`, range-aware as before. Any other `part`, or `look` without a hex64 `v` → 404.
   - no `part`: row missing → 404; `accept` containing `application/json` → 200 `{ status, url, lookUrl?, reason?, tailor? }` no-store; otherwise `302` to `asset.url` with `cache-control: no-store`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Change the module import at the top of `tests/sponsor-assets.test.mjs` to:
 
@@ -5684,12 +5684,12 @@ void test('the logo and each look are served immutable and cross-origin; a bare 
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/sponsor-assets.test.mjs`
 Expected: FAIL — `?part=look&v=` answers 404 (today's key is `preview.png`), `?part=preview` answers 200, the bare address answers 200 with `preview.png` or 404.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `lib/sponsor-assets.ts` add near the top (after `const MAX_UPLOAD`):
 
@@ -5777,12 +5777,12 @@ export async function readSponsorAsset(
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/sponsor-assets.test.mjs && npx tsc --noEmit`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsor-assets.ts tests/sponsor-assets.test.mjs
@@ -5804,7 +5804,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: the desk callback (contract): `PUT …/assets/{id}?part=look`, `authorization: Bearer ${SPONSOR_MEDIA_TOKEN}`, `x-look-round`, `x-look-outcome: look|refused|deadline|shutdown|error`; for `look`: `content-type: image/png`, body, `x-look-sha256`, `x-look-verdict` (base64 JSON `{ model, fit, round, palette, plan, judge, candidateUrl, fallback? }`); otherwise `x-look-reason`. `db.applyLook`, `db.assetOnAir`, `db.getAsset` (site-3), `readBounded`, `sha256Hex`, `sameSponsorToken`.
 - Produces: `receiveLook(request: Request, v: SponsorMediaVars, id: string): Promise<Response>` — 200 `{ status }`; 401 without/with a wrong bearer or when `SPONSOR_MEDIA_TOKEN` is unset; 400 for a bad round/outcome or a sha256 that is not the body's; 404 unknown id. Stores `${id}/look-<sha256>.png` then records via `applyLook`; a `qualified` asset is not touched (log `look-superseded`) except the fallback → real-fit upgrade while nothing wears it. Route `PUT` on `app/api/sponsorship/assets/[id]/route.ts`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Extend the module import at the top of `tests/sponsor-assets.test.mjs`:
 
@@ -5989,12 +5989,12 @@ void test('a fallback look is upgraded by a real fit once', async () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/sponsor-assets.test.mjs`
 Expected: FAIL — `receiveLook is not a function` in the four new tests.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `lib/sponsor-assets.ts` — add `sameSponsorToken` to the import from `'./sponsor-server'`, then append:
 
@@ -6147,12 +6147,12 @@ export async function PUT(request: Request, { params }: Context) {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/sponsor-assets.test.mjs && npx tsc --noEmit`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsor-assets.ts "app/api/sponsorship/assets/[id]/route.ts" tests/sponsor-assets.test.mjs
@@ -6174,7 +6174,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `settlePayment(...).orderPaidNow` (site-2); `db.markTailorRequested`, `db.applyLook` (site-3); `sponsorMediaConfig` (site-5); desk `POST /tailor` JSON `{ assetId, round, target, logoUrl, logoSha256, palette, projectName }` → 202/200 ok, 409 BUSY, other 4xx = a verdict on the request, 503 unavailable (contract).
 - Produces: `export async function requestTailor(d: D1Database, v: SponsorMediaVars, orderId: string, round: number): Promise<void>` — never throws. Returns unless the order is a cap with `assetId` and `target`, and unless the asset is `logo` (or `qualified` wearing `look.fallback` with `round === 2`, the upgrade). Writes `metadata.tailor = { round, requestedAt, reasons? }` (one UPDATE) then POSTs `/tailor` with a 5 s timeout. Non-409 4xx → `applyLook(refused)` with the desk's `error`. Any throw / 409 / 5xx / missing config → `console.warn('[sponsorship] tailor deferred', …)` and return.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/sponsorship-server.test.mjs`:
 
@@ -6352,12 +6352,12 @@ void test('a desk that refuses the request outright refuses the logo; a busy or 
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/sponsorship-server.test.mjs`
 Expected: FAIL — `the first proof …` (`desk.tailors.length` is 0), `a site without a desk …` (no warning), `a desk that refuses …` (`tailor` is undefined). `a second order …` passes already (nothing is called); that is fine.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `lib/sponsor-server.ts` add `type SponsorDraft,` to the `'./sponsorship'` import. Insert above `async function recoverAttempt(`:
 
@@ -6487,12 +6487,12 @@ export const POST = GET;
 
 `app/api/sponsorship/reconcile/route.ts`: in the import replace `type SponsorVars,` with `type SponsorMediaVars,` and `const v = env as unknown as SponsorVars;` with `const v = env as unknown as SponsorMediaVars;`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/sponsorship-server.test.mjs tests/sponsor-context.test.mjs && npx tsc --noEmit`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsor-server.ts app/api/sponsorship/route.ts app/api/sponsorship/reconcile/route.ts tests/sponsorship-server.test.mjs
@@ -6513,7 +6513,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `db.tailorProbe` (site-4), `db.applyLook` (site-3), `requestTailor` (site-12).
 - Produces: `reconcileSponsorships` runs the probe as one more read; an idle pass (no attempts, no probe rows) still returns `{ ok: true, idle: true, checked: 0, errors: 0 }` and writes nothing; otherwise `{ ok: true, checked, errors, tailored }`. `nextRound ≤ 3` → `requestTailor(orderId, nextRound)`; `nextRound > 3` → `applyLook(refused)` with `"We couldn't finish tailoring this logo."`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 void test('the reconciler re-requests a stuck look with the next round, gives up after the third, and upgrades a fallback', async (t) => {
@@ -6570,12 +6570,12 @@ void test('the reconciler re-requests a stuck look with the next round, gives up
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/sponsorship-server.test.mjs`
 Expected: FAIL — `result.tailored` is `undefined` (the pass is idle: the reconciler does not look at assets yet).
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `reconcileSponsorships` replace the `attempts` read and its idle check:
 
@@ -6621,12 +6621,12 @@ and replace `    return { ok: true, checked, errors };` at the end of the `try` 
     return { ok: true, checked, errors, tailored };
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/sponsorship-server.test.mjs && npx tsc --noEmit`
 Expected: PASS, including the two existing reconciler tests (`a reconcile pass with nothing to do reads, and writes nothing` still deep-equals the idle result).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsor-server.ts tests/sponsorship-server.test.mjs
@@ -6647,7 +6647,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `qualifiedSponsorAsset(…, 'order')` (site-5), `requestTailor` (site-12), `db.getAsset`.
 - Produces: `POST /api/sponsorship { action: 'replaceLogo', token, assetId }` (order-token authenticated, like `quote`; the panel also sends `orderId`, which the handler ignores — never add an `orderId !== order.id` check). Allowed while the order is `paid` and its current asset is `refused`, `logo` for more than ten minutes since the order last paid or changed its logo (`MAX(paid_at, updated_at)`), or `qualified` wearing `look.fallback`. The new asset must pass the `order` gate for the same target (its message is the response otherwise). Writes `draft.assetId` + `updated_at` (one UPDATE, guarded on `status='paid'`), resets `metadata.tailor` when the id is unchanged, then `requestTailor(round 1)`. Answers the receipt.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 void test('a paid buyer may swap the logo when the tailor gave up, stalled, or fell back', async (t) => {
@@ -6738,12 +6738,12 @@ void test('a paid buyer may swap the logo when the tailor gave up, stalled, or f
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/sponsorship-server.test.mjs`
 Expected: FAIL — the first `swap` answers 400 "Unknown action." where 409 is expected.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Insert above `export async function handleSponsorship(`:
 
@@ -6817,12 +6817,12 @@ In `handleSponsorship`, replace the line `    if (action === 'confirm' && !body.
 
 (The chain's tail already answers with the fresh receipt.)
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/sponsorship-server.test.mjs && npx tsc --noEmit`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsor-server.ts tests/sponsorship-server.test.mjs
@@ -6843,7 +6843,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `GET /api/sponsorship/assets` health `{ ready, tailor, templateVersion }` (site-8); upload answer `{ id, status: 'logo' | 'qualified', url, logoUrl }` (site-7); `receipt.look` (site-6); `until(check, { tries, everyMs })` from `scripts/devnet.mjs`.
 - Produces: the script refuses to run a cap purchase unless `health.ready && health.tailor`; accepts an upload answered `logo` or `qualified`; after payment polls `confirm` until `receipt.look.status !== 'tailoring'` (up to 7.5 minutes) and reports the outcome.
 
-- [ ] **Step 1: Edit the script**
+- [x] **Step 1: Edit the script**
 
 Header comment lines 8-11 become:
 
@@ -6940,17 +6940,17 @@ if (PRODUCT === 'cap' && paid) {
 }
 ```
 
-- [ ] **Step 2: Check the script parses**
+- [x] **Step 2: Check the script parses**
 
 Run: `node --check scripts/sponsorpay.mjs`
 Expected: no output, exit 0.
 
-- [ ] **Step 3: Rehearse once the desk reports `tailor: true` (spec "Verification on devnet" step 4)**
+- [x] **Step 3: Rehearse once the desk reports `tailor: true` (spec "Verification on devnet" step 4)**
 
 Run: `SITE=https://<devnet site> STUDIO_TOKEN=… RPC_URL=https://api.devnet.solana.com PRODUCT=cap LOGO=public/logo.png node scripts/sponsorpay.mjs`
 Expected: `ok  the logo is accepted — asset … (logo) in … ms`, `ok  the placement is paid and verified on chain`, `ok  the tee and cap are tailored — ready after … s — https://…?part=look&v=…`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/sponsorpay.mjs
@@ -6971,7 +6971,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: desk `/health` `{ ready, tailor, templateVersion: 'looks-v1' }`; desk `POST /logo?target=host` → 401 without the bearer, 200 `{ logo, logoSha256, width, height, palette }` with it (contract); `scripts/wardrobe.py` + `tests/wardrobe.test.py` from the desk section; the `FAL_KEY` repository secret (optional).
 - Produces: a workflow that fails unless `/health` says `ready: true` and `templateVersion: 'looks-v1'` (and `tailor: true` when `FAL_KEY` is set), that smoke-tests `/logo` instead of `/preview`, and that no longer runs the retired `tests/sponsor-render.test.mjs`.
 
-- [ ] **Step 1: Edit the workflow**
+- [x] **Step 1: Edit the workflow**
 
 In both `paths:` lists: remove `- 'lib/sponsor-media.ts'` and `- 'tests/sponsor-render.test.mjs'`; add `- 'scripts/wardrobe.py'` and `- 'tests/wardrobe.test.py'`.
 
@@ -7055,12 +7055,12 @@ Image job — the smoke-test step whole:
 
 Update the file's opening comment to say the first job runs "the renderer, the tailor scripts and the media tests" and the second "makes the calls the site makes: `/health` and `/logo`".
 
-- [ ] **Step 2: Check the workflow parses**
+- [x] **Step 2: Check the workflow parses**
 
 Run: `node -e "require('js-yaml').load(require('fs').readFileSync('.github/workflows/media.yml','utf8')); console.log('ok')"`
 Expected: `ok`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add .github/workflows/media.yml
@@ -7086,7 +7086,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: nothing.
 - Produces: nothing; `renderSponsorMedia` no longer exists. `sponsorMediaConfig`/`SponsorMediaVars` stay re-exported from `lib/sponsor-assets.ts` (harmless; the routes import them from there).
 
-- [ ] **Step 1: Delete the files and fix the context test**
+- [x] **Step 1: Delete the files and fix the context test**
 
 ```bash
 git rm lib/sponsor-media.ts app/api/sponsorship/media/route.ts tests/sponsor-render.test.mjs
@@ -7122,12 +7122,12 @@ void test('the context bridge forwards the canonical legacy producer identity', 
 });
 ```
 
-- [ ] **Step 2: Run the tests and the type check**
+- [x] **Step 2: Run the tests and the type check**
 
 Run: `node --test tests/sponsor-context.test.mjs tests/sponsor-assets.test.mjs tests/sponsorship-server.test.mjs && npx tsc --noEmit && grep -rn "sponsor-media'" lib app tests --include='*.ts' --include='*.tsx' --include='*.mjs'`
 Expected: PASS; tsc clean; the grep prints nothing.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tests/sponsor-context.test.mjs
@@ -7205,7 +7205,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `character-assets.json` → `sources['pepe-cartoon']`, `sources['gigachad-cartoon']` (fal CDN URLs of the branded 1376×768 originals; the local copies are `public/pepe-cartoon.png` and `public/gigachad-cartoon.png`, whose sha256 the frames module already pins as `originalSha256`).
 - Produces: `videoFrames.host.originalUrl === 'https://v3b.fal.media/files/b/0aa99e7e/ViWtBAcKK0DXjM7kBLIvD_eid12yRD.png'` and `videoFrames.guest.originalUrl === 'https://v3b.fal.media/files/b/0aa99e9a/UUct9hv94FEzgs2dz2H26_JZaGMdjK.png'` (type: string literal members of the `as const` object exported from `lib/video-frames.ts`). The desk keeps the same two URLs in its own `BASE_STILLS` table (the media image ships no `lib/`); a desk test pins them to `character-assets.json`, and this task pins `lib/video-frames.ts` to the same file, so the two cannot drift apart.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `tests/video-render.test.mjs`, replace the header import block
 
@@ -7285,12 +7285,12 @@ void test('each host carries the fal URL of its uncropped original, the still th
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `node --test tests/video-render.test.mjs`
 Expected: FAIL — `each host carries the fal URL of its uncropped original…` with `AssertionError [ERR_ASSERTION]: undefined !== 'https://v3b.fal.media/files/b/0aa99e7e/…'` (no `originalUrl` yet). Every other test in the file still passes.
 
-- [ ] **Step 3: Teach the generator, then hand-add the field it would write**
+- [x] **Step 3: Teach the generator, then hand-add the field it would write**
 
 Replace the whole of `scripts/video-frames.mjs` with:
 
@@ -7414,7 +7414,7 @@ with
     originalSha256:
 ```
 
-- [ ] **Step 4: Run the test to verify it passes, and prove the URLs are the files on disk**
+- [x] **Step 4: Run the test to verify it passes, and prove the URLs are the files on disk**
 
 Run: `node --test tests/video-render.test.mjs`
 Expected: PASS (all tests).
@@ -7439,7 +7439,7 @@ Expected: `pepe matches` and `gigachad matches` (the local hashes are the `origi
 Run: `npx tsc --noEmit`
 Expected: no errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/video-frames.mjs lib/video-frames.ts tests/video-render.test.mjs
@@ -7463,7 +7463,7 @@ EOF
 - Consumes: `shotInput(line: Line)` → `{ image_url, end_image_url, prompt, duration, resolution, prompt_expansion_mode, seed }` (unchanged shape); `Wardrobe = { orderId, leaseToken, target, assetId, designHash, sourceUrl, templateVersion }` from `lib/sponsor-program.ts`.
 - Produces: for a line with `wardrobe`, `prompt` ends with the exact suffix in Global constraints; `image_url === end_image_url === wardrobe.sourceUrl`; the gesture is dropped (prompt and duration identical to the same line without a gesture).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `tests/video-render.test.mjs` replace this whole test
 
@@ -7539,12 +7539,12 @@ void test('a dressed line conditions both frames on the look, keeps the print in
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `node --test tests/video-render.test.mjs`
 Expected: FAIL — `a dressed line conditions both frames on the look…` at `input.prompt.endsWith(…)` (the prompt still ends with `The camera and cap scale remain fixed.`). Other tests pass.
 
-- [ ] **Step 3: Replace the suffix**
+- [x] **Step 3: Replace the suffix**
 
 In `lib/show.ts` replace exactly
 
@@ -7574,12 +7574,12 @@ export function shotInput(line: Line) {
       : '');
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `node --test tests/video-render.test.mjs`
 Expected: PASS. Then `npx tsc --noEmit` → no errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/show.ts tests/video-render.test.mjs
@@ -7603,7 +7603,7 @@ EOF
 - Consumes: `export const sponsorshipRules: string` (`lib/show.ts`), `sponsoredWriterSystem(): string` and `writerSystemFor(brand?: CoinBrand): string`, which both join it into their system prompts.
 - Produces: `sponsorshipRules` contains the exact sentence `A wardrobe introduction names its sponsor and the host wearing its tee and cap; a callback names the same sponsor again naturally.` and no longer `A cap introduction`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `tests/sponsor-writer.test.mjs` replace the line (occurs once)
 
@@ -7635,12 +7635,12 @@ void test('the sponsorship rules describe a wardrobe introduction as a tee and a
 void test('an exchange that is not four spoken turns fails', () => {
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `node --test tests/sponsor-writer.test.mjs`
 Expected: FAIL — `the sponsorship rules describe a wardrobe introduction…` at the first `assert.match` (`The input did not match the regular expression`).
 
-- [ ] **Step 3: Change the sentence**
+- [x] **Step 3: Change the sentence**
 
 In `lib/show.ts` replace exactly (this fragment occurs once, inside the `sponsorshipRules` template string)
 
@@ -7654,12 +7654,12 @@ with
 A wardrobe introduction names its sponsor and the host wearing its tee and cap; a callback names the same sponsor again naturally.
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `node --test tests/sponsor-writer.test.mjs`
 Expected: PASS. `npx tsc --noEmit` → no errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/show.ts tests/sponsor-writer.test.mjs
@@ -7683,7 +7683,7 @@ EOF
 - Consumes: `SponsorBrief = { orderId, product: 'message' | 'spotlight' | 'cap', buyer, project?, advertiserClaim, tone, wearingHost?, mention?: 'intro' | 'callback' }` (unchanged: no garment field); `sponsoredWriterRequest(brief, plan, opts?)`, `sponsorTurnPlan(prev?, brief?)`, `judgePrompt(lines, brief, previousLine?)`.
 - Produces: the exact strings in Global constraints, reachable through `sponsoredWriterRequest(...)` (placement line + numbered duties) and `judgePrompt(...).prompt`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/sponsor-writer.test.mjs` replace this whole test
 
@@ -7811,12 +7811,12 @@ with
   );
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `node --test tests/sponsor-writer.test.mjs`
 Expected: FAIL in three tests — `the tee and cap are mentioned on the wearer’s first turn…` (turn 2 regex), `the judge sees the advertiser text…` (`including the tee and cap he is wearing`), and `a cap introduction opens on the host not wearing it…` (turn 2 regex). Everything else passes.
 
-- [ ] **Step 3: Change the wording**
+- [x] **Step 3: Change the wording**
 
 In `lib/sponsor-writer.ts` replace exactly
 
@@ -7882,12 +7882,12 @@ with
 its product, its pitch or the tee and cap. A turn that riffs on the pitch
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `node --test tests/sponsor-writer.test.mjs`
 Expected: PASS (all). `npx tsc --noEmit` → no errors. `npx oxlint lib/sponsor-writer.ts` → no warnings.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsor-writer.ts tests/sponsor-writer.test.mjs
@@ -7911,7 +7911,7 @@ EOF
 - Consumes: `createServices(): Services`; `Services.render(line: Line, report?: (stage) => void): Promise<Clip>`; `PlacementLostError(message: string, code: string)` with `placementLostCodes = new Set(['LEASE', 'CAPABILITY', 'ASSET'])` (`lib/requests.ts`); the studio route actions `shot` → `scale` → `speech` → `poll`, and the media proxy `/api/media?url=<encoded fal URL>`.
 - Produces: for a line with `wardrobe`, `render` issues exactly `shot`, `scale`, `speech` (no `/api/sponsorship/media` call, no direct download), downloads `/api/media?url=…scaled…`, and returns a `Clip` that still carries `line.wardrobe`. `WearableError`, `wardrobeRetries` and the `media` cache are gone; `INVALID_WEARABLE` is no longer a recognised code.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Replace the whole of `tests/cap-render-source.test.mjs` with:
 
@@ -8204,7 +8204,7 @@ void test('a successful compositor preserves the verified speech boundary and de
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `node --test tests/cap-render-source.test.mjs`
 Expected: FAIL — `a dressed clip is scaled and audited like any other clip…` at `no compositor is called for a dressed clip` (the old branch posts to `/api/sponsorship/media`) or at `actions` (`['shot', 'speech']` without `scale`). The two refusal tests pass already (the route-level refusal path is unchanged).
@@ -8212,7 +8212,7 @@ Expected: FAIL — `a dressed clip is scaled and audited like any other clip…`
 Run: `node --test tests/video-render.test.mjs`
 Expected: PASS (the deleted tests are gone; the rest is unaffected).
 
-- [ ] **Step 3: Remove the cap branch**
+- [x] **Step 3: Remove the cap branch**
 
 In `lib/services.ts` make these six exact replacements.
 
@@ -8351,12 +8351,12 @@ with
 
 Leave `const identity = JSON.stringify([input, line.wardrobe]);` and the `key` tuple as they are: a look is still part of the job's identity, so a re-dressed line never reuses an undressed take.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `node --test tests/cap-render-source.test.mjs tests/video-render.test.mjs`
 Expected: PASS (all). `npx tsc --noEmit` → no errors (no unused `Result` cast, no `WearableError` reference left). `grep -n "WearableError\|wardrobeRetries\|sponsorship/media\|INVALID_WEARABLE" lib/services.ts` → no output.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/services.ts tests/cap-render-source.test.mjs tests/video-render.test.mjs
@@ -8380,7 +8380,7 @@ EOF
 - Consumes: `SponsorError(status: number, message: string, code?: string)` (already imported in the route from `@/lib/sponsorship`); the route's catch already answers a `SponsorError` through `sponsorFailure(e)` as `{ error, code }` with its status; `resolveTrustedSponsor(request, vars, reference): Promise<SponsorLease>` where `SponsorLease.assetMetadata: Record<string, unknown> | null` carries `sourceUrl`, `sha256`, `templateVersion` (site section, `air` stage).
 - Produces: a `shot` whose `line.wardrobe` does not match the lease's asset answers `409 { error: 'The wardrobe revision does not match this purchased cap.', code: 'ASSET' }`; `lib/services.ts` turns that into `PlacementLostError` (code `ASSET` is in `placementLostCodes`), which `Podcast` handles without retries.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to the end of `tests/podcast-route-refusals.test.mjs`:
 
@@ -8475,12 +8475,12 @@ void test('a stale wardrobe pin is refused as 409 ASSET, and a current one buys 
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `node --test tests/podcast-route-refusals.test.mjs`
 Expected: FAIL — `a stale wardrobe pin is refused as 409 ASSET…` at `assert.equal(stale.status, 409)` with `400 !== 409` (a plain `Error` is answered as a 400 with no code).
 
-- [ ] **Step 3: Throw the site's refusal**
+- [x] **Step 3: Throw the site's refusal**
 
 In `app/api/podcast/route.ts` replace exactly
 
@@ -8502,12 +8502,12 @@ with
           );
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `node --test tests/podcast-route-refusals.test.mjs`
 Expected: PASS (both tests). `npx tsc --noEmit` → no errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/api/podcast/route.ts tests/podcast-route-refusals.test.mjs
@@ -8531,7 +8531,7 @@ EOF
 - Consumes: `SponsorProgram.decorate(line: Line, previousSpeaker?: Speaker): Line`, `failedRender(line, error)`, `ended(line & { duration })`, `WARDROBE_STRIKES`, the `strikes` map it already keeps per order.
 - Produces: `undressed(orderId: string, shotId: number): void` — after it, `decorate` leaves a line of that order's target undressed while `previousSpeaker === line.speaker && line.id > shotId`; the note clears on the first cut back to that host (a line of his whose previous speaker is not him), on a played dressed appearance in `ended`, and in `beginRun()`. Unknown `orderId` is a no-op. `show-8` calls it from `Podcast.rejectPlacement`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `tests/fixtures/sponsor-lease.mjs` (the one lease both `tests/sponsor-wardrobe.test.mjs` and `tests/fixtures/sponsor-lease.mjs` import) replace the fixture lines
 
@@ -8634,7 +8634,7 @@ void test('a played dressed appearance clears the undressed note, like the strik
 ```
 
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `node --test tests/sponsor-wardrobe.test.mjs`
 Expected: FAIL — both new tests with `TypeError: p.undressed is not a function`. The two existing tests pass.
@@ -8642,7 +8642,7 @@ Expected: FAIL — both new tests with `TypeError: p.undressed is not a function
 Run: `node --test tests/fixtures/sponsor-lease.mjs`
 Expected: PASS (the fixture change is cosmetic for the program).
 
-- [ ] **Step 3: Add the note**
+- [x] **Step 3: Add the note**
 
 In `lib/sponsor-program.ts` make these five exact replacements.
 
@@ -8753,12 +8753,12 @@ with
           }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `node --test tests/sponsor-wardrobe.test.mjs tests/fixtures/sponsor-lease.mjs`
 Expected: PASS (all). `npx tsc --noEmit` → no errors. `npx oxlint lib/sponsor-program.ts` → clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsor-program.ts tests/sponsor-wardrobe.test.mjs tests/fixtures/sponsor-lease.mjs
@@ -8782,7 +8782,7 @@ EOF
 - Consumes: `SponsorProgram.undressed(orderId: string, shotId: number): void` (show-7); `Podcast.diagnose(event: string, reason?: string, detail?: Record<string, unknown>)` and `getDiagnostics()`; `Slot = Line & { status: 'rendering' | 'ready'; clip?; stage?; startedAt?; attempt?; retryAt? }`; `PlacementLostError` (`lib/requests.ts`).
 - Produces: in `rejectPlacement(first)` for a wardrobe line: calls `this.sponsorProgram?.undressed(first.wardrobe.orderId, first.id)`; every slot adjacent to `first` in `state.slots` with the same speaker and `wardrobe.orderId` is released and re-rendered undressed with `attempt: undefined, retryAt: now` (at most one such neighbour on each side; a run never exceeds two turns); when `first` is the head slot and `state.history.at(-1)` is a dressed line of the same host and order, `this.diagnose('wardrobe-flip', <reason>, { shot: first.id, airedShot })` is recorded. Test helpers appended to `tests/engine.test.mjs` and reused by show-9: `stalePin()`, `capLease()`, `capService()`, `runsWriter`, `wardrobePolicy`, `rendering(h, id)`, `dressedFree(line)`, `aired(h, id)`, `dressedPair(h)`, `drive(h, condition, hold?, rounds?)`, `dressedHarness(extra?)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to the very end of `tests/engine.test.mjs`:
 
@@ -9077,7 +9077,7 @@ void test('a pin mismatch undresses the host’s run on the first failure, and t
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `node --test tests/engine.test.mjs`
 Expected: FAIL — `a dressed take refused for its pin undresses its committed run-mate too…` at `shot <mate> is being made again` (`'ready' !== 'rendering'`: the run-mate keeps its dressed clip), and `a refused pin whose run-mate already aired dressed…` at `the flip is counted once` (`0 !== 1`). Every earlier test in the file passes.
@@ -9085,7 +9085,7 @@ Expected: FAIL — `a dressed take refused for its pin undresses its committed r
 Run: `node --test tests/sponsor-program.test.mjs`
 Expected: FAIL — `a pin mismatch undresses the host’s run…` at `and so did its run-mate` (the run-mate aired dressed).
 
-- [ ] **Step 3: Undress the run-mate**
+- [x] **Step 3: Undress the run-mate**
 
 In `lib/engine.ts` replace exactly
 
@@ -9177,12 +9177,12 @@ with
     }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `node --test tests/engine.test.mjs tests/sponsor-program.test.mjs tests/sponsor-wardrobe.test.mjs`
 Expected: PASS (all, including the older `a cap whose lease is gone is undressed at once…` test, whose alternating writer has no run-mates). `npx tsc --noEmit` → no errors. `npx oxlint lib/engine.ts` → no new warnings.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/engine.ts tests/engine.test.mjs tests/sponsor-program.test.mjs
@@ -9206,7 +9206,7 @@ EOF
 - Consumes: from show-8's helper block in `tests/engine.test.mjs`: `stalePin()`, `dressedFree(line)`, `dressedPair(h)`, `drive(h, condition, hold?, rounds?)`, `rendering(h, id)`, `dressedHarness(extra?)` (if show-8 was rejected, apply its Step 1 helper block unchanged first; the tests below only need the helpers, not show-8's engine hunk to pass their first assertion, but they do need it to pass in full); `SpeechError` (already imported at the top of the file).
 - Produces: module-level `const wornBy = (line: Line) => string` (`''` undressed, else `${orderId}:${designHash}`); in `launch`, a finished clip is released and ignored when its slot is gone or now wears something else (`wornBy(slot) !== wornBy(line)`), and a failure of a dressed take whose slot now wears something else returns before any retry, strike or note.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to the very end of `tests/engine.test.mjs` (after show-8's second test):
 
@@ -9308,12 +9308,12 @@ void test('a dressed take that fails after its slot was undressed is ignored: no
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `node --test tests/engine.test.mjs`
 Expected: FAIL — `a dressed take that lands after its slot was undressed is discarded…` at `the stale dressed clip is released, never kept` (the dressed clip is set on the undressed slot and marked ready), and `a dressed take that fails after its slot was undressed is ignored…` at `the stale failure is not counted against the retake` or `the dressed take is never made again` (the stale failure re-queues the slot with `attempt: 1` and a second dressed retake). All earlier tests pass.
 
-- [ ] **Step 3: Guard `launch` against stale dressed takes**
+- [x] **Step 3: Guard `launch` against stale dressed takes**
 
 In `lib/engine.ts` replace exactly
 
@@ -9373,14 +9373,14 @@ with
           if (line.wardrobe && slot && wornBy(slot) !== wornBy(line)) return;
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `node --test tests/engine.test.mjs tests/sponsor-program.test.mjs tests/buffering.test.mjs tests/proactive-continuity.test.mjs tests/sponsor-playback-recovery.test.mjs`
 Expected: PASS (all; the guard is a no-op for undressed lines, so the older engine suites are unaffected). `npx tsc --noEmit` → no errors. `npx oxlint lib/engine.ts` → no new warnings.
 
 Then the whole suite: `npm test` → all green (the desk/site sections may have their own in-progress failures; anything under `tests/engine*`, `tests/sponsor-program*`, `tests/sponsor-wardrobe*`, `tests/sponsor-writer*`, `tests/video-render*`, `tests/cap-render-source*`, `tests/podcast-route-refusals*` must be green).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/engine.ts tests/engine.test.mjs
@@ -9457,7 +9457,7 @@ Before payment the panel takes a logo, shows the desk's refusal under the upload
   - `productCopy.cap = { title: 'Dress the host', short: 'Your logo on the tee, a cap in your colours', description: 'Your logo printed on the tee and a cap in your colours, worn by Pepe or Chad for 10 live minutes. Six clear appearances, an introduction and a callback.', icon: 'cap' } as const`
   - `export const LOOK_COPY = { previewCaption, tailoring, anotherFit, slow, replace, improving, refused } as const` (exact strings in Step 1; ui-2, ui-4, ui-5 read them).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/sponsor-client.test.mjs`:
 
@@ -9483,12 +9483,12 @@ void test('the cap sells as a tee and a cap made for the brand, and every waitin
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/sponsor-client.test.mjs`
 Expected: FAIL — `AssertionError [ERR_ASSERTION]: Expected values to be loosely deep-equal` on `productCopy.cap` (actual title `'Sponsor the podcast'`).
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `lib/sponsor-client.ts` replace lines 157-164 (the `cap` entry of `productCopy` and the closing `} as const;`):
 
@@ -9591,12 +9591,12 @@ with:
   );
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/sponsor-client.test.mjs && npx tsc --noEmit`
 Expected: PASS (5 tests), tsc silent.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsor-client.ts components/sponsor-panel.tsx tests/sponsor-client.test.mjs tests/browser/sponsor-experience.mjs
@@ -9627,7 +9627,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   - `export const logoSwatchUrl: (assetId: string | undefined) => string | null` → `/api/sponsorship/assets/${encodeURIComponent(id)}?part=logo`.
   - `export const baseStill: (target: SponsorTarget | undefined) => string` → `/pepe-video.webp` / `/gigachad-video.webp`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/sponsor-client.test.mjs`:
 
@@ -9747,12 +9747,12 @@ void test('the wardrobe card follows the order: the payment clock while tailorin
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/sponsor-client.test.mjs`
 Expected: FAIL — `TypeError: C.lookView is not a function`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 First, in `lib/sponsorship.ts`, run `grep -n "look?:" lib/sponsorship.ts`. If it prints nothing (the site section has not landed), replace lines 69-71:
 
@@ -9854,12 +9854,12 @@ export const baseStill = (target: SponsorTarget | undefined) =>
   target === 'guest' ? '/gigachad-video.webp' : '/pepe-video.webp';
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/sponsor-client.test.mjs && npx tsc --noEmit`
 Expected: PASS (6 tests), tsc silent.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsor-client.ts tests/sponsor-client.test.mjs
@@ -9886,7 +9886,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: `SponsorReceipt.look` (ui-2).
 - Produces: `receiptStage(receipt: Pick<SponsorReceipt, 'status'> & Partial<Pick<SponsorReceipt, 'draft' | 'look'>>): 'payment' | 'tailoring' | 'queued' | 'preparing' | 'on-air' | 'paused' | 'delivered'` — `'tailoring'` only for `status === 'paid'`, `draft.product === 'cap'`, and `look` missing or `look.status === 'tailoring'`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/sponsor-client.test.mjs`:
 
@@ -9918,12 +9918,12 @@ void test('a paid cap waits on its tailor before it is in the queue; every other
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/sponsor-client.test.mjs`
 Expected: FAIL — `AssertionError: 'queued' == 'tailoring'` on the first assertion.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `lib/sponsor-client.ts` replace lines 69-77 (the head of `receiptStage`):
 
@@ -10055,12 +10055,12 @@ with:
       </div>
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/sponsor-client.test.mjs && npx tsc --noEmit`
 Expected: PASS (7 tests), tsc silent (the `labels[stage]` index now covers `'tailoring'`).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/sponsor-client.ts components/sponsor-receipt.tsx tests/sponsor-client.test.mjs
@@ -10089,7 +10089,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   - `SponsorPreview({ draft, artwork?, paid?, look?: LookView | null })` — card image precedence for cap orders: `look.url` when `look.kind === 'ready'`, else `baseStill(draft.target)` with the swatch from `draft.assetId`; label `look?.label ?? (paid ? 'YOUR ON-AIR PASS' : 'PLACEMENT PREVIEW')`; root class gains `tailoring` while `look.kind === 'tailoring'`. DOM hooks ui-5/ui-6 rely on: `.sponsor-look-frame`, `img.sponsor-host-art` (still) / `img.sponsor-host-art.look` (the look, keyed by URL), `img.sponsor-logo-swatch`, `.sponsor-preview-caption small` (the line).
   - Panel: `uploadLogo(file: File, target: SponsorDraft['target']): Promise<{ id: string; logoUrl: string }>` (throws `Error(message)` with the desk's reason); `clock` state bumped in `updateReceipt`; `look` computed as `lookView(receipt, clock)`; the `artwork` state is gone.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `tests/browser/sponsor-experience.mjs` replace lines 12-14:
 
@@ -10286,12 +10286,12 @@ Then insert the cap flow between line 316 `  await context.close();` and line 31
   await fitting.context.close();
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run (app on 3316 in another terminal): `node tests/browser/sponsor-experience.mjs`
 Expected: FAIL — `AssertionError` on the caption match: actual `WARDROBE / PEPE\nMake the cap yours.\n10 live minutes · 6+ appearances` does not match `/Your tee and cap are tailored right after payment/`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Replace the whole of `components/sponsor-preview.tsx` with:
 
@@ -10748,12 +10748,12 @@ import {
       />
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npx tsc --noEmit && npx oxlint components/sponsor-panel.tsx components/sponsor-preview.tsx lib/sponsor-client.ts && node tests/browser/sponsor-experience.mjs`
 Expected: tsc and oxlint silent; the suite prints `Browser rehearsal passed: …` (the cap block runs after the desktop spotlight flow and before the 320 px flow).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add components/sponsor-preview.tsx components/sponsor-panel.tsx tests/browser/sponsor-experience.mjs
@@ -10783,7 +10783,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   - `SponsorReceipt({ receipt, busy, look: LookView | null, onAction: (action: 'reschedule') => void, onReplaceLogo: (file: File) => void, onNew })`. Kicker = `look?.label ?? 'YOUR ON-AIR PASS'`; under a `tailoring` heading the sentence is `look.line`; when `look.replace` a `.sponsor-look-replace` block shows `look.line` (unless the heading already carries it) and the button "Use a different logo" (`#sponsor-replace-logo` is its hidden file input).
   - Panel: `replaceLogo(file: File): Promise<void>` — upload, then `sponsorAction({ action: 'replaceLogo', orderId: receipt.id, token: receipt.token, assetId })`, then `setReplacedAt(Date.now())`; `replacedAt` resets on a new order and on a different receipt token.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `tests/browser/sponsor-experience.mjs`, in the sponsorship route's POST branch, replace:
 
@@ -10972,12 +10972,12 @@ with:
   await fitting.context.close();
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node tests/browser/sponsor-experience.mjs`
 Expected: FAIL — `TimeoutError: locator.waitFor: Timeout 10000ms exceeded` waiting for the heading "Your tee and cap are being tailored" is **not** the first failure (ui-3 already renders it); the first failure is `AssertionError` on the receipt kicker: `'YOUR ON-AIR PASS'` does not match `/TAILORING/`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Replace the whole of `components/sponsor-receipt.tsx` with:
 
@@ -11323,12 +11323,12 @@ insert `replaceLogo` so the block reads:
         />
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npx tsc --noEmit && npx oxlint components/sponsor-panel.tsx components/sponsor-receipt.tsx && node tests/browser/sponsor-experience.mjs`
 Expected: tsc and oxlint silent; `Browser rehearsal passed: …`; `work/sponsor-browser/desktop-fitting.png` shows the refused state with the button.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add components/sponsor-receipt.tsx components/sponsor-panel.tsx tests/browser/sponsor-experience.mjs
@@ -11357,7 +11357,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: the DOM hooks from ui-4/ui-5: `.sponsor-preview.tailoring`, `.sponsor-preview-label svg`, `.sponsor-look-frame`, `.sponsor-host-art.look`, `.sponsor-logo-swatch`, `.sponsor-look-replace`; tokens `--dur-breathe`, `--ease-breathe` from `app/globals.css`.
 - Produces: keyframes `sponsor-look-in`, `sponsor-look-shadow`, `sponsor-swatch-in`, `sponsor-tailoring`. Personality Premium: `cubic-bezier(0.4, 0, 0.2, 1)`, reveal 400 ms with a 12 px rise, shadow 50 ms behind, breathe 1600 ms; all off under reduced motion.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In the cap flow (ui-5), right after
 
@@ -11445,12 +11445,12 @@ insert:
   await fitting.page.emulateMedia({ reducedMotion: 'no-preference' });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node tests/browser/sponsor-experience.mjs`
 Expected: FAIL — `AssertionError` on the reveal `deepEqual`: actual `['none', '0s', '0s', 'ease', 'static']`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `app/sponsor.css`, after
 
@@ -11599,12 +11599,12 @@ with:
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node tests/browser/sponsor-experience.mjs`
 Expected: `Browser rehearsal passed: …`. Open `work/sponsor-browser/desktop-fitting.png` and check the swatch sits bottom-right on the still and the replace block reads as one group.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/sponsor.css tests/browser/sponsor-experience.mjs
@@ -11629,12 +11629,12 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: desk routes and callback headers from `CONTRACT.md`; the receipt sub-state copy from ui-1.
 - Produces: nothing code-facing.
 
-- [ ] **Step 1: Write the failing check**
+- [x] **Step 1: Write the failing check**
 
 Run: `grep -c "POST /logo\|POST /tailor\|Dress the host\|looks-v1" docs/SPONSORSHIP.md`
 Expected now: `0`.
 
-- [ ] **Step 2: Apply the exact replacements**
+- [x] **Step 2: Apply the exact replacements**
 
 (a) Line 3, replace the first sentence:
 
@@ -11752,12 +11752,12 @@ Every clip of a dressed host starts and ends on the look; the look's revision is
 The tracker and its qualification now serve only the fallback: `scripts/wearable-render.py preview` bakes the logo into the blank cap's front panel when three generative fits fail, so a paid order still airs. Qualification is not a release gate for the tailored look, and nothing below needs to be repeated to ship it; it stays here for the fallback and until `/render` and `/preview` are removed.
 ```
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run: `grep -c "POST /logo\|POST /tailor\|Dress the host\|looks-v1" docs/SPONSORSHIP.md; grep -n "capQualified" docs/SPONSORSHIP.md`
 Expected: the first prints a number ≥ 8; the second prints nothing.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/SPONSORSHIP.md
@@ -11780,12 +11780,12 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 **Interfaces:** none code-facing.
 
-- [ ] **Step 1: Write the failing check**
+- [x] **Step 1: Write the failing check**
 
 Run: `grep -c "tailor" docs/LAUNCH.md`
 Expected now: `0`.
 
-- [ ] **Step 2: Apply the exact replacements**
+- [x] **Step 2: Apply the exact replacements**
 
 (a) Lines 61-62:
 
@@ -11877,12 +11877,12 @@ not https, or a token too short for the worker) fails it.
   within a minute, so a collision costs at most about $0.15.
 ```
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run: `grep -c "tailor" docs/LAUNCH.md; grep -n "capQualified" docs/LAUNCH.md`
 Expected: first ≥ 8; second prints nothing.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/LAUNCH.md
@@ -11902,12 +11902,12 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 **Interfaces:** none code-facing.
 
-- [ ] **Step 1: Write the failing check**
+- [x] **Step 1: Write the failing check**
 
 Run: `grep -c "tee and cap\|tailor" README.md .dev.vars.example`
 Expected now: `README.md:0` and `.dev.vars.example:0`.
 
-- [ ] **Step 2: Apply the exact replacements**
+- [x] **Step 2: Apply the exact replacements**
 
 (a) `README.md` line 66, the sentence:
 
@@ -11956,12 +11956,12 @@ keep `SPONSOR_ENABLED=false` until the staging rehearsal passes.
 # posts the finished look back to it); and optionally WEARABLE_PYTHON.
 ```
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run: `grep -c "tee and cap\|tailor" README.md .dev.vars.example`
 Expected: `README.md:2` (or more) and `.dev.vars.example:1` (or more).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add README.md .dev.vars.example
