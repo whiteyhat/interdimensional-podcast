@@ -21,13 +21,18 @@ import http from 'node:http';
 import {
   BASE_STILLS,
   createMediaService,
+  deltaE76,
+  garmentPlan,
   handleMediaRequest,
   MAX_LOGO,
   MEDIA_DEFAULTS,
+  NEUTRALS,
   qualifiedTemplates,
   renderKey,
   SHUTDOWN_MS,
   startMediaServer,
+  tailorPrompt,
+  WEARERS,
 } from '../broadcast/sponsor-media.mjs';
 // The desk only fetches takes from fal.media. These tests serve takes from loopback instead,
 // a door the service opens only under NODE_ENV=test.
@@ -1702,3 +1707,71 @@ void test('the desk’s clock agrees with the site’s retry and with Railway’
   assert.ok(SHUTDOWN_MS > drainMs);
   assert.ok(SHUTDOWN_MS <= railway.deploy.drainingSeconds * 1000 - 10_000);
 });
+
+const PALETTES = {
+  black: { clusters: [{ hex: '#111111', share: 1 }], primary: '#111111', secondary: '#111111', accent: '#111111', monochrome: true },
+  white: { clusters: [{ hex: '#FFFFFF', share: 1 }], primary: '#FFFFFF', secondary: '#FFFFFF', accent: '#FFFFFF', monochrome: true },
+  colourful: { clusters: [{ hex: '#E03030', share: 0.55 }, { hex: '#2050C0', share: 0.35 }, { hex: '#FFD700', share: 0.1 }], primary: '#E03030', secondary: '#2050C0', accent: '#FFD700', monochrome: false },
+  pepeGreen: { clusters: [{ hex: '#537631', share: 1 }], primary: '#537631', secondary: '#537631', accent: '#537631', monochrome: false },
+  chadSkin: { clusters: [{ hex: '#C18C5F', share: 0.7 }, { hex: '#141510', share: 0.3 }], primary: '#C18C5F', secondary: '#141510', accent: '#C18C5F', monochrome: false },
+  navyWhite: { clusters: [{ hex: '#1B2A6B', share: 0.8 }, { hex: '#F5F5F5', share: 0.2 }], primary: '#1B2A6B', secondary: '#F5F5F5', accent: '#1B2A6B', monochrome: false },
+  everyNeutral: { clusters: [{ hex: '#F2EFE8', share: 0.3 }, { hex: '#23262B', share: 0.3 }, { hex: '#8B8F96', share: 0.2 }, { hex: '#595959', share: 0.2 }], primary: '#F2EFE8', secondary: '#23262B', accent: '#8B8F96', monochrome: true },
+};
+
+void test('the garment plan keeps the print readable and the cap visible on the wearer, and never refuses', () => {
+  const table = [
+    // name, target, tee, cap, brim, why
+    ['black', 'host', '#595959', '#F2EFE8', '#23262B', 'dark grey tee under black ink; an off-white cap with a dark brim'],
+    ['white', 'host', '#23262B', '#8B8F96', '#8B8F96', 'charcoal tee under white ink; the off-white cap would hide the tee’s contrast, heather wins'],
+    ['colourful', 'guest', '#4E5492', '#F2EFE8', '#23262B', 'a muted secondary tee; the off-white cap clears every ink'],
+    ['pepeGreen', 'host', '#F2EFE8', '#8B8F96', '#8B8F96', 'wearer camouflage: his own green fails, charcoal hides in his headphones, heather stands out'],
+    ['chadSkin', 'guest', '#595A57', '#F2EFE8', '#23262B', 'skin-toned ink: a muted dark tee, an off-white cap clear of his skin and hair'],
+    ['navyWhite', 'host', '#57567D', '#8B8F96', '#8B8F96', 'the test palette every /tailor test sends'],
+  ];
+  for (const [name, target, tee, cap, brim, why] of table) {
+    const plan = garmentPlan(PALETTES[name], target);
+    assert.equal(plan.shirt.hex, tee, `${name}/${target} tee: ${why}`);
+    assert.equal(plan.cap.hex, cap, `${name}/${target} cap: ${why}`);
+    assert.equal(plan.cap.brim, brim, `${name}/${target} brim`);
+    assert.equal(plan.shirt.forced, false);
+    assert.equal(plan.cap.forced, false);
+    assert.ok(plan.shirt.inkDeltaE >= 25, `${name} tee clears the ink`);
+    assert.ok(plan.cap.inkDeltaE >= 25 && plan.cap.wearerDeltaE >= 20 && plan.cap.shirtDeltaE >= 15, `${name} cap clears ink, wearer and tee`);
+    for (const wearer of Object.values(WEARERS[target]))
+      assert.ok(deltaE76(plan.cap.hex, wearer) >= 20, `${name} cap vanishes into the ${target}`);
+  }
+  // Every candidate is in the ink: the plan still answers, marked forced, with the widest margin left.
+  const forced = garmentPlan(PALETTES.everyNeutral, 'host');
+  assert.equal(forced.shirt.forced, true);
+  assert.equal(forced.cap.forced, true);
+  assert.equal(forced.shirt.hex, '#C2C1BD');
+  assert.equal(forced.cap.hex, '#F2EFE8');
+  assert.deepEqual(NEUTRALS, { offWhite: '#F2EFE8', charcoal: '#23262B', heather: '#8B8F96' });
+  assert.equal(Math.round(deltaE76('#FFFFFF', '#000000')), 100);
+  assert.equal(deltaE76('#537631', '#537631'), 0);
+});
+
+void test('the tailor’s prompt is a fixed template with only the garment colours filled in', () => {
+  const plan = garmentPlan(PALETTES.black, 'host');
+  assert.equal(
+    tailorPrompt(plan),
+    'Edit this 2D animated podcast frame. The scene, camera angle, framing, lighting, colours, line weight, pose, expression, hands, headphones, microphone, desk and background stay exactly as in the first image. ' +
+      "Replace the character's T-shirt with a plain #595959 crew-neck T-shirt and print the second image large and centred on its chest, reproduced exactly: the same shapes, the same colours and the same proportions, nothing added and nothing left out, sitting on the fabric like a real screen print. " +
+      "Add a #F2EFE8 baseball cap with a #23262B brim on the character's head, worn under the headphones so the headphone band still crosses over it, with a small simplified version of the same mark centred on the cap's front panel. " +
+      'No other lettering, logos, patches or accessories anywhere in the picture. Nothing else changes.',
+  );
+  const plain = tailorPrompt(garmentPlan(PALETTES.white, 'guest'));
+  assert.match(plain, /Add a #8B8F96 baseball cap on the character's head/);
+  assert.doesNotMatch(plain, /brim/);
+});
+
+void test(
+  'the desk and scripts/wardrobe.py agree on the wearer colours',
+  { skip: needsRuntime },
+  async () => {
+    const { stdout } = await run(config.python, ['scripts/wardrobe.py', 'zones']);
+    const zones = JSON.parse(stdout.trim().split('\n').pop());
+    assert.deepEqual(zones.wearers, WEARERS);
+    assert.deepEqual(Object.keys(zones.zones), ['host', 'guest']);
+  },
+);

@@ -55,6 +55,156 @@ export const BASE_STILLS = {
     url: 'https://v3b.fal.media/files/b/0aa99e9a/UUct9hv94FEzgs2dz2H26_JZaGMdjK.png',
   },
 };
+
+// ---- the garment plan: colours for the tee and the cap, from the logo's ink ------------------
+// The wearer's own colours, sampled from the base stills; scripts/wardrobe.py keeps the same table
+// beside its wardrobe zones and a test pins the two together.
+export const WEARERS = {
+  host: { head: '#537631', headphones: '#23231C' },
+  guest: { hair: '#2C281D', skin: '#C18C5F', headphones: '#141510' },
+};
+export const NEUTRALS = {
+  offWhite: '#F2EFE8',
+  charcoal: '#23262B',
+  heather: '#8B8F96',
+};
+const hexToRgb = (hex) => {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+};
+const rgbToHex = (rgb) =>
+  `#${rgb
+    .map((c) =>
+      Math.max(0, Math.min(255, Math.round(c)))
+        .toString(16)
+        .padStart(2, '0'),
+    )
+    .join('')}`.toUpperCase();
+function rgbToLab([r, g, b]) {
+  const lin = (c) => {
+    c /= 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const [R, G, B] = [lin(r), lin(g), lin(b)];
+  const x = (R * 0.4124564 + G * 0.3575761 + B * 0.1804375) / 0.95047;
+  const y = R * 0.2126729 + G * 0.7151522 + B * 0.072175;
+  const z = (R * 0.0193339 + G * 0.119192 + B * 0.9503041) / 1.08883;
+  const f = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+  return [116 * f(y) - 16, 500 * (f(x) - f(y)), 200 * (f(y) - f(z))];
+}
+function labToRgb([L, a, b]) {
+  const fy = (L + 16) / 116,
+    fx = fy + a / 500,
+    fz = fy - b / 200;
+  const inv = (t) => (t ** 3 > 0.008856 ? t ** 3 : (t - 16 / 116) / 7.787);
+  const x = inv(fx) * 0.95047,
+    y = inv(fy),
+    z = inv(fz) * 1.08883;
+  const R = x * 3.2404542 + y * -1.5371385 + z * -0.4985314;
+  const G = x * -0.969266 + y * 1.8760108 + z * 0.041556;
+  const B = x * 0.0556434 + y * -0.2040259 + z * 1.0572252;
+  const gamma = (c) => {
+    c = Math.max(0, Math.min(1, c));
+    return 255 * (c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055);
+  };
+  return [gamma(R), gamma(G), gamma(B)];
+}
+/** CIE76 colour difference between two #RRGGBB colours. */
+export function deltaE76(a, b) {
+  const [l1, a1, b1] = rgbToLab(hexToRgb(a)),
+    [l2, a2, b2] = rgbToLab(hexToRgb(b));
+  return Math.hypot(l1 - l2, a1 - a2, b1 - b2);
+}
+/** A garment shade of a logo colour: mid-range lightness, a little over half the chroma. */
+export function mutedHex(hex) {
+  const [L, a, b] = rgbToLab(hexToRgb(hex));
+  return rgbToHex(labToRgb([Math.max(38, Math.min(78, L)), a * 0.55, b * 0.55]));
+}
+const tenth = (n) => Math.round(n * 10) / 10;
+/**
+ * Colours for the tee and the cap. The tee must clear every ink so the print reads; the cap must
+ * clear the ink, the wearer (a green cap on Pepe vanishes) and the tee. Candidates are tried in
+ * the spec's order and the first that passes wins; when none does the widest margin wins and the
+ * plan says so with `forced`. It never refuses: a plan is always made, the judge decides later.
+ */
+export function garmentPlan(palette, target) {
+  const ink = palette.clusters
+    .filter((c) => c.share >= 0.1)
+    .map((c) => c.hex.toUpperCase());
+  if (!ink.length) ink.push(palette.primary.toUpperCase());
+  const wearer = Object.values(WEARERS[target]);
+  const least = (hex, others) => Math.min(...others.map((o) => deltaE76(hex, o)));
+  const pick = (candidates, rules) => {
+    const scored = candidates.map((hex, index) => ({
+      hex,
+      index,
+      margins: rules.map((rule) => least(hex, rule.against)),
+    }));
+    const passing = scored.find((c) =>
+      c.margins.every((m, i) => m >= rules[i].atLeast),
+    );
+    const chosen =
+      passing ??
+      scored.reduce((best, c) =>
+        Math.min(...c.margins) > Math.min(...best.margins) ? c : best,
+      );
+    return { ...chosen, forced: !passing };
+  };
+  const tee = pick(
+    [
+      mutedHex(palette.secondary),
+      mutedHex(palette.primary),
+      NEUTRALS.offWhite,
+      NEUTRALS.charcoal,
+      NEUTRALS.heather,
+    ],
+    [{ against: ink, atLeast: 25 }],
+  );
+  const cap = pick(
+    [
+      palette.primary.toUpperCase(),
+      palette.secondary.toUpperCase(),
+      palette.accent.toUpperCase(),
+      NEUTRALS.charcoal,
+      NEUTRALS.offWhite,
+      NEUTRALS.heather,
+    ],
+    [
+      { against: ink, atLeast: 25 },
+      { against: wearer, atLeast: 20 },
+      { against: [tee.hex], atLeast: 15 },
+    ],
+  );
+  const capLightness = rgbToLab(hexToRgb(cap.hex))[0];
+  return {
+    shirt: {
+      hex: tee.hex,
+      candidate: tee.index,
+      inkDeltaE: tenth(tee.margins[0]),
+      forced: tee.forced,
+    },
+    cap: {
+      hex: cap.hex,
+      candidate: cap.index,
+      inkDeltaE: tenth(cap.margins[0]),
+      wearerDeltaE: tenth(cap.margins[1]),
+      shirtDeltaE: tenth(cap.margins[2]),
+      forced: cap.forced,
+      // A pale cap gets a dark brim, so it reads as a cap and not as a bald patch.
+      brim: capLightness > 80 ? NEUTRALS.charcoal : cap.hex,
+    },
+  };
+}
+/** The fixed instruction the tailor gives the model; only the two garment colours vary. */
+export function tailorPrompt(plan) {
+  const brim = plan.cap.brim === plan.cap.hex ? '' : ` with a ${plan.cap.brim} brim`;
+  return [
+    'Edit this 2D animated podcast frame. The scene, camera angle, framing, lighting, colours, line weight, pose, expression, hands, headphones, microphone, desk and background stay exactly as in the first image.',
+    `Replace the character's T-shirt with a plain ${plan.shirt.hex} crew-neck T-shirt and print the second image large and centred on its chest, reproduced exactly: the same shapes, the same colours and the same proportions, nothing added and nothing left out, sitting on the fabric like a real screen print.`,
+    `Add a ${plan.cap.hex} baseball cap${brim} on the character's head, worn under the headphones so the headphone band still crosses over it, with a small simplified version of the same mark centred on the cap's front panel.`,
+    'No other lettering, logos, patches or accessories anywhere in the picture. Nothing else changes.',
+  ].join(' ');
+}
 const MAX_UPLOAD = 4 * 1024 * 1024,
   MAX_VIDEO = 40 * 1024 * 1024,
   MAX_RENDER_BODY = 8 * 1024 * 1024;
