@@ -5,10 +5,10 @@
 //   SITE=... STUDIO_TOKEN=... RPC_URL=... node scripts/sponsorpay.mjs
 //   SITE=... STUDIO_TOKEN=...            node scripts/sponsorpay.mjs --hold
 //
-// PRODUCT picks the placement (message, the default; spotlight; cap). A spotlight takes
+// PRODUCT picks the placement (spotlight, the default; cap). A spotlight takes
 // PROJECT and STYLE (intro, debate or gentle-roast). A cap takes PROJECT, TARGET (host or
-// guest) and LOGO, a PNG, JPG or WebP path the site qualifies against the cap template
-// before anything is quoted; ASSET_ID reuses a design that is already qualified.
+// guest) and LOGO, a PNG, JPG or WebP path the site has the desk normalise before anything is
+// quoted; the tee and cap are tailored after payment. ASSET_ID reuses a logo already uploaded.
 // MESSAGE overrides the buyer's text for any of them.
 //
 // --hold sends the studio heartbeat every twenty seconds and nothing else, so a person can
@@ -31,29 +31,17 @@ import {
   until,
 } from './devnet.mjs';
 
-const SITE = process.env.SITE;
-const STUDIO_TOKEN = process.env.STUDIO_TOKEN;
-const RPC_URL = process.env.RPC_URL;
-const HOLD = process.argv.includes('--hold');
-const PRODUCT = process.env.PRODUCT || 'message';
-if (!['message', 'spotlight', 'cap'].includes(PRODUCT))
-  throw Error(`PRODUCT must be message, spotlight or cap, not ${PRODUCT}.`);
-if (PRODUCT === 'cap' && !process.env.LOGO && !process.env.ASSET_ID && !HOLD)
-  throw Error(
-    'A cap needs LOGO (an image path) or ASSET_ID (a qualified design).',
-  );
 // The stand-in studio offers what a real one would: a cap only when one is being bought, and
-// then with the template version the media service qualifies against. The site refuses to
-// quote a placement the producer has not said it can deliver, and checks the design against
-// that version.
+// then with the wardrobe version the desk tailors on. The site refuses to quote a placement
+// the producer has not said it can deliver, and checks the logo against that version.
 const capabilities = { message: true, spotlight: true, cap: PRODUCT === 'cap' };
 if (PRODUCT === 'cap') {
   const health = await fetch(`${SITE}/api/sponsorship/assets`)
     .then((r) => r.json())
     .catch(() => ({}));
-  if (!health.capQualified)
+  if (health.ready !== true || health.tailor !== true)
     throw Error(
-      `${SITE} cannot sell a cap right now: ${JSON.stringify(health)}`,
+      `${SITE} cannot tailor a look right now: ${JSON.stringify(health)}`,
     );
   capabilities.capTemplateVersion = health.templateVersion;
 }
@@ -106,11 +94,11 @@ if (HOLD) {
   await new Promise(() => {});
 }
 
-// ---- a cap's design is qualified against the template before it can be sold. Qualifying takes
-// up to forty seconds, so it starts now, before the stand-in studio claims its thirty-second
-// producer window, and is awaited only when the draft needs it.
+// ---- a cap's logo is normalised by the desk before it can be sold; the look comes after
+// payment. The upload takes a few seconds, so it starts now, before the stand-in studio claims
+// its thirty-second producer window, and is awaited only when the draft needs it.
 const TARGET = process.env.TARGET === 'guest' ? 'guest' : 'host';
-async function qualifyLogo(path) {
+async function uploadLogo(path) {
   const type = {
     '.png': 'image/png',
     '.jpg': 'image/jpeg',
@@ -129,17 +117,17 @@ async function qualifyLogo(path) {
   });
   const uploaded = await r.json().catch(() => ({}));
   check(
-    'the cap design is qualified',
-    r.ok && uploaded.status === 'qualified',
+    'the logo is accepted',
+    r.ok && ['logo', 'qualified'].includes(uploaded.status),
     r.ok
       ? `asset ${uploaded.id} (${uploaded.status}) in ${Date.now() - started} ms`
       : `${r.status} ${JSON.stringify(uploaded)}`,
   );
   return uploaded.id;
 }
-const qualified =
+const uploaded =
   PRODUCT === 'cap' && !process.env.ASSET_ID
-    ? qualifyLogo(process.env.LOGO)
+    ? uploadLogo(process.env.LOGO)
     : Promise.resolve(process.env.ASSET_ID);
 
 const rpc = createSolanaRpc(RPC_URL);
@@ -189,7 +177,6 @@ check(
 // ---- the happy path: draft, quote, sign, submit, confirm
 const PROJECT = process.env.PROJECT || 'Frog Labs';
 const pitch = {
-  message: 'Chad, does a devnet dollar still count as conviction?',
   spotlight: `${PROJECT} is a web3 marketplace for indie games.`,
   cap: `${PROJECT} makes caps for frogs who touch grass.`,
 };
@@ -199,9 +186,9 @@ const drafted = await api({
     product: PRODUCT,
     name: '',
     message: process.env.MESSAGE || pitch[PRODUCT],
-    ...(PRODUCT !== 'message' && { projectName: PROJECT }),
+    projectName: PROJECT,
     ...(PRODUCT === 'spotlight' && { style: process.env.STYLE || 'intro' }),
-    ...(PRODUCT === 'cap' && { target: TARGET, assetId: await qualified }),
+    ...(PRODUCT === 'cap' && { target: TARGET, assetId: await uploaded }),
   },
 });
 check(
@@ -267,6 +254,26 @@ check(
     ? `${paid.status}, paid by ${paid.payer}, signature ${paid.attempts.find((a) => a.verifiedSignature)?.verifiedSignature ?? '?'}`
     : 'timed out',
 );
+// ---- a cap's look is tailored after payment: usually one to two minutes, three fits at most
+// inside the desk's 210 s job, and a second round from the reconciler four minutes on.
+if (PRODUCT === 'cap' && paid) {
+  const started = Date.now();
+  const look = await until(
+    async () => {
+      const r = await api({ action: 'confirm', token });
+      const l = r.body.receipt?.look;
+      return l && l.status !== 'tailoring' ? l : null;
+    },
+    { tries: 90, everyMs: 5000 },
+  );
+  check(
+    'the tee and cap are tailored',
+    look?.status === 'ready',
+    look
+      ? `${look.status}${look.fallback ? ` (${look.fallback} fallback)` : ''} after ${Math.round((Date.now() - started) / 1000)} s — ${look.url ?? look.reason ?? ''}`
+      : 'no look after 7.5 minutes',
+  );
+}
 
 // ---- what must keep failing
 const stranger = await api({
