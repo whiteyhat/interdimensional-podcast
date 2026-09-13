@@ -1,47 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from './build.mjs';
+import { lease, lines } from './fixtures/sponsor-lease.mjs';
 await build(['sponsor-program']);
 const { SponsorProgram, WARDROBE_STRIKES } =
   await import('../work/tests/sponsor-program.js');
 
-const cap = () => ({
-  id: 'cap1',
-  leaseToken: 'lease1',
-  leaseUntil: Date.now() + 45000,
-  draft: {
-    product: 'cap',
-    name: 'alice',
-    message: 'We make tools for artists.',
-    projectName: 'Canvas',
-    target: 'host',
-    assetId: 'design1',
-  },
-  assetUrl: 'https://site.test/preview.png',
-  assetMetadata: {
-    sourceUrl: 'https://site.test/cap.png',
-    sha256: 'design1',
-    templateVersion: 'caps-v1',
-  },
-  fulfillment: {
-    visibleMs: 0,
-    appearances: 0,
-    intro: false,
-    callback: false,
-    startedAt: null,
-    completedAt: null,
-  },
-});
-const lines = (start = 0) =>
-  ['host', 'guest', 'host', 'guest'].map((speaker, i) => ({
-    id: start + i,
-    speaker,
-    text: `line ${start + i}`,
-  }));
 function program() {
   const events = [];
   const p = new SponsorProgram({
-    sync: async () => [cap()],
+    sync: async () => [lease('cap')],
     event: async (e) => {
       events.push(e);
       return { status: e.type === 'paused' ? 'paused' : 'playing' };

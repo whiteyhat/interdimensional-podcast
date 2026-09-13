@@ -60,3 +60,17 @@ export async function build(names) {
     await rename(temp, out);
   }
 }
+
+/**
+ * The real /api/podcast route with the Workers env binding replaced by `env`, written under
+ * its own name so parallel test files never import each other's copy. Returns its handlers.
+ */
+export async function podcastRoute(name, env) {
+  await build(['app/api/podcast/route']);
+  const source = (await readFile('work/tests/route.js', 'utf8')).replace(
+    "import { env } from 'cloudflare:workers';",
+    `const env = ${JSON.stringify(env)};`,
+  );
+  await writeFile(`work/tests/${name}-route.js`, source);
+  return import(`../work/tests/${name}-route.js`);
+}

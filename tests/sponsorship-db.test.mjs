@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { build } from './build.mjs';
+import * as orders from './fixtures/sponsor-orders.mjs';
 await build([
   'requests',
   'interact',
@@ -75,46 +76,8 @@ async function fixture() {
   });
   return d;
 }
-const capDraft = (target) => ({
-  product: 'cap',
-  target,
-  name: 'Joe',
-  projectName: 'GM',
-  message: 'Builders ship',
-  assetId: 'art',
-});
-const capAttempt = (d, id, order) =>
-  db.insertAttempt(d, {
-    id,
-    order_id: order,
-    pay_token: id,
-    asset: 'SOL',
-    mint: null,
-    decimals: 9,
-    amount_base: '1000000000',
-    price_usd: '100',
-    price_cents: 10000,
-    recipient: 'treasury',
-    reference: id,
-    issued_at: 100,
-    expires_at: 200,
-  });
-/** A cap order for one host, paid at the given moment. */
-async function paidCap(d, id, target, at) {
-  await db.createOrder(d, {
-    id,
-    tokenHash: id,
-    draft: capDraft(target),
-    now: 100,
-  });
-  await capAttempt(d, `${id}-a`, id);
-  await db.settlePayment(
-    d,
-    `${id}-a`,
-    { signature: `sig-${id}`, payer: 'payer', blockTime: 150 },
-    at,
-  );
-}
+const capAttempt = (d, id, order) => orders.capAttempt(db, d, id, order);
+const paidCap = (d, id, target, at) => orders.paidCap(db, d, id, target, at);
 void test('a cap is always for sale: a second cap for the same host is quoted and queued, never refused', async () => {
   const d = await fixture();
   for (const [id, target] of [
@@ -125,7 +88,7 @@ void test('a cap is always for sale: a second cap for the same host is quoted an
     await db.createOrder(d, {
       id,
       tokenHash: id,
-      draft: capDraft(target),
+      draft: orders.capDraft(target),
       now: 100,
     });
   await capAttempt(d, 'cap-a1', 'cap1');
@@ -152,12 +115,12 @@ void test('a cap is always for sale: a second cap for the same host is quoted an
   );
   assert.deepEqual(await db.capQueue(d), { host: 2, guest: 0 });
   assert.equal(
-    await db.capAhead(d, await db.getOrder(d, 'cap1')),
+    (await db.queueStanding(d, await db.getOrder(d, 'cap1'))).capAhead,
     0,
     'the first paid cap goes on first',
   );
   assert.equal(
-    await db.capAhead(d, await db.getOrder(d, 'cap2')),
+    (await db.queueStanding(d, await db.getOrder(d, 'cap2'))).capAhead,
     1,
     'the second waits behind it',
   );
@@ -185,13 +148,13 @@ void test('a cap is always for sale: a second cap for the same host is quoted an
     .prepare("UPDATE sponsor_orders SET status='paused' WHERE id='cap1'")
     .run();
   assert.equal((await db.capQueue(d)).host, 2);
-  assert.equal(await db.capAhead(d, await db.getOrder(d, 'cap2')), 1);
+  assert.equal((await db.queueStanding(d, await db.getOrder(d, 'cap2'))).capAhead, 1);
   d.sql
     .prepare("UPDATE sponsor_orders SET status='fulfilled' WHERE id='cap1'")
     .run();
   assert.equal((await db.capQueue(d)).host, 1, 'delivery shortens the line');
   assert.equal(
-    await db.capAhead(d, await db.getOrder(d, 'cap2')),
+    (await db.queueStanding(d, await db.getOrder(d, 'cap2'))).capAhead,
     0,
     'nothing goes on before the second cap now',
   );

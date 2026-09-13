@@ -85,6 +85,7 @@ aside.sponsor-rail {
   color: #a6b198;
   margin: 0 0 24px;
   max-width: 28ch;
+  text-wrap: balance;
 }
 .sponsor-panel .sponsor-products {
   display: grid;
@@ -717,17 +718,12 @@ aside.sponsor-rail {
     background var(--dur-press) var(--ease-cut),
     transform var(--dur-press) var(--ease-cut);
 }
-.sponsor-button:hover {
+/* A button that is waiting on the desk or the wallet neither brightens nor presses. */
+.sponsor-button:not(:disabled):hover {
   background: #e7a37f;
 }
-.sponsor-button:active {
+.sponsor-button:not(:disabled):active {
   transform: scale(0.98);
-}
-/* A button that is waiting on the desk or the wallet neither brightens nor presses. */
-.sponsor-button:disabled:hover,
-.sponsor-button:disabled:active {
-  background: #dc936b;
-  transform: none;
 }
 .sponsor-button.secondary {
   border-color: #ffffff20;

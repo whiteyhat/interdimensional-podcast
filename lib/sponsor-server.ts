@@ -1,7 +1,8 @@
 import { clusterOf, explorerTx, type Cluster } from './cluster';
-import { readStudioId } from './interact';
+import { interactLimits, readStudioId } from './interact';
 import {
   SponsorError,
+  sponsorOffers,
   sponsorProducts,
   sponsorLimits,
   sponsorPriceCents,
@@ -264,11 +265,13 @@ export async function sponsorCatalog(
   v: SponsorVars,
 ): Promise<SponsorCatalog> {
   const d = await sponsorDatabase(v),
-    now = Date.now(),
-    live = await producer(d, now);
+    now = Date.now();
+  const [live, capQueue] = await Promise.all([
+    producer(d, now),
+    db.capQueue(d),
+  ]);
   const enabled = v.SPONSOR_ENABLED === 'true';
   const { flatCents } = devnetPricing(v);
-  const capQueue = await db.capQueue(d);
   const assets = await Promise.all(
     (['FROGCLENCH', 'USDC', 'SOL'] as const).map(async (id) => {
       try {
@@ -299,7 +302,7 @@ export async function sponsorCatalog(
     }),
   );
   return {
-    products: sponsorProducts.map((p) => ({
+    products: sponsorOffers.map((p) => ({
       id: p.id,
       title: p.title,
       priceCents: sponsorPriceCents(p.id, 'USDC', flatCents),
@@ -360,7 +363,7 @@ export async function sponsorReceipt(
   token: string,
   site: Site,
 ): Promise<SponsorReceipt> {
-  const [attempts, asset] = await Promise.all([
+  const [attempts, asset, standing] = await Promise.all([
     d
       .prepare(
         'SELECT * FROM sponsor_payment_attempts WHERE order_id=? ORDER BY issued_at DESC',
@@ -370,22 +373,16 @@ export async function sponsorReceipt(
     JSON.parse(o.draft).assetId
       ? db.getAsset(d, JSON.parse(o.draft).assetId)
       : Promise.resolve(null),
+    db.queueStanding(d, o),
   ]);
   const queuePosition = ['paid', 'leased', 'prepared'].includes(o.status)
-    ? ((
-        await d
-          .prepare(
-            "SELECT COUNT(*) AS n FROM sponsor_orders WHERE status IN ('paid','leased','prepared') AND (paid_at<? OR (paid_at=? AND id<=?))",
-          )
-          .bind(o.paid_at, o.paid_at, o.id)
-          .first<{ n: number }>()
-      )?.n ?? null)
+    ? standing.position
     : null;
   // The overall queue position cannot tell a cap buyer the one thing they want to know:
   // caps for one host go on one at a time (`leaseOrders`), so a paid cap may be waiting
   // for an earlier cap on the same host even when it is next in the queue otherwise.
   const capAhead =
-    o.product === 'cap' && o.status === 'paid' ? await db.capAhead(d, o) : null;
+    o.product === 'cap' && o.status === 'paid' ? standing.capAhead : null;
   return {
     id: o.id,
     token,
@@ -630,6 +627,13 @@ async function quote(
       };
     }
   }
+  // A pass saved before its placement came off sale keeps any quote it already holds, so a
+  // payment in flight still lands; it never gets a new charge.
+  if (!sponsorOffers.some((p) => p.id === o.product))
+    throw new SponsorError(
+      409,
+      'This placement is no longer offered. Start a new pass.',
+    );
   const lock = await db.acquireLock(d, 'quotes', Date.now(), 120000);
   if (!lock)
     throw new SponsorError(
@@ -725,59 +729,38 @@ async function submit(
     /* Always reconcile this immutable signature, including ambiguous RPC errors. */
   }
 }
-/** How long an expired quote is still watched for a late payment, and how often. */
-const LATE_PAYMENT_WINDOW_MS = 86400000,
-  LATE_PAYMENT_RECHECK_MS = 600000;
 export async function reconcileSponsorships(v: SponsorVars) {
   const d = await sponsorDatabase(v),
     now = Date.now();
-  // Reads first, and writes only for what has actually moved. An idle pass used to take the
-  // lock, run three sweeps and re-check the ten oldest attempts, every twenty seconds, forever:
-  // sixty thousand writes a day for a database with nothing to do. Reads are plentiful; writes
-  // are the allowance that ran out.
-  const [leases, resumes, stale, attempts] = await Promise.all([
-    d
-      .prepare(
-        `SELECT 1 AS n FROM sponsor_orders WHERE status IN ('leased','prepared','playing') AND lease_until<? LIMIT 1`,
-      )
-      .bind(now)
-      .first(),
-    d
-      .prepare(
-        `SELECT 1 AS n FROM sponsor_orders WHERE status='paused' AND retry_after<=? LIMIT 1`,
-      )
-      .bind(now)
-      .first(),
-    d
-      .prepare(
-        'SELECT 1 AS n FROM sponsor_rate_limits WHERE window_at<? LIMIT 1',
-      )
-      .bind(now - 3600000)
-      .first(),
-    // Open quotes always; an expired one only while a late payment could still arrive, and
-    // then no more than every few minutes; a verified one never.
-    d
-      .prepare(
-        `SELECT * FROM sponsor_payment_attempts WHERE status IN ('issued','submitted') OR (status='expired' AND issued_at>? AND last_checked_at<?) ORDER BY CASE WHEN status IN ('issued','submitted') THEN 0 ELSE 1 END,last_checked_at ASC LIMIT 10`,
-      )
-      .bind(now - LATE_PAYMENT_WINDOW_MS, now - LATE_PAYMENT_RECHECK_MS)
-      .all<db.AttemptRow>(),
-  ]);
-  if (!leases && !resumes && !stale && !attempts.results.length)
+  // The sweeps write only the rows that moved, so an idle pass costs reads. The lock is two
+  // writes, and re-checking an attempt re-stamps it: both wait for an attempt worth checking.
+  // An idle pass used to take the lock and re-stamp the ten oldest attempts every twenty
+  // seconds, forever: sixty thousand writes a day for a database with nothing to do.
+  await db.pauseExpired(d, now);
+  // A lease that just lapsed may have paused an order whose cooldown is already over.
+  await db.resumeDue(d, now);
+  await d
+    .prepare('DELETE FROM sponsor_rate_limits WHERE window_at<?')
+    .bind(now - 3600000)
+    .run();
+  // Open quotes always; an expired one only while a late payment could still arrive, and
+  // then no more than every few minutes; a verified one never.
+  const attempts = await d
+    .prepare(
+      `SELECT * FROM sponsor_payment_attempts WHERE status IN ('issued','submitted') OR (status='expired' AND issued_at>? AND last_checked_at<?) ORDER BY CASE WHEN status IN ('issued','submitted') THEN 0 ELSE 1 END,last_checked_at ASC LIMIT 10`,
+    )
+    .bind(
+      now - interactLimits.recoverWindowMs,
+      now - interactLimits.recoverRecheckMs,
+    )
+    .all<db.AttemptRow>();
+  if (!attempts.results.length)
     return { ok: true, idle: true, checked: 0, errors: 0 };
   const lock = await db.acquireLock(d, 'reconcile', now, 90000);
   if (!lock) return { ok: true, busy: true };
   let checked = 0,
     errors = 0;
   try {
-    if (leases) await db.pauseExpired(d, now);
-    // A lease that just lapsed may have paused an order whose cooldown is already over.
-    if (resumes || leases) await db.resumeDue(d, now);
-    if (stale)
-      await d
-        .prepare('DELETE FROM sponsor_rate_limits WHERE window_at<?')
-        .bind(now - 3600000)
-        .run();
     for (const a of attempts.results) {
       if (Date.now() - now > 40000) break;
       try {

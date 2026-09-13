@@ -1,15 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
-import { build } from './build.mjs';
+import { podcastRoute } from './build.mjs';
 
-await build(['app/api/podcast/route']);
-const source = (await readFile('work/tests/route.js', 'utf8')).replace(
-  "import { env } from 'cloudflare:workers';",
-  "const env = { FAL_KEY: 'route-refusal-test-key', STUDIO_TOKEN: 'route-refusal-token', INTERACT_ORIGIN: 'https://sponsor.test' };",
-);
-await writeFile('work/tests/podcast-refusals-route.js', source);
-const { POST } = await import('../work/tests/podcast-refusals-route.js');
+const { POST } = await podcastRoute('podcast-refusals', {
+  FAL_KEY: 'route-refusal-test-key',
+  STUDIO_TOKEN: 'route-refusal-token',
+  INTERACT_ORIGIN: 'https://sponsor.test',
+});
 
 // A lost lease used to come back as a 400 with only a sentence, so the studio counted it as a
 // generation failure and retried it into an outage hold.

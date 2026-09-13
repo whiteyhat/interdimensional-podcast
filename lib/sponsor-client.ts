@@ -1,4 +1,5 @@
-import { sponsorPriceCents } from './sponsorship';
+import { cast } from './show';
+import { sponsorOffers, sponsorPriceCents } from './sponsorship';
 import type {
   SponsorAsset,
   SponsorCatalog,
@@ -17,7 +18,7 @@ export type SavedCheckout = {
   token: string | null;
 };
 export const emptyDraft: SponsorDraft = {
-  product: 'message',
+  product: 'spotlight',
   name: '',
   message: '',
   style: 'intro',
@@ -42,7 +43,9 @@ export function readCheckout(raw: string | null): SavedCheckout {
       fallback.token = saved.token;
     const d = saved.draft;
     if (d && ['message', 'spotlight', 'cap'].includes(d.product)) {
-      fallback.draft.product = d.product;
+      // A draft for a placement that came off sale keeps its words under the default offer.
+      if (sponsorOffers.some((p) => p.id === d.product))
+        fallback.draft.product = d.product;
       for (const key of [
         'name',
         'message',
@@ -108,7 +111,7 @@ export function catalogPriceCents(
   return asset === 'FROGCLENCH' ? listed.frogPriceCents : listed.priceCents;
 }
 export const hostName = (target: SponsorTarget | undefined) =>
-  target === 'guest' ? 'GigaChad' : 'Pepe';
+  cast[target ?? 'host'].name;
 /**
  * The line under each host in the cap chooser. Nothing about a host is ever reserved or
  * disabled: caps for one host go on one at a time, so the only thing a buyer needs to know
@@ -152,7 +155,7 @@ export const productCopy = {
     icon: 'spotlight',
   },
   cap: {
-    title: 'Dress the hosts',
+    title: 'Sponsor the podcast',
     short: 'Your brand. Their very big heads.',
     description:
       'A branded cap on Pepe or Chad for 10 live minutes. Six clear appearances, an introduction, and a callback.',

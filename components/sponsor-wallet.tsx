@@ -4,6 +4,7 @@ import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { Transaction } from '@solana/web3.js';
 import { WalletShell } from './wallet';
+import { shortWallet } from '@/lib/requests';
 import { sponsorAction } from '@/lib/sponsor-browser';
 import type {
   SponsorAsset,
@@ -215,33 +216,31 @@ function Payment({ receipt, asset, onReceipt, onPending }: Props) {
     if (mounted.current) setVisible(true);
   }
   const expired = quote && now >= quote.attempt.expiresAt;
-  const busy = phase === 'quoting' || phase === 'signing';
+  const settled = phase !== 'checking';
   // One button carries the whole walk: connect, pay, approve. It keeps its place and
   // its element across the phases, only its words and its job change, so the eye,
   // the pointer and keyboard focus never have to find a new control. While the desk
   // or the wallet is working it stays put and says so, in place of a separate line.
-  const step: { label: string; onClick?: () => void; disabled: boolean } = busy
-    ? {
-        label:
-          phase === 'quoting'
-            ? 'Checking balance and network fees…'
-            : 'Approve in your wallet…',
-        disabled: true,
-      }
-    : !walletKey
-      ? {
-          label: connecting ? 'Connecting…' : 'Connect wallet',
-          onClick: () => setVisible(true),
-          disabled: connecting,
-        }
-      : phase === 'idle'
-        ? { label: 'Pay with wallet →', onClick: review, disabled: false }
-        : expired
-          ? { label: 'Quote window ended', disabled: true }
-          : { label: 'Approve and pay →', onClick: pay, disabled: false };
+  // (The React compiler rule will not let `disabled` be read off the handler in render.)
+  const step: { label: string; onClick?: () => void; disabled: boolean } =
+    phase === 'quoting'
+      ? { label: 'Checking balance and network fees…', disabled: true }
+      : phase === 'signing'
+        ? { label: 'Approve in your wallet…', disabled: true }
+        : !walletKey
+          ? {
+              label: connecting ? 'Connecting…' : 'Connect wallet',
+              onClick: () => setVisible(true),
+              disabled: connecting,
+            }
+          : phase === 'idle'
+            ? { label: 'Pay with wallet →', onClick: review, disabled: false }
+            : expired
+              ? { label: 'Quote window ended', disabled: true }
+              : { label: 'Approve and pay →', onClick: pay, disabled: false };
   return (
     <div className="sponsor-wallet">
-      {quote && phase !== 'checking' && (
+      {quote && settled && (
         <div className="sponsor-wallet-quote">
           <div>
             <span>You’ll approve</span>
@@ -252,7 +251,7 @@ function Payment({ receipt, asset, onReceipt, onPending }: Props) {
           <p>Paid directly to the studio. Your wallet shows the network fee.</p>
         </div>
       )}
-      {phase !== 'checking' && (
+      {settled && (
         <button
           type="button"
           className="sponsor-button"
@@ -262,7 +261,7 @@ function Payment({ receipt, asset, onReceipt, onPending }: Props) {
           {step.label}
         </button>
       )}
-      {quote && phase !== 'checking' && expired && (
+      {quote && settled && expired && (
         <div className="sponsor-wallet-quote">
           <p>This timer does not mean a previous payment failed.</p>
           <button type="button" className="sponsor-text-button" onClick={check}>
@@ -289,7 +288,7 @@ function Payment({ receipt, asset, onReceipt, onPending }: Props) {
         <p className="sponsor-wallet-account">
           <span>
             Paying from {wallet?.adapter.name ?? 'your wallet'}{' '}
-            {walletKey.slice(0, 4)}…{walletKey.slice(-4)}
+            {shortWallet(walletKey)}
           </span>
           {(phase === 'idle' || phase === 'ready') && (
             <button

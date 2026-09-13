@@ -214,15 +214,32 @@ export async function capQueue(
     rows.results.find((r) => r.target === target)?.n ?? 0;
   return { host: count('host'), guest: count('guest') };
 }
-/** How many unfinished caps on the same host were paid before this one, so go on before it. */
-export async function capAhead(d: D1Database, o: OrderRow): Promise<number> {
+/** Paid first goes first; two paid in the same instant go in id order, as `leaseOrders` leases. */
+const paidBefore = `(c.paid_at<? OR (c.paid_at=? AND c.id<?))`;
+/**
+ * Where an order stands: its place in the whole paid queue (itself included), and how many
+ * unfinished caps on the same host were paid before it, so go on before it. One read.
+ */
+export async function queueStanding(
+  d: D1Database,
+  o: OrderRow,
+): Promise<{ position: number; capAhead: number }> {
   const row = await d
     .prepare(
-      `SELECT COUNT(*) AS n FROM sponsor_orders c WHERE ${capPending} AND c.target=? AND (c.paid_at<? OR (c.paid_at=? AND c.id<?))`,
+      `SELECT COALESCE(SUM(CASE WHEN c.status IN ('paid','leased','prepared') AND (${paidBefore} OR c.id=?) THEN 1 ELSE 0 END),0) AS position, COALESCE(SUM(CASE WHEN ${capPending} AND c.target=? AND ${paidBefore} THEN 1 ELSE 0 END),0) AS capAhead FROM sponsor_orders c WHERE c.paid_attempt_id IS NOT NULL`,
     )
-    .bind(o.target, o.paid_at, o.paid_at, o.id)
-    .first<{ n: number }>();
-  return row?.n ?? 0;
+    .bind(
+      o.paid_at,
+      o.paid_at,
+      o.id,
+      o.id,
+      o.target,
+      o.paid_at,
+      o.paid_at,
+      o.id,
+    )
+    .first<{ position: number; capAhead: number }>();
+  return { position: row?.position ?? 0, capAhead: row?.capAhead ?? 0 };
 }
 export async function insertAttempt(
   d: D1Database,
@@ -349,7 +366,7 @@ export async function leaseOrders(
     const token = crypto.randomUUID();
     const rows = await d
       .prepare(
-        `UPDATE sponsor_orders SET status='leased',lease_owner=?,lease_token=?,lease_until=?,updated_at=? WHERE id=(SELECT o.id FROM sponsor_orders o WHERE o.status='paid' AND CASE o.product WHEN 'message' THEN ? WHEN 'spotlight' THEN ? WHEN 'cap' THEN ? ELSE 0 END=1 AND (o.product!='cap' OR ((? IS NULL OR EXISTS(SELECT 1 FROM sponsor_assets a WHERE a.id=json_extract(o.draft,'$.assetId') AND a.status='qualified' AND json_extract(a.metadata,'$.templateVersion')=?)) AND NOT EXISTS(SELECT 1 FROM sponsor_orders c WHERE c.product='cap' AND c.target=o.target AND c.status IN ('leased','prepared','playing')))) ORDER BY o.paid_at ASC LIMIT 1) AND status='paid' RETURNING *`,
+        `UPDATE sponsor_orders SET status='leased',lease_owner=?,lease_token=?,lease_until=?,updated_at=? WHERE id=(SELECT o.id FROM sponsor_orders o WHERE o.status='paid' AND CASE o.product WHEN 'message' THEN ? WHEN 'spotlight' THEN ? WHEN 'cap' THEN ? ELSE 0 END=1 AND (o.product!='cap' OR ((? IS NULL OR EXISTS(SELECT 1 FROM sponsor_assets a WHERE a.id=json_extract(o.draft,'$.assetId') AND a.status='qualified' AND json_extract(a.metadata,'$.templateVersion')=?)) AND NOT EXISTS(SELECT 1 FROM sponsor_orders c WHERE c.product='cap' AND c.target=o.target AND c.status IN ('leased','prepared','playing')))) ORDER BY o.paid_at ASC,o.id ASC LIMIT 1) AND status='paid' RETURNING *`,
       )
       .bind(
         studioId,

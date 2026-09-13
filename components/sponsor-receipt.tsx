@@ -81,7 +81,7 @@ export function SponsorReceipt({
       ) : null}
       {/* Caps for one host go on one at a time: a paid cap can be next in the queue and
           still be waiting for an earlier cap on the same host. Say so. */}
-      {receipt.status === 'paid' && receipt.capAhead ? (
+      {receipt.capAhead ? (
         <p className="sponsor-cap-ahead">
           {capAheadCopy(receipt.capAhead, receipt.draft.target)}
         </p>

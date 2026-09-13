@@ -8,15 +8,22 @@ const { createServices } = await import('../work/tests/services.js');
 // Caps were qualified on the take exactly as the model makes it. Compositing on fal's 1080p
 // rescale instead doubled the tracker's work and grew every tracking error by the scale, so
 // real paid takes lost tracking or ran out the media desk's deadline on devnet.
-function studio(t) {
+function studio(
+  t,
+  refusal = {
+    status: 422,
+    code: 'INVALID_WEARABLE',
+    error: 'Tracking could not be verified.',
+  },
+) {
   const requests = [];
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     const body = JSON.parse(options.body);
     requests.push({ url, body });
     if (url === '/api/sponsorship/media')
       return Response.json(
-        { code: 'INVALID_WEARABLE', error: 'Tracking could not be verified.' },
-        { status: 422 },
+        { code: refusal.code, error: refusal.error },
+        { status: refusal.status },
       );
     if (body.action === 'poll')
       return Response.json({
@@ -87,23 +94,10 @@ void test('a cap is composited on the native take, and fal never rescales a cap 
 });
 
 void test('a placement the site no longer owns is dropped at once, not retaken', async (t) => {
-  const requests = [];
-  t.mock.method(globalThis, 'fetch', async (url, options) => {
-    const body = JSON.parse(options.body);
-    requests.push({ url, body });
-    if (url === '/api/sponsorship/media')
-      return Response.json(
-        { code: 'LEASE', error: 'The delivery lease ended.' },
-        { status: 409 },
-      );
-    if (body.action === 'poll')
-      return Response.json({
-        status: 'COMPLETED',
-        speechEnd: 0.8,
-        hasExtraSpeech: false,
-        url: `https://fal.media/${body.token}.mp4`,
-      });
-    return Response.json({ token: `${body.action}-${body.attempt ?? 0}` });
+  const requests = studio(t, {
+    status: 409,
+    code: 'LEASE',
+    error: 'The delivery lease ended.',
   });
   await assert.rejects(
     createServices().render({

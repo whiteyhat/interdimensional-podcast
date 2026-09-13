@@ -240,9 +240,6 @@ export async function expireStale(db: D1Database, now: number) {
   return result.meta.changes;
 }
 /** Recent quotes the page gave up on; their payment may still have landed on chain. */
-/** How long an unsettled seat is still watched for a late payment, and how often. */
-const LATE_PAYMENT_WINDOW_MS = 86400000,
-  LATE_PAYMENT_RECHECK_MS = 600000;
 export async function recoverable(db: D1Database, now: number, limit: number) {
   // Only inside a day of the quote, and no more than every few minutes each: every pass used
   // to re-check and re-stamp the same two long-dead requests forever, a write a minute each.
@@ -254,8 +251,8 @@ export async function recoverable(db: D1Database, now: number, limit: number) {
     )
     .bind(
       now - interactLimits.staleQuoteMs,
-      now - LATE_PAYMENT_WINDOW_MS,
-      now - LATE_PAYMENT_RECHECK_MS,
+      now - interactLimits.recoverWindowMs,
+      now - interactLimits.recoverRecheckMs,
       limit,
     )
     .all<RequestRow>();

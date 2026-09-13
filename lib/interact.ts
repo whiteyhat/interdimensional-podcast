@@ -75,7 +75,9 @@ export const interactLimits = {
   reclaimMs: 3 * 60_000,
   /** Once a minute the studio pull re-checks recent quotes whose payment may have landed late. */
   recoverEveryMs: 60_000,
-  recoverWindowMs: 15 * 60_000,
+  /** How long an unpaid quote is still watched for a late payment, and how often each is re-read. */
+  recoverWindowMs: 24 * 3_600_000,
+  recoverRecheckMs: 10 * 60_000,
   recoverBatch: 2,
   claimBatch: 5,
   recent: 20,

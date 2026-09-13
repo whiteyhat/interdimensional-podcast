@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { Keypair, Transaction } from '@solana/web3.js';
 import { build } from './build.mjs';
+import * as orders from './fixtures/sponsor-orders.mjs';
 await build([
   'requests',
   'interact',
@@ -984,38 +985,8 @@ void test('the catalog keeps caps on sale while caps are queued and counts what 
       { message: true, spotlight: true, cap: true },
       Date.now(),
     );
-    const cap = async (id, target) => {
-      await db.createOrder(f.DB, {
-        id,
-        tokenHash: id,
-        draft: { product: 'cap', target, name: 'Joe', projectName: 'GM' },
-        now: 100,
-      });
-      await db.insertAttempt(f.DB, {
-        id: `${id}-a`,
-        order_id: id,
-        pay_token: id,
-        asset: 'SOL',
-        mint: null,
-        decimals: 9,
-        amount_base: '1000000000',
-        price_usd: '100',
-        price_cents: 10000,
-        recipient: 'treasury',
-        reference: id,
-        issued_at: 100,
-        expires_at: 200,
-      });
-    };
-    const paid = async (id, target, at) => {
-      await cap(id, target);
-      await db.settlePayment(
-        f.DB,
-        `${id}-a`,
-        { signature: `sig-${id}`, payer: 'payer', blockTime: 150 },
-        at,
-      );
-    };
+    const cap = (id, target) => orders.capOrder(db, f.DB, id, target);
+    const paid = (id, target, at) => orders.paidCap(db, f.DB, id, target, at);
     await paid('cap1', 'host', 300);
     await paid('cap2', 'host', 310);
     // A guest quote nobody has paid: the buyer never sees it, so it is not in the line.

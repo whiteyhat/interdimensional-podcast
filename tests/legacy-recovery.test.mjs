@@ -21,23 +21,25 @@ const db = await import('../work/tests/db.js'),
   { readLegacyReceipt } = await import('../work/tests/legacy-receipt.js');
 const ref = '11111111111111111111111111111111',
   sig = (n) => '1'.repeat(63) + n;
+/** A five-dollar seat quoted at `created_at` and never paid for. */
+const quoteRow = (id, reference, created_at) => ({
+  id,
+  reference,
+  wallet: ref,
+  name: 'Joe',
+  message: 'Remember this payment',
+  amount_ui: 5,
+  amount_base: '5000000',
+  mint: ref,
+  recipient: ref,
+  price_usd: 1,
+  created_at,
+  expires_at: created_at + 100,
+});
 async function fixture() {
   const d = d1();
   await db.ensureSchema(d);
-  await db.insertQuote(d, {
-    id: 'legacy',
-    reference: ref,
-    wallet: ref,
-    name: 'Joe',
-    message: 'Remember this payment',
-    amount_ui: 5,
-    amount_base: '5000000',
-    mint: ref,
-    recipient: ref,
-    price_usd: 1,
-    created_at: 100,
-    expires_at: 200,
-  });
+  await db.insertQuote(d, quoteRow('legacy', ref, 100));
   return d;
 }
 void test('migration moves only unverified signatures and preserves paid signatures', async () => {
@@ -204,20 +206,7 @@ void test('an unsettled seat is re-checked at most every ten minutes, and never 
   await db.ensureSchema(d);
   const now = 10 * 86400000;
   const seat = (id, created_at) =>
-    db.insertQuote(d, {
-      id,
-      reference: `${ref}-${id}`.slice(0, 44),
-      wallet: ref,
-      name: 'Joe',
-      message: 'Remember this payment',
-      amount_ui: 5,
-      amount_base: '5000000',
-      mint: ref,
-      recipient: ref,
-      price_usd: 1,
-      created_at,
-      expires_at: created_at + 60000,
-    });
+    db.insertQuote(d, quoteRow(id, `${ref}-${id}`.slice(0, 44), created_at));
   await seat('fresh', now - 3600000);
   await seat('ancient', now - 2 * 86400000);
   const picked = async () => (await db.recoverable(d, now, 5)).map((r) => r.id);
