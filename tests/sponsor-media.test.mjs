@@ -1927,7 +1927,7 @@ void test('/tailor refuses what it cannot tailor before queueing anything', asyn
   ];
   for (const [patch, status, code] of cases) {
     const r = await post(media, tailorOrder(patch), { path: '/tailor' });
-    assert.equal(r.status, status, `${code}: ${r.bytes}`);
+    assert.equal(r.status, status, `${JSON.stringify(code)}: ${r.bytes.toString()}`);
     assert.equal(r.json().code, code);
   }
   assert.equal((await post(media, 'not json', { path: '/tailor' })).status, 400);
@@ -2100,4 +2100,145 @@ void test('the tailor has its own lane: BUSY when it is full, /render untouched,
   assert.ok(tailorDeadlineMs < 4 * 60_000, 'the site’s four-minute probe must outlast a job');
   assert.ok(drainMs < tailorDeadlineMs, 'a deploy cuts a running tailor; the shutdown callback is the recovery signal');
   assert.ok(SHUTDOWN_MS >= drainMs + 3_000, 'the callback wait at close fits before the hard stop');
+});
+
+void test('three failed fits fall back to the cap print, so the paid order still airs dressed', async (t) => {
+  const media = await tailorDesk(t, { judge: 'DRIFT,INK,GEOMETRY' });
+  const order = tailorOrder();
+  const before = submissions.length;
+  assert.equal((await post(media, order, { path: '/tailor' })).status, 202);
+  assert.ok(await landed(order.assetId));
+  const look = looks.find((l) => l.id === order.assetId);
+  assert.equal(look.headers['x-look-outcome'], 'look');
+  assert.equal(look.headers['x-look-sha256'], sha(look.body));
+  assert.equal(look.body.subarray(8, 12).toString(), 'cap:', 'the fallback is the cap print');
+  const verdict = verdictOf(look);
+  assert.equal(verdict.fallback, 'cap-v1');
+  assert.equal(verdict.model, 'cap-v1');
+  assert.equal(verdict.fit, 0);
+  assert.equal(verdict.judge, null);
+  assert.deepEqual(verdict.fits.map((f) => f.reason), ['DRIFT', 'INK', 'GEOMETRY']);
+  assert.equal(submissions.slice(before).filter((s) => s.endpoint === 'fal-ai/nano-banana-pro/edit').length, 3);
+  assert.equal(submissions.slice(before).filter((s) => s.endpoint === 'openrouter/router/vision').length, 0, 'the eye was asked about a fit the pixels refused');
+  const preview = media.spawns.find((s) => s.mode === 'preview');
+  assert.ok(preview, 'the cap renderer was never called');
+  const line = media.logs.find((l) => l.event === 'tailor' && l.outcome === 'look');
+  assert.equal(line.fallback, 'cap-v1');
+  assert.equal(line.fits, 3);
+});
+
+void test('a logo the fallback cannot print is refused; a broken renderer is an error the site asks about again', async (t) => {
+  const refusing = await tailorDesk(t, { judge: 'DRIFT', fallback: 'refuse' });
+  const order = tailorOrder();
+  assert.equal((await post(refusing, order, { path: '/tailor' })).status, 202);
+  assert.ok(await landed(order.assetId));
+  const refused = looks.find((l) => l.id === order.assetId);
+  assert.equal(refused.headers['x-look-outcome'], 'refused');
+  assert.equal(refused.headers['x-look-round'], '1');
+  assert.match(refused.headers['x-look-reason'], /LOGO_TOO_THIN/);
+  // The reason is stored bare; the site appends "Use a different logo." once, where it is shown.
+  assert.doesNotMatch(refused.headers['x-look-reason'], /different logo/);
+  assert.equal(refused.body.length, 0);
+  assert.equal('x-look-sha256' in refused.headers, false);
+  // Remembered: the same key is re-told without a fit.
+  const before = submissions.length;
+  const again = await post(refusing, order, { path: '/tailor' });
+  assert.deepEqual(again.json(), { key: tailorKey(order.logoSha256, 'host', 1), cached: true });
+  assert.ok(await landed(order.assetId, 2));
+  assert.equal(looks.filter((l) => l.id === order.assetId)[1].headers['x-look-outcome'], 'refused');
+  assert.equal(submissions.length, before);
+
+  const broken = await tailorDesk(t, { judge: 'DRIFT', fallback: 'crash' });
+  const other = tailorOrder();
+  assert.equal((await post(broken, other, { path: '/tailor' })).status, 202);
+  assert.ok(await landed(other.assetId));
+  const errored = looks.find((l) => l.id === other.assetId);
+  assert.equal(errored.headers['x-look-outcome'], 'error');
+  assert.ok(errored.headers['x-look-reason'].length > 0);
+  assert.ok(broken.logs.some((l) => l.event === 'renderer' && l.level === 'error'));
+});
+
+void test('a job that runs out of time says deadline, starts no fit it cannot finish, and kills what it was running', async (t) => {
+  falPlan.hang = true;
+  const media = await tailorDesk(t, { previewDelayMs: 10_000 }, { tailorDeadlineMs: 1_200, tailorFitMs: 300, tailorTailMs: 100, tailorSubmitMs: 250, judgeMs: 50 });
+  const order = tailorOrder();
+  const started = Date.now();
+  assert.equal((await post(media, order, { path: '/tailor' })).status, 202);
+  assert.ok(await landed(order.assetId));
+  const look = looks.find((l) => l.id === order.assetId);
+  assert.equal(look.headers['x-look-outcome'], 'deadline');
+  assert.match(look.headers['x-look-reason'], /out of time/);
+  assert.ok(Date.now() - started < 4_000, 'the deadline did not cut the fallback');
+  const preview = media.spawns.find((s) => s.mode === 'preview');
+  assert.ok(preview, 'the fallback never started');
+  assert.ok(await until(() => !alive(preview.pid)), 'the renderer outlived the job');
+  assert.equal(media.logs.find((l) => l.event === 'tailor').outcome, 'deadline');
+  falPlan.hang = false;
+  // No scratch left behind.
+  assert.ok(await until(async () => !(await readdir(media.workdir)).some((n) => n.startsWith('job-') && !n.startsWith('job-probe-'))));
+});
+
+void test('a drain cuts a running tailor with a shutdown callback, hands a queued one back at once, and waits for the callbacks', async (t) => {
+  falPlan.hang = true;
+  const media = await tailorDesk(t, {}, { tailorConcurrency: 1, tailorQueue: 2, drainMs: 500 });
+  const running = tailorOrder(),
+    queued = tailorOrder();
+  assert.equal((await post(media, running, { path: '/tailor' })).status, 202);
+  assert.equal((await post(media, queued, { path: '/tailor' })).status, 202);
+  assert.deepEqual(
+    [media.service.status().tailoring, media.service.status().tailorQueued],
+    [1, 1],
+  );
+  const started = Date.now();
+  await media.close();
+  assert.ok(Date.now() - started < 4_000, 'close waited past the drain and the callback window');
+  for (const order of [running, queued]) {
+    const look = looks.find((l) => l.id === order.assetId);
+    assert.ok(look, `${order === running ? 'the running' : 'the queued'} job never called back`);
+    assert.equal(look.headers['x-look-outcome'], 'shutdown');
+    assert.match(look.headers['x-look-reason'], /restarting/);
+  }
+  assert.equal(media.service.status().callbacks, 0);
+  falPlan.hang = false;
+  // The server has stopped listening; the desk itself still answers a late request with BUSY.
+  const turnedAway = await media.service.handle(
+    new Request('http://desk/tailor', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify(tailorOrder()),
+    }),
+  );
+  assert.equal(turnedAway.status, 409);
+  assert.equal((await turnedAway.json()).code, 'BUSY');
+});
+
+void test('the callback lands only on SPONSOR_SITE_ORIGIN, survives a short outage, and every outcome is remembered', async (t) => {
+  const media = await tailorDesk(t);
+  // The request may name a callback; the desk ignores it and builds its own from the origin.
+  const order = tailorOrder({ callbackUrl: 'http://127.0.0.1:1/steal' });
+  siteAnswers = [503];
+  assert.equal((await post(media, order, { path: '/tailor' })).status, 202);
+  assert.ok(await landed(order.assetId, 2));
+  const [first, second] = looks.filter((l) => l.id === order.assetId);
+  assert.equal(first.url, `/api/sponsorship/assets/${order.assetId}?part=look`);
+  assert.equal(second.headers['x-look-sha256'], first.headers['x-look-sha256']);
+  assert.ok(await until(() => media.logs.some((l) => l.event === 'tailor' && l.callback === 200)));
+  // A logo the site serves under another id, or from another host, is not fetched.
+  const foreign = tailorOrder({ logoUrl: `${FAL}/files/logo.png` });
+  const r = await post(media, foreign, { path: '/tailor' });
+  assert.equal(r.status, 400);
+  assert.equal(r.json().code, 'HOST');
+  // A logo whose bytes are not the promised hash is an error, never a look.
+  const swapped = tailorOrder();
+  logos.set(`/api/sponsorship/assets/${swapped.assetId}`, Buffer.from('not the logo'));
+  assert.equal((await post(media, swapped, { path: '/tailor' })).status, 202);
+  assert.ok(await landed(swapped.assetId));
+  const wrong = looks.find((l) => l.id === swapped.assetId);
+  assert.equal(wrong.headers['x-look-outcome'], 'error');
+  assert.match(wrong.headers['x-look-reason'], /not the one this order bought/);
+  const before = submissions.length;
+  assert.deepEqual((await post(media, swapped, { path: '/tailor' })).json(), { key: tailorKey(swapped.logoSha256, 'host', 1), cached: true });
+  assert.ok(await landed(swapped.assetId, 2));
+  assert.equal(submissions.length, before, 'a remembered error bought a fit');
+  siteAnswers = [];
 });

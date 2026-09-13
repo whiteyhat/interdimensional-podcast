@@ -1999,11 +1999,59 @@ export function createMediaService(options = {}) {
     await rememberOutcome(job.key, outcome);
     await deliver(job, outcome);
   }
-  // Until desk-10 lands the cap print, three failed fits are an error the site re-requests.
-  async function fallbackLook(job) {
+  // Three fits failed: the deterministic cap print, exactly as /preview makes it today (the blank
+  // cap, the logo in its front panel, identity matrix; an unmodified call into the renderer the
+  // trials qualified). The order still airs dressed; the site offers a better logo. The renderer's
+  // verdict on the artwork (422) is final for this logo; a fault of this machine is not.
+  async function fallbackLook(job, dir, logo, plan) {
+    const signal = job.controller.signal;
+    const output = join(dir, 'fallback.png'),
+      report = join(dir, 'report.json');
+    const started = Date.now();
+    try {
+      await renderer(
+        [
+          'preview',
+          '--manifest',
+          `public/wearables/${templates[job.target]}.json`,
+          '--asset',
+          logo,
+          '--output',
+          output,
+          '--report',
+          report,
+        ],
+        report,
+        signal,
+        dir,
+      );
+    } catch (error) {
+      if (signal.aborted) throw error;
+      if (error?.status === 422)
+        return {
+          kind: 'refused',
+          reason: `This logo could not be printed on the cap (${error.code}).`,
+        };
+      throw error;
+    } finally {
+      job.stages.fallbackMs = Date.now() - started;
+    }
+    const bytes = await readFile(output);
     return {
-      kind: 'error',
-      reason: `No fit passed in ${job.fits.length} attempts.`,
+      kind: 'look',
+      bytes,
+      sha256: hash(bytes),
+      verdict: {
+        model: 'cap-v1',
+        fit: 0,
+        round: job.round,
+        palette: job.palette,
+        plan,
+        judge: null,
+        candidateUrl: null,
+        fallback: 'cap-v1',
+        fits: job.fits.map(summarize),
+      },
     };
   }
 
