@@ -59,7 +59,8 @@ unset, the browser is handed this deployment's own `/api/rpc`, which proxies to 
 with the key server-side and only forwards the calls a wallet needs to pay.
 
 Never set on the deployed site: `FAL_KEY`, any `NEWSDESK_*`, `INTERACT_ORIGIN`, `CHART_MINT`.
-Generation happens only in the studio, and a borrowed chart is never shown to the audience.
+Generation happens only in the studio and, for a sponsor's tee and cap, on the media desk
+(which holds its own `FAL_KEY`); a borrowed chart is never shown to the audience.
 
 ## Going on air, from the box
 
@@ -301,14 +302,18 @@ an order queued behind others waits its turn. A delivered message or spotlight s
 `status='fulfilled'`, `intro=1`, and 4 start, 4 progress and 1 complete events. This
 generates the show for real: budget the normal cost per minute for the whole run.
 
-A cap on devnet needs three things: the devnet media service running and known to the devnet
-site (see [Sponsorship services](#sponsorship-services)), a qualified logo uploaded before
-payment, and ten verified minutes on air.
+A cap on devnet needs three things: the devnet media desk running with `FAL_KEY` and
+`SPONSOR_SITE_ORIGIN` and known to the devnet site (see
+[Sponsorship services](#sponsorship-services)), a logo uploaded before payment (the tee and
+cap are tailored right after payment, usually within one to two minutes), and ten verified
+minutes on air. The tracker qualification in `public/wearables` is no longer a release gate:
+it serves only the fallback print when three fits fail.
 
 ## Sponsorship services
 
 Two small services per site run next to the box on Railway. `sponsor-media-<site>` normalizes
-logos, draws the cap previews and composites the paid take. `sponsor-reconcile-<site>` asks the
+logos at upload and, once an order is paid, tailors the look: one still of the host in the tee
+and cap, judged before it airs, posted back to the site. `sponsor-reconcile-<site>` asks the
 site every minute to recover payments and reschedule paused placements, whether or not a
 studio is on air. Neither holds a payment key. Each shares one token with the site, and the
 same `RAILWAY_TOKEN` as the box drives both.
@@ -318,7 +323,7 @@ Devnet, once:
 ```sh
 node scripts/media.mjs setup devnet    # both services, their tokens, settings and address
 node scripts/media.mjs deploy devnet   # uploads ~2.6 MB for media and 3 files for the reconciler
-node scripts/media.mjs health devnet   # ready and capQualified, plus the reconciler's last passes
+node scripts/media.mjs health devnet   # ready and tailor, plus the reconciler's last passes
 ```
 
 `setup` prints the four values the devnet worker needs (tokens masked) and the commands that
@@ -334,9 +339,11 @@ store them in GitHub. The "Deploy devnet" workflow puts them on the worker on ev
 
 Then run the workflow (`gh workflow run deploy-devnet.yml --ref main`) and check again with
 `node scripts/media.mjs health devnet`. The reconciler's passes stop reporting 401 once the
-worker has its token, and the devnet catalog offers the cap once the site reads
-`capQualified: true`. A missing value makes the workflow warn, not fail. A value that is set but
-unusable (a media address that is not https, or a token too short for the worker) fails it.
+worker has its token, and the devnet catalog offers the cap once the site reads `tailor: true`
+with `templateVersion: looks-v1` ("Ready to tailor looks" from `media.mjs health`; "Up, but
+FAL_KEY is missing or fal did not answer, so the cap stays off sale" otherwise). A missing value
+makes the workflow warn, not fail. A value that is set but unusable (a media address that is
+not https, or a token too short for the worker) fails it.
 
 Production has no workflow step for these, so the values go on the worker by hand:
 
@@ -365,6 +372,11 @@ Worth knowing:
 - Running `setup` again is safe. It keeps the tokens, sends the settings again, and removes
   nothing, including anything added by hand in Railway's dashboard. To rotate a token, delete
   its line from `.dev.vars`, run `setup` and `deploy`, then give the worker the new value.
+- `setup` also copies this machine's `FAL_KEY` and the site's origin onto the media desk as
+  `FAL_KEY` and `SPONSOR_SITE_ORIGIN`. Both are required for tailoring; without them `/health`
+  reports `tailor: false` and the cap stays off sale. A deploy aborts a running tailor at 100 s
+  of drain; the desk's `shutdown` callback is the recovery signal and the site re-requests
+  within a minute, so a collision costs at most about $0.15.
 - `status` shows each service's Dockerfile and healthcheck, latest deployment, address and variable names, and
   whether its token still matches `.dev.vars`.
 
