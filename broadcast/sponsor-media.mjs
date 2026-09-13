@@ -1006,6 +1006,77 @@ export async function sendLook(
   return status;
 }
 
+const HEX6 = /^#[0-9A-Fa-f]{6}$/;
+/** The palette /logo produced, checked field by field; the plan is computed from it. */
+function checkedPalette(raw) {
+  const bad = () => new MediaError(400, 'PALETTE', 'A palette from /logo is required.');
+  if (
+    !raw ||
+    typeof raw !== 'object' ||
+    !Array.isArray(raw.clusters) ||
+    raw.clusters.length < 1 ||
+    raw.clusters.length > 8
+  )
+    throw bad();
+  const clusters = raw.clusters.map((c) => {
+    if (
+      !c ||
+      typeof c.hex !== 'string' ||
+      !HEX6.test(c.hex) ||
+      typeof c.share !== 'number' ||
+      !(c.share >= 0 && c.share <= 1)
+    )
+      throw bad();
+    return { hex: c.hex.toUpperCase(), share: c.share };
+  });
+  for (const name of ['primary', 'secondary', 'accent'])
+    if (typeof raw[name] !== 'string' || !HEX6.test(raw[name])) throw bad();
+  return {
+    clusters,
+    primary: raw.primary.toUpperCase(),
+    secondary: raw.secondary.toUpperCase(),
+    accent: raw.accent.toUpperCase(),
+    monochrome: raw.monochrome === true,
+  };
+}
+/** One tailor job per logo, host, look version and round; a new round means new seeds. */
+export function tailorKey(logoSha256, target, round) {
+  return hash(`${logoSha256}|${target}|${LOOK_VERSION}|${round}`);
+}
+const seedFor = (key, fit) =>
+  parseInt(hash(`${key}|${fit}`).slice(0, 8), 16) % 2147483647;
+
+const JUDGE_SYSTEM =
+  'You are a strict quality inspector for a broadcast wardrobe. Answer with one JSON object and nothing else.';
+/** What the vision judge is asked about one fit; the pixel numbers go in rather than deciding alone. */
+export function judgePrompt({ plan, pixels }) {
+  return [
+    'Three images: (1) the ORIGINAL frame, (2) the LOGO, (3) the CANDIDATE frame edited to dress the character.',
+    `The candidate should show the character in a ${plan.shirt.hex} T-shirt with the LOGO printed large and centred on the chest, and a ${plan.cap.hex} baseball cap under the headphones with a small version of the same mark on its front.`,
+    `A pixel comparison outside the tee and cap found ${(Math.round(pixels.pixelAgreement * 1000) / 10).toFixed(1)}% of pixels unchanged (mean drift ${pixels.meanDrift.toFixed(1)}/255).`,
+    'Judge logoFidelity and legibility on the chest print only; the cap mark may be simplified. Report JSON with exactly these keys:',
+    '{"shirtLogo": boolean (the LOGO is printed on the T-shirt chest), "logoFidelity": 0-10 (how exactly the chest print reproduces the LOGO: shapes, colours, proportions), "legibility": 0-10 (how readable the chest print is at a glance), "capPresent": boolean, "capColourMatchesPlan": boolean, "capExtraText": boolean (the cap carries letters or words that are not part of the mark), "identityUnchanged": boolean (same character, face, expression, pose, hands and headphones), "sceneUnchanged": boolean (same background, desk, microphone, lighting and camera), "extraText": boolean (any new lettering, logo or watermark anywhere other than the chest print and the cap mark)}',
+  ].join('\n');
+}
+/** Pass = the chest print is the logo, readable, on the same character in the same scene; the cap
+ * is there and carries no letters. How well the cap mark came out never refuses a fit. */
+export function judgePasses(judge) {
+  return (
+    !!judge &&
+    typeof judge === 'object' &&
+    judge.shirtLogo === true &&
+    typeof judge.logoFidelity === 'number' &&
+    judge.logoFidelity >= 7 &&
+    typeof judge.legibility === 'number' &&
+    judge.legibility >= 7 &&
+    judge.capPresent === true &&
+    judge.capExtraText !== true &&
+    judge.identityUnchanged === true &&
+    judge.sceneUnchanged === true &&
+    judge.extraText !== true
+  );
+}
+
 /**
  * One media desk: its queue, in-flight takes, result cache and the state it measured at boot.
  * The HTTP server and the tests both drive it through `handle`.
@@ -1029,6 +1100,20 @@ export function createMediaService(options = {}) {
   let previews = 0,
     closing = false,
     expectedRunMs = cfg.minRunMs;
+  // The tailor's lane: in flight by key, queued, running, the promises of the running ones, and
+  // the callbacks still leaving. Non-look outcomes are remembered here; looks in the file cache.
+  const tailoring = new Map(),
+    tailorQueue = [],
+    tailorActive = new Set(),
+    tailorRuns = new Set(),
+    callbacks = new Set(),
+    refusals = new Map();
+  const fal = falClient({
+    origin: falOrigin,
+    key: cfg.falKey || '',
+    log,
+    pollMs: cfg.falPollMs,
+  });
 
   // What this machine can do, measured in the background and read by /health from memory. A
   // render saturates the CPU, and a health probe that ran Python and ffmpeg of its own became
@@ -1539,6 +1624,452 @@ export function createMediaService(options = {}) {
       'The media worker could not process this file.',
     );
   }
+  // ---- the tailor -----------------------------------------------------------------------
+  const tailorBusy = (retry) =>
+    new MediaError(409, 'BUSY', 'The tailor is busy. Try again shortly.', {
+      retryAfterMs: retry,
+    });
+  function tailorRetryAfterMs() {
+    const now = Date.now();
+    let soonest = Infinity;
+    for (const job of tailorActive)
+      soonest = Math.min(soonest, job.startedAt + cfg.tailorFitMs - now);
+    return Math.min(
+      60_000,
+      Math.max(1_000, Math.round(Number.isFinite(soonest) ? soonest : 1_000)),
+    );
+  }
+  async function settledOutcome(key) {
+    const hit = await cached(key);
+    if (hit)
+      return {
+        kind: 'look',
+        bytes: hit.bytes,
+        sha256: hit.summary.outputSha256,
+        verdict: hit.summary.verdict,
+      };
+    const other = refusals.get(key);
+    if (other && Date.now() - other.at <= cfg.cacheTtlMs) return other.outcome;
+    refusals.delete(key);
+    return null;
+  }
+  function rememberOutcome(key, outcome) {
+    if (outcome.kind === 'look')
+      return remember(key, outcome.bytes, {
+        outputSha256: outcome.sha256,
+        outcome: 'look',
+        verdict: outcome.verdict,
+      }).catch((error) =>
+        log({
+          level: 'warn',
+          event: 'cache',
+          error: String(error?.message || error).slice(0, 200),
+        }),
+      );
+    refusals.set(key, { at: Date.now(), outcome });
+    while (refusals.size > cfg.cacheMax)
+      refusals.delete(refusals.keys().next().value);
+    return Promise.resolve();
+  }
+  function admitTailor(order, arrivedAt) {
+    if (closing) throw tailorBusy(2_000);
+    const free = tailorActive.size < cfg.tailorConcurrency && !tailorQueue.length;
+    if (!free && tailorQueue.length >= cfg.tailorQueue)
+      throw tailorBusy(tailorRetryAfterMs());
+    const job = {
+      ...order,
+      arrivedAt,
+      deadlineAt: arrivedAt + cfg.tailorDeadlineMs,
+      state: 'queued',
+      controller: new AbortController(),
+      stages: {},
+      fits: [],
+    };
+    tailoring.set(job.key, job);
+    job.clock = setTimeout(
+      () => job.controller.abort('deadline'),
+      cfg.tailorDeadlineMs,
+    );
+    if (free) startTailor(job);
+    else tailorQueue.push(job);
+    return job;
+  }
+  function startTailor(job) {
+    job.state = 'running';
+    job.startedAt = Date.now();
+    tailorActive.add(job);
+    const work = tailor(job)
+      .catch((error) =>
+        log({
+          level: 'error',
+          event: 'tailor',
+          key: job.key.slice(0, 12),
+          outcome: 'internal',
+          error: String(error?.message || error).slice(0, 300),
+        }),
+      )
+      .finally(() => {
+        clearTimeout(job.clock);
+        tailorActive.delete(job);
+        if (tailoring.get(job.key) === job) tailoring.delete(job.key);
+        tailorRuns.delete(work);
+        pumpTailor();
+      });
+    tailorRuns.add(work);
+  }
+  function pumpTailor() {
+    while (
+      !closing &&
+      tailorActive.size < cfg.tailorConcurrency &&
+      tailorQueue.length
+    )
+      startTailor(tailorQueue.shift());
+  }
+  const summarize = (verdict) => ({
+    fit: verdict.fit,
+    seed: verdict.seed,
+    pass: verdict.pass,
+    reason: verdict.reason,
+    error: verdict.error,
+    ms: verdict.ms,
+    candidateUrl: verdict.candidateUrl,
+    requestId: verdict.requestId,
+    pixels: verdict.pixels,
+    judge: verdict.judge,
+  });
+
+  // Ask the eye about one fit; the answer is JSON, fenced or not, kept in full for audit.
+  async function visionJudge({ base, logo, candidate, plan, pixels }, signal) {
+    const { output } = await fal.run(
+      JUDGE_ENDPOINT,
+      {
+        model: JUDGE_MODEL,
+        prompt: judgePrompt({ plan, pixels }),
+        system_prompt: JUDGE_SYSTEM,
+        image_urls: [base, logo, candidate],
+        temperature: 0,
+        max_tokens: 400,
+      },
+      { signal, budgetMs: cfg.judgeMs },
+    );
+    const text = String(output?.output ?? '');
+    let parsed = null;
+    try {
+      parsed = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+    } catch {
+      /* Not JSON. */
+    }
+    if (!parsed || typeof parsed !== 'object')
+      throw new MediaError(502, 'JUDGE', 'The judge did not answer in JSON.');
+    return { ...parsed, text: text.slice(0, 600) };
+  }
+
+  // One fit: the edit, the download, the pixel judge, the eye. A verdict, never a throw, unless
+  // the whole job was abandoned.
+  async function attemptFit(job, dir, { fit, seed, plan, prompt, base }) {
+    const signal = job.controller.signal;
+    const started = Date.now();
+    const within = AbortSignal.any([signal, AbortSignal.timeout(cfg.tailorFitMs)]);
+    const verdict = { fit, seed, pass: false };
+    try {
+      const { requestId, output } = await fal.run(
+        TAILOR_MODEL,
+        {
+          prompt,
+          image_urls: [base.url, job.logoUrl.href],
+          aspect_ratio: '16:9',
+          resolution: '1K',
+          output_format: 'png',
+          num_images: 1,
+          seed,
+        },
+        { signal: within, budgetMs: cfg.tailorSubmitMs },
+      );
+      verdict.requestId = requestId;
+      const candidateUrl = checkedUrl(output?.images?.[0]?.url, 'fal').href;
+      verdict.candidateUrl = candidateUrl;
+      const candidate = join(dir, `fit-${fit}.png`);
+      await download(
+        candidateUrl,
+        candidate,
+        MAX_RENDER_BODY,
+        AbortSignal.any([
+          within,
+          AbortSignal.timeout(Math.max(1, started + cfg.tailorSubmitMs - Date.now())),
+        ]),
+        signal,
+      );
+      const cropped = join(dir, `fit-${fit}-look.png`),
+        palette = join(dir, 'palette.json');
+      await writeFile(palette, JSON.stringify(job.palette));
+      const judged = await wardrobe(
+        [
+          'judge',
+          '--base',
+          base.path,
+          '--candidate',
+          candidate,
+          '--target',
+          job.target,
+          '--palette',
+          palette,
+          '--output',
+          cropped,
+        ],
+        within,
+        dir,
+      );
+      verdict.pixels = {
+        ok: judged.ok,
+        code: judged.code,
+        pixelAgreement: judged.pixelAgreement,
+        meanDrift: judged.meanDrift,
+        inkPresent: judged.inkPresent,
+      };
+      if (!judged.ok) {
+        verdict.reason = judged.code;
+        return verdict;
+      }
+      verdict.judge = await visionJudge(
+        {
+          base: base.url,
+          logo: job.logoUrl.href,
+          candidate: candidateUrl,
+          plan,
+          pixels: judged,
+        },
+        within,
+      );
+      if (!judgePasses(verdict.judge)) {
+        verdict.reason = 'JUDGE';
+        return verdict;
+      }
+      verdict.bytes = await readFile(cropped);
+      verdict.sha256 = judged.sha256;
+      verdict.pass = hash(verdict.bytes) === judged.sha256;
+      if (!verdict.pass) verdict.reason = 'INTEGRITY';
+      return verdict;
+    } catch (error) {
+      if (signal.aborted) throw error;
+      verdict.reason = error?.code || 'FIT';
+      verdict.error = String(error?.message || error).slice(0, 200);
+      return verdict;
+    } finally {
+      verdict.ms = Date.now() - started;
+    }
+  }
+
+  // Every settlement is told to the site, on the URL this desk builds from SPONSOR_SITE_ORIGIN and
+  // the asset id: the request never names a callback address. The promise is registered before
+  // anything is awaited, so close() can wait for it.
+  function deliver(job, outcome) {
+    const url = `${siteOrigin}/api/sponsorship/assets/${job.assetId}?part=look`;
+    const headers = {
+      authorization: `Bearer ${cfg.token}`,
+      'x-look-round': String(job.round),
+      'x-look-outcome': outcome.kind,
+    };
+    let body;
+    if (outcome.kind === 'look') {
+      headers['content-type'] = 'image/png';
+      headers['x-look-sha256'] = outcome.sha256;
+      headers['x-look-verdict'] = Buffer.from(
+        JSON.stringify(outcome.verdict),
+      ).toString('base64');
+      body = outcome.bytes;
+    } else
+      headers['x-look-reason'] = String(outcome.reason || outcome.kind)
+        .replace(/[^\x20-\x7e]/g, ' ')
+        .slice(0, 300);
+    const sending = sendLook(
+      url,
+      { headers, body },
+      {
+        attempts: cfg.callbackAttempts,
+        timeoutMs: cfg.callbackMs,
+        retryMs: cfg.callbackRetryMs,
+      },
+    )
+      .then((status) => {
+        log({
+          level: status >= 200 && status < 300 ? 'info' : 'warn',
+          event: 'tailor',
+          key: job.key.slice(0, 12),
+          outcome: outcome.kind,
+          round: job.round,
+          fits: job.fits?.length ?? 0,
+          fallback: outcome.verdict?.fallback,
+          callback: status,
+          ms: Date.now() - job.arrivedAt,
+          ...job.stages,
+        });
+        return status;
+      })
+      .finally(() => callbacks.delete(sending));
+    callbacks.add(sending);
+    return sending;
+  }
+
+  // The job: fetch the logo, plan the garments, fit up to three times, judge each, then settle
+  // with a look or (desk-10) the fallback. Whatever happens, the site hears one outcome.
+  async function tailor(job) {
+    const signal = job.controller.signal;
+    const abandoned = () => new MediaError(503, 'ABANDONED', String(signal.reason));
+    let outcome = null,
+      dir = null;
+    try {
+      await prepared;
+      dir = await mkdtemp(join(workdir, 'job-'));
+      if (signal.aborted) throw abandoned();
+      const logo = join(dir, 'logo.png');
+      const fetching = AbortSignal.any([
+        signal,
+        AbortSignal.timeout(
+          Math.max(1, Math.min(cfg.logoFetchMs, job.deadlineAt - Date.now())),
+        ),
+      ]);
+      const logoSha256 = await download(job.logoUrl.href, logo, MAX_LOGO, fetching, signal);
+      if (logoSha256 !== job.logoSha256)
+        throw new MediaError(409, 'LOGO_HASH', 'The logo at the site is not the one this order bought.');
+      job.stages.fetchMs = Date.now() - job.startedAt;
+      const plan = garmentPlan(job.palette, job.target),
+        prompt = tailorPrompt(plan),
+        base = BASE_STILLS[job.target];
+      for (let fit = 1; fit <= FITS; fit++) {
+        if (signal.aborted) throw abandoned();
+        // A fit that could not finish with the tail still free for the fallback and the callback
+        // is not started; the job settles inside its deadline by construction.
+        if (job.deadlineAt - Date.now() < cfg.tailorFitMs + cfg.tailorTailMs) break;
+        const verdict = await attemptFit(job, dir, {
+          fit,
+          seed: seedFor(job.key, fit),
+          plan,
+          prompt,
+          base,
+        });
+        job.fits.push(verdict);
+        if (verdict.pass) {
+          outcome = {
+            kind: 'look',
+            bytes: verdict.bytes,
+            sha256: verdict.sha256,
+            verdict: {
+              model: TAILOR_MODEL,
+              fit,
+              round: job.round,
+              seed: verdict.seed,
+              requestId: verdict.requestId,
+              palette: job.palette,
+              plan,
+              judge: verdict.judge,
+              pixels: verdict.pixels,
+              candidateUrl: verdict.candidateUrl,
+              fits: job.fits.map(summarize),
+            },
+          };
+          break;
+        }
+      }
+      if (!outcome) {
+        if (signal.aborted) throw abandoned();
+        outcome = await fallbackLook(job, dir, logo, plan);
+      }
+    } catch (error) {
+      outcome = signal.aborted
+        ? {
+            kind: signal.reason === 'shutdown' ? 'shutdown' : 'deadline',
+            reason:
+              signal.reason === 'shutdown'
+                ? 'The desk was restarting.'
+                : 'The tailor ran out of time.',
+          }
+        : { kind: 'error', reason: String(error?.message || error).slice(0, 300) };
+      if (!signal.aborted)
+        log({
+          level: 'error',
+          event: 'tailor',
+          key: job.key.slice(0, 12),
+          stage: 'job',
+          code: error?.code,
+          error: outcome.reason,
+        });
+    } finally {
+      if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+    await rememberOutcome(job.key, outcome);
+    await deliver(job, outcome);
+  }
+  // Until desk-10 lands the cap print, three failed fits are an error the site re-requests.
+  async function fallbackLook(job) {
+    return {
+      kind: 'error',
+      reason: `No fit passed in ${job.fits.length} attempts.`,
+    };
+  }
+
+  async function handleTailor(request, url, meta, arrivedAt) {
+    let payload;
+    try {
+      payload = JSON.parse(
+        (await bytesLimited(request, MAX_TAILOR_BODY)).toString('utf8'),
+      );
+    } catch (error) {
+      if (error instanceof MediaError) throw error;
+      throw new MediaError(400, 'JSON', 'A JSON tailor request is required.');
+    }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload))
+      throw new MediaError(400, 'JSON', 'A JSON tailor request is required.');
+    if (typeof payload.assetId !== 'string' || !HEX64.test(payload.assetId))
+      throw new MediaError(400, 'ASSET_ID', 'An asset id is required.');
+    if (![1, 2, 3].includes(payload.round))
+      throw new MediaError(400, 'ROUND', 'A tailor round is 1, 2 or 3.');
+    if (!BASE_STILLS[payload.target])
+      throw new MediaError(400, 'TARGET', 'Choose a supported host.');
+    if (typeof payload.logoSha256 !== 'string' || !HEX64.test(payload.logoSha256))
+      throw new MediaError(400, 'LOGO_HASH', 'A logo hash is required.');
+    if (!siteOrigin || !cfg.falKey)
+      throw new MediaError(
+        503,
+        'TAILOR_UNAVAILABLE',
+        'This desk has no tailor: it needs FAL_KEY and SPONSOR_SITE_ORIGIN.',
+      );
+    const logoUrl = checkedUrl(payload.logoUrl, 'logo');
+    const palette = checkedPalette(payload.palette);
+    const projectName =
+      typeof payload.projectName === 'string' ? payload.projectName.slice(0, 80) : '';
+    const key = tailorKey(payload.logoSha256, payload.target, payload.round);
+    meta.key = key.slice(0, 12);
+    const order = {
+      key,
+      assetId: payload.assetId,
+      round: payload.round,
+      target: payload.target,
+      logoUrl,
+      logoSha256: payload.logoSha256,
+      palette,
+      projectName,
+    };
+    // A key in flight is joined, checked before and after the cache read so two requests that
+    // arrive together never make two jobs. A settled key is re-told rather than remade: the site
+    // lost a callback, not the look.
+    if (tailoring.has(key)) {
+      meta.cache = 'join';
+      return reply({ key, queued: true }, 202);
+    }
+    const done = await settledOutcome(key);
+    if (done) {
+      meta.cache = 'hit';
+      void deliver({ ...order, arrivedAt, fits: [], stages: {} }, done);
+      return reply({ key, cached: true });
+    }
+    if (tailoring.has(key)) {
+      meta.cache = 'join';
+      return reply({ key, queued: true }, 202);
+    }
+    meta.cache = 'miss';
+    admitTailor(order, arrivedAt);
+    return reply({ key, queued: true }, 202);
+  }
 
   // Hand the renderer the take as the qualified decoder would see it: unchanged where OpenCV
   // already decodes that way, otherwise converted first.
@@ -1709,7 +2240,7 @@ export function createMediaService(options = {}) {
     if (url.username || url.password || url.hash)
       throw new MediaError(400, 'URL', 'Invalid media URL.');
     const allowed =
-      kind === 'video'
+      kind === 'video' || kind === 'fal'
         ? (url.protocol === 'https:' &&
             !url.port &&
             (url.hostname === 'fal.media' ||
@@ -2055,8 +2586,11 @@ export function createMediaService(options = {}) {
         );
       const known =
         request.method === 'POST' &&
-        ['/preview', '/render', '/logo'].includes(url.pathname);
+        ['/preview', '/render', '/logo', '/tailor'].includes(url.pathname);
       if (!known) throw new MediaError(404, 'NOT_FOUND', 'Unknown operation.');
+      // The tailor answers 409 BUSY in its own words, drain included.
+      if (url.pathname === '/tailor')
+        return await handleTailor(request, url, meta, arrivedAt);
       // A draining desk takes nothing new. BUSY is what the site retries, and by then Railway
       // routes the retry to the replacement.
       if (closing) throw busy(2_000);
@@ -2108,10 +2642,20 @@ export function createMediaService(options = {}) {
       retries.clear();
       // A copy, because settling a job takes it out of the queue.
       for (const job of queue.slice()) abort(job, 'shutdown');
+      // A queued tailor job has cost nothing: the site hears `shutdown` now and asks the
+      // replacement desk. A running one gets the drain, then the same word.
+      for (const job of tailorQueue.splice(0)) {
+        clearTimeout(job.clock);
+        tailoring.delete(job.key);
+        void rememberOutcome(job.key, { kind: 'shutdown', reason: 'The desk was restarting.' });
+        void deliver(job, { kind: 'shutdown', reason: 'The desk was restarting.' });
+      }
     }
-    await settledWithin([...runs, ...previewing], cfg.drainMs);
+    await settledWithin([...runs, ...previewing, ...tailorRuns], cfg.drainMs);
     for (const job of Array.from(active)) abort(job, 'shutdown');
-    await settledWithin([...runs], 2_000);
+    for (const job of Array.from(tailorActive)) job.controller.abort('shutdown');
+    // The cut jobs settle at once; their callbacks, and any still leaving, get three seconds.
+    await settledWithin([...runs, ...tailorRuns, ...callbacks], 3_000);
   }
 
   return {
@@ -2125,9 +2669,9 @@ export function createMediaService(options = {}) {
       queued: queue.length,
       inflight: inflight.size,
       previews,
-      tailoring: 0,
-      tailorQueued: 0,
-      callbacks: 0,
+      tailoring: tailorActive.size,
+      tailorQueued: tailorQueue.length,
+      callbacks: callbacks.size,
       toolProbes: checks.tools,
       decoderProbes: checks.decoder,
       draining: closing,
