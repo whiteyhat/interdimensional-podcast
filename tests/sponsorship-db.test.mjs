@@ -689,3 +689,85 @@ void test('a fallback look is replaced by a real fit, but not while the cap is o
   assert.equal(a.metadata.sha256, other);
   assert.equal(a.url, lookUrl(other));
 });
+void test('the tailor probe names stuck logos, spent rounds and fallback upgrades, and reads only', async () => {
+  const d = await fixture();
+  const MIN = 60000,
+    now = 10 * MIN;
+  insertAsset(d, 'logo', logoMeta(), now - 5 * MIN);
+  await paidCap(d, 'buyer', 'host', now - 5 * MIN);
+  d.sql
+    .prepare("UPDATE sponsor_orders SET draft=json_set(draft,'$.assetId',?) WHERE id='buyer'")
+    .run(ASSET);
+  const written = () => d.sql.prepare('SELECT total_changes() AS n').get().n;
+  // Paid five minutes ago and never requested: round 1 is due, and asking writes nothing.
+  const before = written();
+  assert.deepEqual(await db.tailorProbe(d, now), [
+    { orderId: 'buyer', assetId: ASSET, nextRound: 1, upgrade: false },
+  ]);
+  assert.equal(written(), before, 'the probe writes nothing');
+  // Requested a minute ago: in flight, left alone. Four minutes without an answer: next round.
+  await db.markTailorRequested(d, ASSET, { round: 1, requestedAt: now - MIN });
+  assert.deepEqual(await db.tailorProbe(d, now), []);
+  assert.deepEqual(await db.tailorProbe(d, now + 4 * MIN), [
+    { orderId: 'buyer', assetId: ASSET, nextRound: 2, upgrade: false },
+  ]);
+  // A deadline callback dates the wait from its own moment; after round 3 the caller refuses.
+  d.sql
+    .prepare("UPDATE sponsor_assets SET metadata=json_set(metadata,'$.tailor',json(?)) WHERE id=?")
+    .run(
+      JSON.stringify({ round: 3, requestedAt: now, outcome: 'deadline', at: now + 3 * MIN }),
+      ASSET,
+    );
+  assert.deepEqual(await db.tailorProbe(d, now + 6 * MIN), [], 'three minutes after the deadline');
+  assert.deepEqual(await db.tailorProbe(d, now + 7 * MIN + 1), [
+    { orderId: 'buyer', assetId: ASSET, nextRound: 4, upgrade: false },
+  ]);
+  // A refused asset is never re-tailored.
+  d.sql.prepare("UPDATE sponsor_assets SET status='refused' WHERE id=?").run(ASSET);
+  assert.deepEqual(await db.tailorProbe(d, now + 60 * MIN), []);
+  // A first-round fallback earns one upgrade, ten minutes on, while nothing wears it on air.
+  d.sql
+    .prepare(
+      "UPDATE sponsor_assets SET status='qualified',metadata=json_set(metadata,'$.tailor',json(?),'$.look',json(?)) WHERE id=?",
+    )
+    .run(
+      JSON.stringify({ round: 1, requestedAt: now, outcome: 'look', at: now + MIN }),
+      JSON.stringify({ sha256: LOOK_SHA, model: 'm', fit: 3, round: 1, verdict: {}, fallback: 'cap-v1' }),
+      ASSET,
+    );
+  assert.deepEqual(await db.tailorProbe(d, now + 10 * MIN), [], 'not yet');
+  assert.deepEqual(await db.tailorProbe(d, now + 11 * MIN + 1), [
+    { orderId: 'buyer', assetId: ASSET, nextRound: 2, upgrade: true },
+  ]);
+  d.sql.prepare("UPDATE sponsor_orders SET status='leased' WHERE id='buyer'").run();
+  assert.deepEqual(await db.tailorProbe(d, now + 11 * MIN + 1), [], 'not while the cap is leased');
+  d.sql.prepare("UPDATE sponsor_orders SET status='paid' WHERE id='buyer'").run();
+  d.sql
+    .prepare("UPDATE sponsor_assets SET metadata=json_set(metadata,'$.tailor.round',2) WHERE id=?")
+    .run(ASSET);
+  assert.deepEqual(await db.tailorProbe(d, now + 60 * MIN), [], 'one upgrade only');
+});
+
+// The lease SQL is unchanged; this pins it to the new status vocabulary.
+void test('the lease refuses a cap whose logo is still tailoring or was refused, and takes it once the look lands', async () => {
+  const d = await fixture();
+  insertAsset(d, 'logo', logoMeta());
+  await paidCap(d, 'cap1', 'host', 300);
+  d.sql
+    .prepare("UPDATE sponsor_orders SET draft=json_set(draft,'$.assetId',?) WHERE id='cap1'")
+    .run(ASSET);
+  const caps = { message: false, spotlight: false, cap: true, capTemplateVersion: 'looks-v1' };
+  assert.equal((await db.leaseOrders(d, 'studio', 400, 3, caps)).length, 0, 'tailoring');
+  d.sql.prepare("UPDATE sponsor_assets SET status='refused' WHERE id=?").run(ASSET);
+  assert.equal((await db.leaseOrders(d, 'studio', 400, 3, caps)).length, 0, 'refused');
+  d.sql.prepare("UPDATE sponsor_assets SET status='qualified' WHERE id=?").run(ASSET);
+  assert.equal(
+    (await db.leaseOrders(d, 'studio', 400, 3, { ...caps, capTemplateVersion: 'caps-v1' })).length,
+    0,
+    'a studio still on the old wardrobe',
+  );
+  assert.deepEqual(
+    (await db.leaseOrders(d, 'studio', 400, 3, caps)).map((o) => o.id),
+    ['cap1'],
+  );
+});

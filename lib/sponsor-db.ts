@@ -315,6 +315,41 @@ export async function applyLook(
     'ASSET',
   );
 }
+/** How long a tailor round may go unanswered before the reconciler asks again: past the desk's 210 s job deadline. */
+export const TAILOR_RETRY_MS = 240000;
+/** How long a first-round fallback look stands before one upgrade fit is tried. */
+export const LOOK_UPGRADE_MS = 600000;
+/**
+ * What the reconciler should ask the tailor for, reading only. A `logo` asset whose last
+ * activity (callback, request, or payment) is older than TAILOR_RETRY_MS gets its next round;
+ * past round 3 the caller refuses it. A `qualified` asset wearing a first-round fallback gets
+ * one upgrade after LOOK_UPGRADE_MS, while no order wearing it is on air. The order named is
+ * the earliest paid cap on the asset, whose project name the tailor prompt uses.
+ */
+export async function tailorProbe(
+  d: D1Database,
+  now: number,
+): Promise<
+  { orderId: string; assetId: string; nextRound: number; upgrade: boolean }[]
+> {
+  const rows = await d
+    .prepare(
+      `SELECT o.id AS order_id,a.id AS asset_id,a.status,COALESCE(json_extract(a.metadata,'$.tailor.round'),0) AS round FROM sponsor_assets a JOIN sponsor_orders o ON o.id=(SELECT c.id FROM sponsor_orders c WHERE c.product='cap' AND c.paid_attempt_id IS NOT NULL AND json_extract(c.draft,'$.assetId')=a.id ORDER BY c.paid_at,c.id LIMIT 1) WHERE (a.status='logo' AND COALESCE(json_extract(a.metadata,'$.tailor.at'),json_extract(a.metadata,'$.tailor.requestedAt'),MAX(o.paid_at,a.created_at),a.created_at)<?) OR (a.status='qualified' AND json_extract(a.metadata,'$.look.fallback') IS NOT NULL AND COALESCE(json_extract(a.metadata,'$.tailor.round'),0)<2 AND COALESCE(json_extract(a.metadata,'$.tailor.at'),0)<? AND NOT EXISTS(SELECT 1 FROM sponsor_orders w WHERE json_extract(w.draft,'$.assetId')=a.id AND w.status IN ('leased','prepared','playing'))) ORDER BY o.paid_at,o.id LIMIT 5`,
+    )
+    .bind(now - TAILOR_RETRY_MS, now - LOOK_UPGRADE_MS)
+    .all<{
+      order_id: string;
+      asset_id: string;
+      status: string;
+      round: number;
+    }>();
+  return rows.results.map((r) => ({
+    orderId: r.order_id,
+    assetId: r.asset_id,
+    nextRound: r.round + 1,
+    upgrade: r.status === 'qualified',
+  }));
+}
 export async function createOrder(
   d: D1Database,
   v: { id: string; tokenHash: string; draft: SponsorDraft; now: number },
