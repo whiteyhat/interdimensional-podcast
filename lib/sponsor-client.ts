@@ -66,12 +66,21 @@ export function readCheckout(raw: string | null): SavedCheckout {
   }
   return fallback;
 }
-export function receiptStage(receipt: Pick<SponsorReceipt, 'status'>) {
+export function receiptStage(
+  receipt: Pick<SponsorReceipt, 'status'> &
+    Partial<Pick<SponsorReceipt, 'draft' | 'look'>>,
+) {
   switch (receipt.status) {
     case 'draft':
     case 'payment-pending':
       return 'payment';
     case 'paid':
+      // A paid cap cannot be leased until its look exists; the receipt says what it is
+      // waiting for. A refused look is back in the queue with a request for a new logo.
+      return receipt.draft?.product === 'cap' &&
+        (!receipt.look || receipt.look.status === 'tailoring')
+        ? 'tailoring'
+        : 'queued';
     case 'leased':
       return 'queued';
     case 'prepared':

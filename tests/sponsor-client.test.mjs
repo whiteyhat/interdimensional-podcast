@@ -225,3 +225,29 @@ void test('the wardrobe card follows the order: the payment clock while tailorin
   assert.equal(C.baseStill('guest'), '/gigachad-video.avif');
   assert.equal(C.baseStill(undefined), '/pepe-video.avif');
 });
+
+void test('a paid cap waits on its tailor before it is in the queue; every other paid order is queued', () => {
+  const cap = {
+    status: 'paid',
+    draft: { product: 'cap', name: '', message: 'gm', target: 'host' },
+    attempts: [],
+  };
+  assert.equal(C.receiptStage({ ...cap, look: { status: 'tailoring' } }), 'tailoring');
+  assert.equal(C.receiptStage(cap), 'tailoring');
+  assert.equal(
+    C.receiptStage({ ...cap, look: { status: 'ready', url: '/look' } }),
+    'queued',
+  );
+  assert.equal(
+    C.receiptStage({ ...cap, look: { status: 'refused', reason: 'no' } }),
+    'queued',
+  );
+  assert.equal(
+    C.receiptStage({ ...cap, status: 'leased', look: { status: 'tailoring' } }),
+    'queued',
+  );
+  assert.equal(
+    C.receiptStage({ ...cap, draft: { ...cap.draft, product: 'spotlight' } }),
+    'queued',
+  );
+});

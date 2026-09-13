@@ -1,5 +1,5 @@
 'use client';
-import { Check, ExternalLink, Radio, RotateCcw } from 'lucide-react';
+import { Check, ExternalLink, Radio, RotateCcw, Shirt } from 'lucide-react';
 import type { SponsorReceipt as Receipt } from '@/lib/sponsorship';
 import {
   capAheadCopy,
@@ -10,6 +10,7 @@ import {
 } from '@/lib/sponsor-client';
 const labels = {
   payment: 'Confirming payment',
+  tailoring: 'Your tee and cap are being tailored',
   queued: 'You’re in the queue',
   preparing: 'Your moment is being prepared',
   'on-air': 'Your sponsorship is on air',
@@ -37,7 +38,7 @@ export function SponsorReceipt({
       ? 3
       : stage === 'on-air'
         ? 2
-        : stage === 'queued' || stage === 'preparing' || stage === 'paused'
+        : ['tailoring', 'queued', 'preparing', 'paused'].includes(stage)
           ? 1
           : 0;
   return (
@@ -50,6 +51,8 @@ export function SponsorReceipt({
           <Check size={24} />
         ) : stage === 'paused' ? (
           <RotateCcw size={22} />
+        ) : stage === 'tailoring' ? (
+          <Shirt size={22} />
         ) : (
           <Radio size={22} />
         )}
