@@ -31,6 +31,15 @@ import {
   until,
 } from './devnet.mjs';
 
+const SITE = process.env.SITE;
+const STUDIO_TOKEN = process.env.STUDIO_TOKEN;
+const RPC_URL = process.env.RPC_URL;
+const HOLD = process.argv.includes('--hold');
+const PRODUCT = process.env.PRODUCT || 'spotlight';
+if (!['spotlight', 'cap'].includes(PRODUCT))
+  throw Error(`PRODUCT must be spotlight or cap, not ${PRODUCT}.`);
+if (PRODUCT === 'cap' && !process.env.LOGO && !process.env.ASSET_ID && !HOLD)
+  throw Error('A cap needs LOGO (an image path) or ASSET_ID (a logo already uploaded).');
 // The stand-in studio offers what a real one would: a cap only when one is being bought, and
 // then with the wardrobe version the desk tailors on. The site refuses to quote a placement
 // the producer has not said it can deliver, and checks the logo against that version.
