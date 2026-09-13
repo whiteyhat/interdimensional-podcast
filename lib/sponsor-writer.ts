@@ -35,6 +35,8 @@ export type SponsorBrief = {
   tone: 'intro' | 'debate' | 'gentle-roast';
   wearingHost?: string;
   mention?: 'intro' | 'callback';
+  /** The look is the fallback cap print: the tee is plain, so the hosts must not name a printed tee. */
+  capOnly?: boolean;
 };
 
 type Spoken = Pick<Line, 'speaker' | 'text'>;
@@ -60,10 +62,23 @@ export function sponsorBrief(
       ? {
           ...(draft.target ? { wearingHost: cast[draft.target].name } : {}),
           mention: cue.stage,
+          ...(isCapOnly(order.assetMetadata) ? { capOnly: true } : {}),
         }
       : {}),
   };
 }
+/** The lease's look metadata says whether the desk fell back to the cap print. */
+function isCapOnly(metadata: SponsorLease['assetMetadata']) {
+  const look = metadata?.look;
+  return (
+    typeof look === 'object' &&
+    look !== null &&
+    typeof (look as { fallback?: unknown }).fallback === 'string'
+  );
+}
+/** What the wearer has on, in the hosts' words. */
+const garmentsOf = (brief: Pick<SponsorBrief, 'capOnly'>) =>
+  brief.capOnly ? 'cap' : 'tee and cap';
 
 // The character bible tells Pepe to relay the timeline and recall the year, and tells
 // GigaChad never to repeat anyone's claims. In a paid exchange both of those are wrong, so
@@ -162,9 +177,13 @@ function placementLine(brief: SponsorBrief) {
   if (brief.product !== 'cap')
     return `This is a paid spotlight for ${project}. ${stay}`;
   const wearer = brief.wearingHost ?? 'the host';
+  const garments = garmentsOf(brief);
+  const shows = brief.capOnly
+    ? 'shows the logo on his cap'
+    : 'shows the logo printed on his T-shirt and cap';
   return brief.mention === 'callback'
-    ? `This is the callback for ${project}'s tee and cap on ${wearer}: a natural second mention of the same sponsor, still disclosed in turn 1. ${stay}`
-    : `This is the introduction of ${project}'s tee and cap on ${wearer}; the first cut to ${wearer} shows the logo printed on his T-shirt and cap. ${stay}`;
+    ? `This is the callback for ${project}'s ${garments} on ${wearer}: a natural second mention of the same sponsor, still disclosed in turn 1. ${stay}`
+    : `This is the introduction of ${project}'s ${garments} on ${wearer}; the first cut to ${wearer} ${shows}. ${stay}`;
 }
 
 /** What each planned turn has to do, bound to the speaker the plan gives it. */
@@ -203,13 +222,12 @@ function obligations(
     const wearer = plan.findIndex(
       (turn) => cast[turn.speaker].name === brief.wearingHost,
     );
+    const garments = garmentsOf(brief);
     if (wearer >= 0 && wearer < duties.length)
-      duties[wearer].push(
-        `Mention the ${project} tee and cap you are wearing.`,
-      );
+      duties[wearer].push(`Mention the ${project} ${garments} you are wearing.`);
     else if (brief.wearingHost)
       duties[0].push(
-        `Mention the ${project} tee and cap ${brief.wearingHost} is wearing.`,
+        `Mention the ${project} ${garments} ${brief.wearingHost} is wearing.`,
       );
   }
   return duties.map((list) => list.join(' '));
@@ -239,6 +257,7 @@ export function sponsoredWriterRequest(
     tone: brief.tone,
     ...(brief.wearingHost ? { wearingHost: brief.wearingHost } : {}),
     ...(brief.mention ? { mention: brief.mention } : {}),
+    ...(brief.capOnly ? { capOnly: true } : {}),
   };
   const duties = obligations(brief, plan, budget);
   const turns = plan.map((turn, i) => {

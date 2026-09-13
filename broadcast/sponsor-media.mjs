@@ -1224,7 +1224,20 @@ export function createMediaService(options = {}) {
         signal: AbortSignal.timeout(cfg.falProbeMs),
       });
       await response.body?.cancel().catch(() => {});
-      machine.fal = true;
+      // fal answered. A 401 or 403 is a wrong or revoked key: a desk that cannot tailor must not
+      // offer to, so that counts as not ready and is probed again like a silent fal.
+      const keyRefused = response.status === 401 || response.status === 403;
+      machine.fal = !keyRefused;
+      if (keyRefused) {
+        log({
+          level: 'warn',
+          event: 'fal-probe',
+          attempt: checks.fal,
+          status: response.status,
+          error: 'fal refused the key',
+        });
+        again(checkFal, cfg.toolRetryMs);
+      }
     } catch (error) {
       machine.fal = false;
       log({
@@ -1972,7 +1985,30 @@ export function createMediaService(options = {}) {
       }
       if (!outcome) {
         if (signal.aborted) throw abandoned();
-        outcome = await fallbackLook(job, dir, logo, plan);
+        // The fallback print is for a logo the judge refused three times. A job that never
+        // reached a judge says nothing about the logo: the queue ate its time before the first
+        // fit, or fal delivered no candidate. The desk reports that as its own outcome and the
+        // site asks again four minutes on, instead of settling a paid order for the print.
+        const judged = job.fits.filter((fit) => fit.pixels).length;
+        if (judged > 0) outcome = await fallbackLook(job, dir, logo, plan);
+        else {
+          const last = job.fits.at(-1);
+          outcome = last
+            ? {
+                kind: 'error',
+                reason: `fal delivered no fit to judge: ${last.error || last.reason}`.slice(0, 300),
+              }
+            : { kind: 'deadline', reason: 'The tailor ran out of time before its first fit.' };
+          log({
+            level: 'warn',
+            event: 'tailor',
+            key: job.key.slice(0, 12),
+            stage: 'fits',
+            outcome: outcome.kind,
+            fits: job.fits.length,
+            error: outcome.reason,
+          });
+        }
       }
     } catch (error) {
       outcome = signal.aborted

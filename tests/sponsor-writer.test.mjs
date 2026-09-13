@@ -867,6 +867,26 @@ void test('the sponsor brief comes from the lease, and a message never carries a
     assetUrl: null,
     assetMetadata: null,
   });
+  // The desk's fallback print is a cap on a plain tee: the hosts must not announce a printed tee.
+  const capOnly = W.sponsorBrief(
+    {
+      ...lease({
+        product: 'cap',
+        name: 'Ana',
+        message: 'Elixir Games makes games.',
+        projectName: 'Elixir Games',
+        target: 'guest',
+        assetId: 'a',
+      }),
+      assetMetadata: { look: { fallback: 'cap-v1', sha256: 'x', model: 'cap-v1', fit: 0, round: 1 } },
+    },
+    { orderId: 'order-1', leaseToken: 'lease-1', stage: 'intro' },
+  );
+  assert.equal(capOnly.capOnly, true);
+  const capLines = W.sponsoredWriterRequest(capOnly, W.sponsorTurnPlan(undefined, capOnly)).split('\n');
+  assert.ok(capLines.some((line) => /Mention the Elixir Games cap (you are|GigaChad is) wearing\./.test(line)), capLines.join('\n'));
+  assert.ok(capLines.some((line) => /introduction of Elixir Games's cap on GigaChad; the first cut to GigaChad shows the logo on his cap\./.test(line)), capLines.join('\n'));
+  assert.ok(!capLines.some((line) => /tee and cap/.test(line)), 'a printed tee was promised on a cap-only look');
   const cue = (stage) => ({
     orderId: 'order-1',
     leaseToken: 'lease-1',

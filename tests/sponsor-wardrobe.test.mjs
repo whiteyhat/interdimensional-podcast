@@ -62,7 +62,7 @@ void test('the cap’s own exchange failing still pauses the order at once', asy
 // between two adjacent lines of his. The engine tells the program which shot failed; every
 // later line of that host, until the next cut to him, is left undressed, and the look
 // returns at that cut.
-void test('after a dressed take fails, the rest of that host’s run airs undressed and the look returns at the next cut', async () => {
+void test('told that a dressed take failed, the program keeps the rest of that host’s run undressed and returns the look at the next cut', async () => {
   const { p, paused } = program();
   await onAir(p);
   const free = p.decorate({ id: 10, speaker: 'host', text: 'free' }, 'guest');

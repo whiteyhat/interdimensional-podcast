@@ -827,6 +827,16 @@ void test('/health says whether this desk can tailor, and which look version it 
   assert.equal(unreachable.service.health().tailor, false, 'fal never answered');
   assert.ok(unreachable.logs.some((l) => l.event === 'fal-probe' && l.level === 'warn'));
   assert.ok(!JSON.stringify(unreachable.logs).includes('fal-test-key'), 'the key was logged');
+  // A wrong or revoked key is an answer from fal, and still no tailor: the cap stays off sale.
+  falPlan.head = 401;
+  try {
+    const refused = await desk(t, { python, siteOrigin: SITE, falKey: 'fal-test-key', falOriginForTests: FALQ });
+    assert.equal(refused.service.health().tailor, false, 'fal refused the key');
+    assert.ok(refused.logs.some((l) => l.event === 'fal-probe' && l.status === 401));
+    assert.ok(!JSON.stringify(refused.logs).includes('fal-test-key'), 'the key was logged');
+  } finally {
+    falPlan.head = 200;
+  }
 });
 
 void test('the base stills the tailor shows fal are the uncropped originals fal already holds', async () => {
@@ -2169,8 +2179,8 @@ void test('a logo the fallback cannot print is refused; a broken renderer is an 
 });
 
 void test('a job that runs out of time says deadline, starts no fit it cannot finish, and kills what it was running', async (t) => {
-  falPlan.hang = true;
-  const media = await tailorDesk(t, { previewDelayMs: 10_000 }, { tailorDeadlineMs: 1_200, tailorFitMs: 300, tailorTailMs: 100, tailorSubmitMs: 250, judgeMs: 50 });
+  // Every fit is judged and refused at once, so the fallback print starts with the deadline near.
+  const media = await tailorDesk(t, { judge: 'DRIFT,DRIFT,DRIFT', previewDelayMs: 10_000 }, { tailorDeadlineMs: 1_200, tailorFitMs: 300, tailorTailMs: 100, tailorSubmitMs: 250, judgeMs: 50 });
   const order = tailorOrder();
   const started = Date.now();
   assert.equal((await post(media, order, { path: '/tailor' })).status, 202);
@@ -2182,10 +2192,44 @@ void test('a job that runs out of time says deadline, starts no fit it cannot fi
   const preview = media.spawns.find((s) => s.mode === 'preview');
   assert.ok(preview, 'the fallback never started');
   assert.ok(await until(() => !alive(preview.pid)), 'the renderer outlived the job');
-  assert.equal(media.logs.find((l) => l.event === 'tailor').outcome, 'deadline');
-  falPlan.hang = false;
+  assert.equal(media.logs.find((l) => l.event === 'tailor' && l.stage !== 'fits').outcome, 'deadline');
   // No scratch left behind.
   assert.ok(await until(async () => !(await readdir(media.workdir)).some((n) => n.startsWith('job-') && !n.startsWith('job-probe-'))));
+});
+
+// The fallback print is for a logo the judge refused. A job the queue starved, or that fal never
+// answered, has not judged the logo at all: it reports its own outcome, keeps the asset at
+// `logo`, and the site asks again; a paid order is never settled for the print by an outage.
+void test('a job starved by the queue says deadline before its first fit, and never falls back', { skip: needsRuntime }, async (t) => {
+  const media = await tailorDesk(t, {}, { tailorDeadlineMs: 300, tailorFitMs: 300, tailorTailMs: 100 });
+  const order = tailorOrder();
+  const before = submissions.length;
+  assert.equal((await post(media, order, { path: '/tailor' })).status, 202);
+  assert.ok(await landed(order.assetId));
+  const look = looks.find((l) => l.id === order.assetId);
+  assert.equal(look.headers['x-look-outcome'], 'deadline');
+  assert.match(look.headers['x-look-reason'], /before its first fit/);
+  assert.equal(submissions.slice(before).filter((s) => s.endpoint === 'fal-ai/nano-banana-pro/edit').length, 0, 'a fit was started with no time to finish it');
+  assert.ok(!media.spawns.some((s) => s.mode === 'preview'), 'the fallback print was made for a logo nobody judged');
+});
+
+void test('fal failing every fit is an error the site asks about again, not the fallback', { skip: needsRuntime }, async (t) => {
+  falPlan.fail = true;
+  try {
+    const media = await tailorDesk(t);
+    const order = tailorOrder();
+    const before = submissions.length;
+    assert.equal((await post(media, order, { path: '/tailor' })).status, 202);
+    assert.ok(await landed(order.assetId));
+    const look = looks.find((l) => l.id === order.assetId);
+    assert.equal(look.headers['x-look-outcome'], 'error');
+    assert.match(look.headers['x-look-reason'], /no fit to judge/);
+    assert.equal(submissions.slice(before).filter((s) => s.endpoint === 'fal-ai/nano-banana-pro/edit').length, 3, 'every fit was tried');
+    assert.ok(!media.spawns.some((s) => s.mode === 'preview'), 'the fallback print was made for a logo nobody judged');
+    assert.ok(media.logs.some((l) => l.event === 'tailor' && l.stage === 'fits' && l.outcome === 'error'));
+  } finally {
+    falPlan.fail = false;
+  }
 });
 
 void test('a drain cuts a running tailor with a shutdown callback, hands a queued one back at once, and waits for the callbacks', async (t) => {
