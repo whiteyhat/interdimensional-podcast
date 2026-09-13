@@ -9,7 +9,9 @@
 // PROJECT and STYLE (intro, debate or gentle-roast). A cap takes PROJECT, TARGET (host or
 // guest) and LOGO, a PNG, JPG or WebP path the site has the desk normalise before anything is
 // quoted; the tee and cap are tailored after payment. ASSET_ID reuses a logo already uploaded.
-// MESSAGE overrides the buyer's text for any of them.
+// MESSAGE overrides the buyer's text for any of them. REPLACE_LOGO, a second image path, is
+// "Use a different logo" after payment: the paid cap order is pointed at the new logo and the
+// script waits for the replacement look.
 //
 // --hold sends the studio heartbeat every twenty seconds and nothing else, so a person can
 // buy from a real browser wallet on the devnet site without running the whole show.
@@ -282,6 +284,38 @@ if (PRODUCT === 'cap' && paid) {
       ? `${look.status}${look.fallback ? ` (${look.fallback} fallback)` : ''} after ${Math.round((Date.now() - started) / 1000)} s — ${look.url ?? look.reason ?? ''}`
       : 'no look after 7.5 minutes',
   );
+  // ---- "Use a different logo": the paid order keeps its place, only its logo changes. The new
+  // logo goes through the same desk check, then tailoring starts again from that logo.
+  if (process.env.REPLACE_LOGO && look) {
+    const replacement = await uploadLogo(process.env.REPLACE_LOGO);
+    const swapped = await api({
+      action: 'replaceLogo',
+      orderId: drafted.body.receipt.id,
+      token,
+      assetId: replacement,
+    });
+    check(
+      'the paid order takes a different logo',
+      swapped.status === 200 && swapped.body.receipt?.draft?.assetId === replacement,
+      `${swapped.status} ${JSON.stringify(swapped.body.receipt?.look ?? swapped.body.error ?? swapped.body)}`,
+    );
+    const again = Date.now();
+    const relook = await until(
+      async () => {
+        const r = await api({ action: 'confirm', token });
+        const l = r.body.receipt?.look;
+        return l && l.status !== 'tailoring' ? l : null;
+      },
+      { tries: 90, everyMs: 5000 },
+    );
+    check(
+      'the replacement look is tailored',
+      relook?.status === 'ready' && !relook.fallback,
+      relook
+        ? `${relook.status}${relook.fallback ? ` (${relook.fallback} fallback)` : ''} after ${Math.round((Date.now() - again) / 1000)} s — ${relook.url ?? relook.reason ?? ''}`
+        : 'no look after 7.5 minutes',
+    );
+  }
 }
 
 // ---- what must keep failing
