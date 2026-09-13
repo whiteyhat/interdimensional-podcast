@@ -2,9 +2,10 @@
 #
 # npm test skips the wearable runtime checks on a stock runner, because OpenCV and FFmpeg are
 # not there, and until now no pipeline built the image Railway runs. This does both. The first
-# job runs the renderer and media tests against the exact OpenCV and NumPy the image pins. The
-# second builds the image for the architecture Railway runs, from the same files
-# `node scripts/media.mjs deploy` uploads, and makes the calls the site makes.
+# job runs the renderer, the tailor scripts and the media tests against the exact OpenCV and
+# NumPy the image pins. The second builds the image for the architecture Railway runs, from the
+# same files `node scripts/media.mjs deploy` uploads, and makes the calls the site makes:
+# `/health` and `/logo`.
 #
 # A branch is checked through its pull request and main through its push, so nothing runs twice.
 
@@ -22,12 +23,12 @@ on:
       - 'scripts/media.mjs'
       - 'scripts/railway.mjs'
       - 'public/wearables/**'
-      - 'lib/sponsor-media.ts'
+      - 'scripts/wardrobe.py'
       - 'lib/sponsor-assets.ts'
       - 'tests/sponsor-media.test.mjs'
-      - 'tests/sponsor-render.test.mjs'
       - 'tests/sponsor-assets.test.mjs'
       - 'tests/wearable-render.test.py'
+      - 'tests/wardrobe.test.py'
       - '.github/workflows/media.yml'
   pull_request:
     paths:
@@ -39,12 +40,12 @@ on:
       - 'scripts/media.mjs'
       - 'scripts/railway.mjs'
       - 'public/wearables/**'
-      - 'lib/sponsor-media.ts'
+      - 'scripts/wardrobe.py'
       - 'lib/sponsor-assets.ts'
       - 'tests/sponsor-media.test.mjs'
-      - 'tests/sponsor-render.test.mjs'
       - 'tests/sponsor-assets.test.mjs'
       - 'tests/wearable-render.test.py'
+      - 'tests/wardrobe.test.py'
       - '.github/workflows/media.yml'
   workflow_dispatch:
 
@@ -87,12 +88,15 @@ jobs:
             echo "::error::Could not read both pins from broadcast/Dockerfile.sponsor-media."
             exit 1
           fi
-          python -m pip install --no-cache-dir $PINS
+          python -m pip install --no-cache-dir $PINS pytest
 
       - run: npm ci
 
       - name: Renderer
         run: python tests/wearable-render.test.py
+
+      - name: Tailor scripts
+        run: python -m pytest -q tests/wardrobe.test.py
 
       # The media tests skip themselves when the vision runtime is missing, which is right on a
       # laptop and wrong here: a skip in this job would mean it checked nothing.
@@ -100,7 +104,7 @@ jobs:
         shell: bash
         run: |
           WEARABLE_PYTHON="$(which python)" node --test --test-reporter=tap \
-            tests/sponsor-media.test.mjs tests/sponsor-render.test.mjs tests/sponsor-assets.test.mjs \
+            tests/sponsor-media.test.mjs tests/sponsor-assets.test.mjs \
             | tee media-tests.tap
           if ! grep -qx '# skipped 0' media-tests.tap; then
             echo "::error::Media tests skipped: the vision runtime here is not the one the image ships."
@@ -145,53 +149,61 @@ jobs:
           cache-to: type=gha,mode=max,scope=sponsor-media
 
       # The service is given what Railway gives it (scripts/media.mjs mediaVariables), with a
-      # throwaway token, then asked the three things the site depends on.
+      # throwaway token, then asked the two things the site depends on: /health and /logo.
       - name: Smoke-test the container
         shell: bash
+        env:
+          FAL_KEY: ${{ secrets.FAL_KEY }}
         run: |
           TOKEN=$(openssl rand -hex 24)
           echo "::add-mask::$TOKEN"
           docker run -d --name media -p 4017:4017 \
             -e SPONSOR_MEDIA_TOKEN="$TOKEN" \
             -e SPONSOR_SITE_ORIGIN=https://interdimensional-podcast-staging.leonardo-chekup.workers.dev \
+            -e FAL_KEY="$FAL_KEY" \
             -e MEDIA_CONCURRENCY=2 -e MEDIA_QUEUE=6 \
             -e PORT=4017 -e SPONSOR_MEDIA_PORT=4017 \
             sponsor-media:ci
 
+          # Ready on the tailored wardrobe; and able to tailor when there is a key to try with.
           for i in $(seq 1 60); do
             CODE=$(curl -s -o health.json -w '%{http_code}' http://127.0.0.1:4017/health || true)
-            if [ "$CODE" = 200 ] && node -e "process.exit(require('./health.json').capQualified === true ? 0 : 1)" 2>/dev/null; then
+            if [ "$CODE" = 200 ] && node -e "
+              const h = require('./health.json');
+              const ok = h.ready === true && h.templateVersion === 'looks-v1' && (!process.env.FAL_KEY || h.tailor === true);
+              process.exit(ok ? 0 : 1);
+            " 2>/dev/null; then
               echo "health: $(cat health.json)"
               break
             fi
             if [ "$i" = 60 ]; then
-              echo "::error::/health never answered 200 with capQualified true (last answer: $CODE)."
+              echo "::error::/health never answered 200 with ready on looks-v1 (last answer: $CODE)."
               cat health.json 2>/dev/null || true
               exit 1
             fi
             sleep 2
           done
 
-          PREVIEW='http://127.0.0.1:4017/preview?kind=cap&target=host'
+          LOGO='http://127.0.0.1:4017/logo?target=host'
           CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: image/png' \
-            --data-binary @public/logo.png "$PREVIEW")
+            --data-binary @public/logo.png "$LOGO")
           if [ "$CODE" != 401 ]; then
-            echo "::error::/preview without the token answered $CODE, not 401."
+            echo "::error::/logo without the token answered $CODE, not 401."
             exit 1
           fi
 
-          CODE=$(curl -s -o preview.json -w '%{http_code}' -X POST -H 'content-type: image/png' \
-            -H "authorization: Bearer $TOKEN" --data-binary @public/logo.png "$PREVIEW")
+          CODE=$(curl -s -o logo.json -w '%{http_code}' -X POST -H 'content-type: image/png' \
+            -H "authorization: Bearer $TOKEN" --data-binary @public/logo.png "$LOGO")
           if [ "$CODE" != 200 ]; then
-            echo "::error::/preview with the token answered $CODE, not 200."
-            head -c 500 preview.json || true
+            echo "::error::/logo with the token answered $CODE, not 200."
+            head -c 500 logo.json || true
             exit 1
           fi
           node -e "
-            const p = require('./preview.json');
-            const ok = p.templateId === 'pepe-cap-v1' && /^[a-f0-9]{64}$/.test(p.sha256) &&
-              p.qualificationVersion === 'caps-v1' && p.preview?.length > 100 && p.logo?.length > 100;
-            console.log(JSON.stringify({ ...p, preview: p.preview?.length, logo: p.logo?.length }));
+            const p = require('./logo.json');
+            const ok = /^[a-f0-9]{64}$/.test(p.logoSha256) && p.logo?.length > 100 &&
+              p.width > 0 && p.height > 0 && typeof p.palette?.primary === 'string';
+            console.log(JSON.stringify({ ...p, logo: p.logo?.length }));
             process.exit(ok ? 0 : 1);
           "
 
