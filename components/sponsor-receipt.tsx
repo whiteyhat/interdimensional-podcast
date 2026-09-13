@@ -2,6 +2,7 @@
 import { Check, ExternalLink, Radio, RotateCcw } from 'lucide-react';
 import type { SponsorReceipt as Receipt } from '@/lib/sponsorship';
 import {
+  capAheadCopy,
   deliveryProgress,
   dollars,
   productCopy,
@@ -76,6 +77,13 @@ export function SponsorReceipt({
         <p className="sponsor-queue-position">
           Queue position <strong>{receipt.queuePosition}</strong> · We’ll update
           this as the show moves.
+        </p>
+      ) : null}
+      {/* Caps for one host go on one at a time: a paid cap can be next in the queue and
+          still be waiting for an earlier cap on the same host. Say so. */}
+      {receipt.status === 'paid' && receipt.capAhead ? (
+        <p className="sponsor-cap-ahead">
+          {capAheadCopy(receipt.capAhead, receipt.draft.target)}
         </p>
       ) : null}
       {receipt.draft.product === 'cap' && (

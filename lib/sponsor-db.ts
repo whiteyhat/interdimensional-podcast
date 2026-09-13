@@ -196,21 +196,33 @@ export async function createOrder(
     )
     .run();
 }
-// Released only by verified chain expiry or an atomic fulfillment transition.
-// A frontend quote timer is not evidence that a transfer cannot still arrive.
-const capObligation = `(c.product='cap' AND ((c.paid_attempt_id IS NOT NULL AND c.status IN ('paid','leased','prepared','playing','paused')) OR (c.paid_attempt_id IS NULL AND EXISTS(SELECT 1 FROM sponsor_payment_attempts a WHERE a.order_id=c.id AND a.status IN ('issued','submitted')))))`;
-export async function capInventory(
+// A cap purchase is always welcome. Caps for one host go on one at a time, in the order they
+// were paid (`leaseOrders`), so a new one simply waits its turn. This is what it waits
+// behind: every paid cap for that host that has not finished, a paused one included, since a
+// pause is only a retry cooldown and the cap resumes ahead of anything paid after it. Unpaid
+// quotes are not counted: the buyer never sees them, and most of them never settle.
+const capPending = `c.product='cap' AND c.paid_attempt_id IS NOT NULL AND c.status IN ('paid','leased','prepared','playing','paused')`;
+export async function capQueue(
   d: D1Database,
-): Promise<{ host: boolean; guest: boolean }> {
+): Promise<{ host: number; guest: number }> {
   const rows = await d
     .prepare(
-      `SELECT DISTINCT c.target FROM sponsor_orders c WHERE ${capObligation}`,
+      `SELECT c.target, COUNT(*) AS n FROM sponsor_orders c WHERE ${capPending} GROUP BY c.target`,
     )
-    .all<{ target: string }>();
-  return {
-    host: !rows.results.some((r) => r.target === 'host'),
-    guest: !rows.results.some((r) => r.target === 'guest'),
-  };
+    .all<{ target: string; n: number }>();
+  const count = (target: string) =>
+    rows.results.find((r) => r.target === target)?.n ?? 0;
+  return { host: count('host'), guest: count('guest') };
+}
+/** How many unfinished caps on the same host were paid before this one, so go on before it. */
+export async function capAhead(d: D1Database, o: OrderRow): Promise<number> {
+  const row = await d
+    .prepare(
+      `SELECT COUNT(*) AS n FROM sponsor_orders c WHERE ${capPending} AND c.target=? AND (c.paid_at<? OR (c.paid_at=? AND c.id<?))`,
+    )
+    .bind(o.target, o.paid_at, o.paid_at, o.id)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
 }
 export async function insertAttempt(
   d: D1Database,
@@ -235,7 +247,7 @@ export async function insertAttempt(
   await d.batch([
     d
       .prepare(
-        `INSERT INTO sponsor_payment_attempts(id,order_id,pay_token,asset,mint,decimals,amount_base,price_usd,price_cents,recipient,reference,issued_at,expires_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM sponsor_orders o WHERE o.id=? AND o.paid_attempt_id IS NULL AND o.status IN ('draft','payment-pending') AND (o.product!='cap' OR NOT EXISTS(SELECT 1 FROM sponsor_orders c WHERE c.id!=o.id AND c.target=o.target AND ${capObligation}))) AND (? IS NULL OR EXISTS(SELECT 1 FROM sponsor_locks WHERE id='quotes' AND token=? AND until_at>?))`,
+        `INSERT INTO sponsor_payment_attempts(id,order_id,pay_token,asset,mint,decimals,amount_base,price_usd,price_cents,recipient,reference,issued_at,expires_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM sponsor_orders o WHERE o.id=? AND o.paid_attempt_id IS NULL AND o.status IN ('draft','payment-pending')) AND (? IS NULL OR EXISTS(SELECT 1 FROM sponsor_locks WHERE id='quotes' AND token=? AND until_at>?))`,
       )
       .bind(
         v.id,
@@ -262,23 +274,11 @@ export async function insertAttempt(
       )
       .bind(v.issued_at, v.order_id, v.id),
   ]);
-  if (!(await getAttempt(d, v.id))) {
-    const order = await getOrder(d, v.order_id);
-    if (
-      order?.product === 'cap' &&
-      (order.target === 'host' || order.target === 'guest') &&
-      !(await capInventory(d))[order.target]
-    )
-      throw new SponsorError(
-        409,
-        'This host’s cap is already reserved. Choose the other host or come back after this placement.',
-        'INVENTORY',
-      );
+  if (!(await getAttempt(d, v.id)))
     throw new SponsorError(
       409,
       'This order can no longer accept a new payment.',
     );
-  }
 }
 export async function settlePayment(
   d: D1Database,

@@ -21,10 +21,12 @@ import {
   type SponsorReceipt as Receipt,
 } from '@/lib/sponsorship';
 import {
+  capQueueLabel,
   catalogPriceCents,
   checkoutKey,
   dollars,
   emptyDraft,
+  hostName,
   productCopy,
   readCheckout,
 } from '@/lib/sponsor-client';
@@ -267,14 +269,8 @@ export function SponsorPanel() {
   const fullPrice = catalogPriceCents(catalog, draft.product, 'USDC');
   const product = catalog?.products.find((p) => p.id === draft.product);
   const assetState = catalog?.assets.find((a) => a.id === asset);
-  const hostReserved =
-    draft.product === 'cap' &&
-    catalog?.capInventory?.[draft.target || 'host'] === false;
-  const unavailableReason = hostReserved
-    ? 'This host’s cap is reserved. Choose the other host, or keep your draft for later.'
-    : product?.reason || assetState?.reason;
-  const available =
-    !!product?.available && !!assetState?.available && !hostReserved;
+  const unavailableReason = product?.reason || assetState?.reason;
+  const available = !!product?.available && !!assetState?.available;
   function change(patch: Partial<SponsorDraft>) {
     if (locked) return;
     if (patch.product || patch.target) {
@@ -571,14 +567,10 @@ export function SponsorPanel() {
                           checked={draft.target === target}
                           onChange={() => change({ target })}
                         />
-                        {target === 'host' ? 'Pepe' : 'GigaChad'}
-                        <span>
-                          {catalog?.capInventory?.[target] === false
-                            ? 'Reserved'
-                            : target === 'host'
-                              ? 'Still holding.'
-                              : 'Never sold.'}
-                        </span>
+                        {hostName(target)}
+                        {/* A cap is always for sale. Caps for one host go on one at a time,
+                            so the line says how many paid caps go on before this one. */}
+                        <span>{capQueueLabel(catalog?.capQueue[target])}</span>
                       </label>
                     ))}
                   </fieldset>

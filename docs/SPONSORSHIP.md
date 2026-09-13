@@ -22,7 +22,7 @@ Use distinct D1, R2, RPC and signer configuration for staging. Set the build-tim
 
 `SPONSOR_USDC_MINT` is for a staging test mint only. SOL/FROGCLENCH quotes use actual Jupiter prices; an unpriced devnet token correctly stays unavailable. Rehearse its missing-price state on devnet and use the deterministic injected-chain integration suite for its priced, exact-amount settlement cases. On devnet, `SPONSOR_FLAT_PRICE_CENTS` and `SPONSOR_SOL_USD` price every placement at a flat amount in pinned SOL, refused unless the RPC is devnet or local. Do not silently substitute a fixed price on a production deployment. A fully live test-token pricing fixture remains part of staging setup if all three assets must transact on devnet.
 
-The producer discovers media readiness and advertises compatible products. Director mode does not advertise sponsorship delivery and cannot sell this catalog. Cap sales require a qualified media worker, R2 storage, a live clip producer, payment readiness, and a free reservation for the selected host. There is one purchased or pending reservation per host. Existing attempts remain recoverable while inventory is full; a late discovered payment remains a recorded obligation and queues behind a newer reservation. Only one cap can air per host at a time.
+The producer discovers media readiness and advertises compatible products. Director mode does not advertise sponsorship delivery and cannot sell this catalog. Cap sales require a qualified media worker, R2 storage, a live clip producer and payment readiness. A cap is always for sale: nothing about a host is ever reserved. Caps for one host air one at a time, in the order they were paid, so a second cap for the same host is accepted and waits its turn, and a paused cap (in its retry cooldown) does not hold the next one back. The catalog carries `capQueue`, the number of paid, unfinished caps per host a new buyer would wait behind (unpaid quotes are not counted, the buyer never sees them), and a paid cap's receipt says how many caps on its host go on before it. A late discovered payment remains a recorded obligation and joins the same line.
 
 Legacy requests and sponsorships share one atomic producer lease in the existing `meta.studio_id` row. Either queue renews its 60-second ownership window; each keeps a separate readiness heartbeat, so legacy polling cannot keep unavailable sponsorship products on sale. Both APIs normalize studio names identically. Keep `STUDIO_ID` distinct between the hosted producer and any local producer.
 
@@ -129,7 +129,7 @@ Keep `SPONSOR_ENABLED=false` until the staging rehearsal below has passed. In th
 
 - Connected wallet and physical mobile QR handoff; rejection, insufficient token balance/SOL fees, slow confirmation, reload and duplicate submission.
 - Exact amounts/discounts for all three assets, actual treasury accounts, missing prices, late payments and concurrent reconciliation.
-- Message and four-turn spotlight playback, project cards, both cap inventory reservations, ten-minute completion, six appearances and both spoken mentions.
+- Message and four-turn spotlight playback, project cards, two caps bought for the same host airing one after the other, ten-minute completion, six appearances and both spoken mentions.
 - Producer restart, stale heartbeat, stalled/decode-failed media, interrupted cap placement and rescheduling.
 - Desktop/mobile, 320px reflow, keyboard checkout, reduced motion and long content on the deployed origin.
 

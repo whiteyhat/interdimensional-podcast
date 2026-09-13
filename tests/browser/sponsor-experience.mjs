@@ -40,6 +40,7 @@ const catalog = () => ({
   })),
   studioOnline: online,
   capabilities: { message: true, spotlight: true, cap: false },
+  capQueue: { host: 0, guest: 0 },
   treasury: '11111111111111111111111111111111',
   clientRpcUrl: '/api/rpc',
   now: Date.now(),

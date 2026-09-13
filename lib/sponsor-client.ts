@@ -6,6 +6,7 @@ import type {
   SponsorFulfillment,
   SponsorProduct,
   SponsorReceipt,
+  SponsorTarget,
 } from './sponsorship';
 
 export const checkoutKey = 'pepe-chad:sponsorship:v1';
@@ -105,6 +106,29 @@ export function catalogPriceCents(
   const listed = catalog?.products.find((p) => p.id === product);
   if (!listed) return sponsorPriceCents(product, asset);
   return asset === 'FROGCLENCH' ? listed.frogPriceCents : listed.priceCents;
+}
+export const hostName = (target: SponsorTarget | undefined) =>
+  target === 'guest' ? 'GigaChad' : 'Pepe';
+/**
+ * The line under each host in the cap chooser. Nothing about a host is ever reserved or
+ * disabled: caps for one host go on one at a time, so the only thing a buyer needs to know
+ * is how many paid caps go on before theirs.
+ */
+export function capQueueLabel(ahead: number | undefined): string {
+  if (ahead === undefined) return 'Checking the line…';
+  if (ahead === 0) return 'Available now';
+  if (ahead === 1) return '1 ahead · yours starts after it';
+  return `${ahead} ahead · yours starts after them`;
+}
+/** The receipt's one honest line while a paid cap waits behind earlier caps on its host. */
+export function capAheadCopy(
+  ahead: number,
+  target: SponsorTarget | undefined,
+): string {
+  const host = hostName(target);
+  return ahead === 1
+    ? `Another cap is ahead of yours on ${host}. Yours starts the moment it finishes.`
+    : `${ahead} caps are ahead of yours on ${host}. Yours starts the moment they finish.`;
 }
 export const dollars = (cents: number) =>
   new Intl.NumberFormat('en-US', {

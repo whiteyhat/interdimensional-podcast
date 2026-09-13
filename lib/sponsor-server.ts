@@ -268,7 +268,7 @@ export async function sponsorCatalog(
     live = await producer(d, now);
   const enabled = v.SPONSOR_ENABLED === 'true';
   const { flatCents } = devnetPricing(v);
-  const capInventory = await db.capInventory(d);
+  const capQueue = await db.capQueue(d);
   const assets = await Promise.all(
     (['FROGCLENCH', 'USDC', 'SOL'] as const).map(async (id) => {
       try {
@@ -308,7 +308,6 @@ export async function sponsorCatalog(
         enabled &&
         live.studioOnline &&
         live.capabilities[p.id] &&
-        (p.id !== 'cap' || capInventory.host || capInventory.guest) &&
         assets.some((a) => a.available),
       reason: !enabled
         ? 'Sponsorship checkout is not enabled.'
@@ -316,14 +315,12 @@ export async function sponsorCatalog(
           ? 'The studio is offline.'
           : !live.capabilities[p.id]
             ? 'The studio cannot deliver this placement right now.'
-            : p.id === 'cap' && !capInventory.host && !capInventory.guest
-              ? 'Both hosts’ caps are reserved. New places open after delivery.'
-              : !assets.some((a) => a.available)
-                ? 'Payment services are unavailable.'
-                : null,
+            : !assets.some((a) => a.available)
+              ? 'Payment services are unavailable.'
+              : null,
     })),
     assets,
-    capInventory,
+    capQueue,
     ...live,
     treasury: validWallet(v.TREASURY_WALLET) ? v.TREASURY_WALLET! : null,
     clientRpcUrl: `${new URL(request.url).origin}/api/rpc`,
@@ -384,6 +381,11 @@ export async function sponsorReceipt(
           .first<{ n: number }>()
       )?.n ?? null)
     : null;
+  // The overall queue position cannot tell a cap buyer the one thing they want to know:
+  // caps for one host go on one at a time (`leaseOrders`), so a paid cap may be waiting
+  // for an earlier cap on the same host even when it is next in the queue otherwise.
+  const capAhead =
+    o.product === 'cap' && o.status === 'paid' ? await db.capAhead(d, o) : null;
   return {
     id: o.id,
     token,
@@ -403,6 +405,7 @@ export async function sponsorReceipt(
     canReschedule: o.status === 'paused',
     assetUrl: asset?.url ?? null,
     queuePosition,
+    capAhead,
   };
 }
 async function authenticateReceipt(d: D1Database, raw: unknown) {

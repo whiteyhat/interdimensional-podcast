@@ -975,3 +975,91 @@ void test('a devnet deployment prices every placement flat and pins SOL', async 
     f.restore();
   }
 });
+void test('the catalog keeps caps on sale while caps are queued and counts what a buyer waits behind', async () => {
+  const f = await fixture();
+  try {
+    await db.heartbeat(
+      f.DB,
+      'studio',
+      { message: true, spotlight: true, cap: true },
+      Date.now(),
+    );
+    const cap = async (id, target) => {
+      await db.createOrder(f.DB, {
+        id,
+        tokenHash: id,
+        draft: { product: 'cap', target, name: 'Joe', projectName: 'GM' },
+        now: 100,
+      });
+      await db.insertAttempt(f.DB, {
+        id: `${id}-a`,
+        order_id: id,
+        pay_token: id,
+        asset: 'SOL',
+        mint: null,
+        decimals: 9,
+        amount_base: '1000000000',
+        price_usd: '100',
+        price_cents: 10000,
+        recipient: 'treasury',
+        reference: id,
+        issued_at: 100,
+        expires_at: 200,
+      });
+    };
+    const paid = async (id, target, at) => {
+      await cap(id, target);
+      await db.settlePayment(
+        f.DB,
+        `${id}-a`,
+        { signature: `sig-${id}`, payer: 'payer', blockTime: 150 },
+        at,
+      );
+    };
+    await paid('cap1', 'host', 300);
+    await paid('cap2', 'host', 310);
+    // A guest quote nobody has paid: the buyer never sees it, so it is not in the line.
+    await cap('cap3', 'guest');
+    const catalog = await (
+      await server.handleSponsorship(
+        new Request('https://show.test/api/sponsorship?action=catalog'),
+        f.v,
+      )
+    ).json();
+    assert.deepEqual(catalog.capQueue, { host: 2, guest: 0 });
+    assert.equal(
+      catalog.capInventory,
+      undefined,
+      'nothing is reserved any more',
+    );
+    const product = catalog.products.find((p) => p.id === 'cap');
+    assert.equal(product.available, true, JSON.stringify(product));
+    assert.equal(product.reason, null);
+    const site = { origin: 'https://show.test', cluster: 'devnet' };
+    const first = await server.sponsorReceipt(
+      f.DB,
+      await db.getOrder(f.DB, 'cap1'),
+      't1',
+      site,
+    );
+    const second = await server.sponsorReceipt(
+      f.DB,
+      await db.getOrder(f.DB, 'cap2'),
+      't2',
+      site,
+    );
+    assert.equal(first.capAhead, 0);
+    assert.equal(
+      second.capAhead,
+      1,
+      'the second cap on a host is told it waits for the first',
+    );
+    assert.equal(
+      second.queuePosition,
+      2,
+      'the overall queue position is unchanged',
+    );
+  } finally {
+    f.restore();
+  }
+});

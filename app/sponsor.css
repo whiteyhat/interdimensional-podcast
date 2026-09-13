@@ -1230,7 +1230,8 @@ aside.sponsor-rail {
   color: #e0ac84;
   font-size: 12px;
 }
-.sponsor-queue-position {
+.sponsor-queue-position,
+.sponsor-cap-ahead {
   font-size: 12px;
   color: #bdc7ae;
 }

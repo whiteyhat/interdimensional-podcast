@@ -75,98 +75,174 @@ async function fixture() {
   });
   return d;
 }
-void test('cap inventory reserves one host through ambiguous payments and preserves late obligations', async () => {
+const capDraft = (target) => ({
+  product: 'cap',
+  target,
+  name: 'Joe',
+  projectName: 'GM',
+  message: 'Builders ship',
+  assetId: 'art',
+});
+const capAttempt = (d, id, order) =>
+  db.insertAttempt(d, {
+    id,
+    order_id: order,
+    pay_token: id,
+    asset: 'SOL',
+    mint: null,
+    decimals: 9,
+    amount_base: '1000000000',
+    price_usd: '100',
+    price_cents: 10000,
+    recipient: 'treasury',
+    reference: id,
+    issued_at: 100,
+    expires_at: 200,
+  });
+/** A cap order for one host, paid at the given moment. */
+async function paidCap(d, id, target, at) {
+  await db.createOrder(d, {
+    id,
+    tokenHash: id,
+    draft: capDraft(target),
+    now: 100,
+  });
+  await capAttempt(d, `${id}-a`, id);
+  await db.settlePayment(
+    d,
+    `${id}-a`,
+    { signature: `sig-${id}`, payer: 'payer', blockTime: 150 },
+    at,
+  );
+}
+void test('a cap is always for sale: a second cap for the same host is quoted and queued, never refused', async () => {
   const d = await fixture();
-  const create = async (id, target) => {
+  for (const [id, target] of [
+    ['cap1', 'host'],
+    ['cap2', 'host'],
+    ['cap3', 'guest'],
+  ])
     await db.createOrder(d, {
       id,
       tokenHash: id,
-      draft: {
-        product: 'cap',
-        target,
-        name: 'Joe',
-        projectName: 'GM',
-        message: 'Builders ship',
-        assetId: 'art',
-      },
+      draft: capDraft(target),
       now: 100,
     });
-  };
-  const attempt = async (id, order) =>
-    db.insertAttempt(d, {
-      id,
-      order_id: order,
-      pay_token: id,
-      asset: 'SOL',
-      mint: null,
-      decimals: 9,
-      amount_base: '1000000000',
-      price_usd: '100',
-      price_cents: 10000,
-      recipient: 'treasury',
-      reference: id,
-      issued_at: 100,
-      expires_at: 200,
-    });
-  await create('cap1', 'host');
-  await create('cap2', 'host');
-  await create('cap3', 'guest');
-  await attempt('cap-a1', 'cap1');
-  await attempt('cap-a3', 'cap3');
-  await assert.rejects(attempt('cap-a2', 'cap2'), /reserved/i);
-  assert.deepEqual(await db.capInventory(d), { host: false, guest: false });
-  assert.equal(
-    (await db.getOrder(d, 'cap2')).status,
-    'draft',
-    'a rejected reservation does not change the order',
+  await capAttempt(d, 'cap-a1', 'cap1');
+  await capAttempt(d, 'cap-a3', 'cap3');
+  // Pepe already has a cap being paid for. That is no reason to turn the next buyer away.
+  await capAttempt(d, 'cap-a2', 'cap2');
+  assert.equal((await db.getOrder(d, 'cap2')).status, 'payment-pending');
+  assert.deepEqual(
+    await db.capQueue(d),
+    { host: 0, guest: 0 },
+    'unpaid quotes are invisible to the buyer, so they are not in the line',
   );
-  d.sql
-    .prepare(
-      "UPDATE sponsor_payment_attempts SET status='submitted' WHERE id='cap-a1'",
-    )
-    .run();
-  await assert.rejects(attempt('cap-a2', 'cap2'), /reserved/i);
-  d.sql
-    .prepare(
-      "UPDATE sponsor_payment_attempts SET status='expired' WHERE id='cap-a1'",
-    )
-    .run();
-  assert.equal(
-    (await db.capInventory(d)).host,
-    true,
-    'only reconciled expiry releases the hold',
-  );
-  await attempt('cap-a2', 'cap2');
   await db.settlePayment(
     d,
     'cap-a1',
-    { signature: 'late-cap-payment', payer: 'payer', blockTime: 150 },
+    { signature: 'sig-cap1', payer: 'payer', blockTime: 150 },
+    300,
+  );
+  await db.settlePayment(
+    d,
+    'cap-a2',
+    { signature: 'sig-cap2', payer: 'payer', blockTime: 160 },
+    310,
+  );
+  assert.deepEqual(await db.capQueue(d), { host: 2, guest: 0 });
+  assert.equal(
+    await db.capAhead(d, await db.getOrder(d, 'cap1')),
+    0,
+    'the first paid cap goes on first',
+  );
+  assert.equal(
+    await db.capAhead(d, await db.getOrder(d, 'cap2')),
+    1,
+    'the second waits behind it',
+  );
+  // An expired guest quote never counts, and its late payment still joins the line.
+  d.sql
+    .prepare(
+      "UPDATE sponsor_payment_attempts SET status='expired' WHERE id='cap-a3'",
+    )
+    .run();
+  assert.equal((await db.capQueue(d)).guest, 0);
+  await db.settlePayment(
+    d,
+    'cap-a3',
+    { signature: 'late-cap-payment', payer: 'payer', blockTime: 170 },
     1000,
   );
   assert.equal(
-    (await db.getOrder(d, 'cap1')).status,
+    (await db.getOrder(d, 'cap3')).status,
     'paid',
     'late evidence is preserved for queued delivery',
   );
-  assert.equal((await db.capInventory(d)).host, false);
+  assert.equal((await db.capQueue(d)).guest, 1);
+  // A paused cap is still in the line: it resumes ahead of anything paid after it.
   d.sql
-    .prepare(
-      "UPDATE sponsor_payment_attempts SET status='expired' WHERE id='cap-a2'",
-    )
+    .prepare("UPDATE sponsor_orders SET status='paused' WHERE id='cap1'")
     .run();
-  assert.equal(
-    (await db.capInventory(d)).host,
-    false,
-    'a paid cap keeps its host until it is delivered; nothing refunds it away',
-  );
+  assert.equal((await db.capQueue(d)).host, 2);
+  assert.equal(await db.capAhead(d, await db.getOrder(d, 'cap2')), 1);
   d.sql
     .prepare("UPDATE sponsor_orders SET status='fulfilled' WHERE id='cap1'")
     .run();
+  assert.equal((await db.capQueue(d)).host, 1, 'delivery shortens the line');
   assert.equal(
-    (await db.capInventory(d)).host,
-    true,
-    'delivery releases the host for the next buyer',
+    await db.capAhead(d, await db.getOrder(d, 'cap2')),
+    0,
+    'nothing goes on before the second cap now',
   );
+  // The other guards on a quote are untouched: a paid order takes no new quote.
+  await assert.rejects(capAttempt(d, 'cap-a2b', 'cap2'), /no longer accept/);
+});
+void test('caps for one host go on one at a time, and a paused cap never holds the next one back', async () => {
+  const d = await fixture();
+  await paidCap(d, 'cap1', 'host', 300);
+  await paidCap(d, 'cap2', 'host', 310);
+  await paidCap(d, 'cap3', 'guest', 320);
+  const caps = { message: false, spotlight: false, cap: true };
+  const first = await db.leaseOrders(d, 'studio', 400, 3, caps);
+  assert.deepEqual(
+    first.map((o) => o.id),
+    ['cap1', 'cap3'],
+    'the earliest paid cap per host is leased; the second Pepe cap waits',
+  );
+  const base = (o) => ({
+    orderId: o.id,
+    studioId: 'studio',
+    leaseToken: o.lease_token,
+  });
+  await db.applyEvent(
+    d,
+    { ...base(first[0]), eventId: 'p1', type: 'prepare' },
+    410,
+  );
+  await db.applyEvent(
+    d,
+    { ...base(first[0]), eventId: 's1', type: 'start' },
+    420,
+  );
+  assert.deepEqual(
+    (await db.leaseOrders(d, 'studio', 430, 3, caps)).map((o) => o.id),
+    ['cap1', 'cap3'],
+    'while the first cap is playing the second is not leased',
+  );
+  assert.equal((await db.getOrder(d, 'cap2')).status, 'paid');
+  await db.applyEvent(
+    d,
+    { ...base(first[0]), eventId: 'x1', type: 'paused' },
+    500,
+  );
+  assert.equal((await db.getOrder(d, 'cap1')).status, 'paused');
+  const next = await db.leaseOrders(d, 'studio', 510, 3, caps);
+  assert.ok(
+    next.some((o) => o.id === 'cap2'),
+    'a paused cap is in a retry cooldown, not on air: the next cap for that host goes on',
+  );
+  assert.equal((await db.getOrder(d, 'cap2')).status, 'leased');
 });
 void test('settlement is exactly once and a late second payment is recorded separately', async () => {
   const d = await fixture();

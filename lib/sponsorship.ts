@@ -66,6 +66,8 @@ export type SponsorReceipt = {
   canReschedule: boolean;
   assetUrl: string | null;
   queuePosition?: number | null;
+  /** For a paid cap still waiting: how many earlier caps on the same host go on before it. */
+  capAhead?: number | null;
 };
 export type SponsorLease = {
   id: string;
@@ -100,7 +102,8 @@ export type SponsorCatalog = {
     priceUsd: string | null;
   }[];
   studioOnline: boolean;
-  capInventory?: { host: boolean; guest: boolean };
+  /** Paid caps each host still has to wear before a new one: what a buyer would wait behind. */
+  capQueue: { host: number; guest: number };
   capabilities: SponsorCapabilities;
   treasury: string | null;
   clientRpcUrl: string;
