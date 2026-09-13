@@ -1041,3 +1041,157 @@ void test('the catalog keeps caps on sale while caps are queued and counts what 
     f.restore();
   }
 });
+
+// ---- looks. One sponsor_assets row per (logo, character); the order gate and the air gate.
+const ASSET = 'a'.repeat(64);
+const LOOK_SHA = 'b'.repeat(64);
+const logoUrl = `https://show.test/api/sponsorship/assets/${ASSET}?part=logo`;
+const lookUrl = `https://show.test/api/sponsorship/assets/${ASSET}?part=look&v=${LOOK_SHA}`;
+const PALETTE = {
+  clusters: [{ hex: '#112233', share: 1 }],
+  primary: '#112233',
+  secondary: '#112233',
+  accent: '#112233',
+  monochrome: false,
+};
+const capMeta = (extra = {}) => ({
+  kind: 'cap',
+  target: 'host',
+  templateVersion: 'looks-v1',
+  logoSha256: 'c'.repeat(64),
+  logoUrl,
+  palette: PALETTE,
+  ...extra,
+});
+const qualifiedMeta = () =>
+  capMeta({
+    sourceUrl: lookUrl,
+    sha256: LOOK_SHA,
+    look: { sha256: LOOK_SHA, model: 'm', fit: 1, round: 1, verdict: {} },
+    tailor: { round: 1, requestedAt: 100, outcome: 'look', at: 200 },
+  });
+function insertAsset(f, status, meta, id = ASSET) {
+  f.DB.sql
+    .prepare(
+      'INSERT OR REPLACE INTO sponsor_assets(id,status,url,mime,created_at,metadata) VALUES(?,?,?,?,?,?)',
+    )
+    .run(
+      id,
+      status,
+      status === 'qualified' ? lookUrl : logoUrl,
+      'image/png',
+      100,
+      JSON.stringify(meta),
+    );
+}
+const CAP_DRAFT = {
+  product: 'cap',
+  target: 'host',
+  name: 'Joe',
+  projectName: 'Canvas',
+  message: 'Builders ship',
+  assetId: ASSET,
+};
+const CAPS = {
+  message: true,
+  spotlight: true,
+  cap: true,
+  capTemplateVersion: 'looks-v1',
+};
+
+void test('the order gate takes a logo that is tailoring or done, and refuses one the tailor gave up on', async () => {
+  const f = await fixture();
+  try {
+    await db.heartbeat(f.DB, 'studio', CAPS, Date.now());
+    insertAsset(f, 'logo', capMeta());
+    const tailoring = await post(f.v, { action: 'draft', draft: CAP_DRAFT });
+    assert.equal(tailoring.status, 200, JSON.stringify(await tailoring.clone().json()));
+    insertAsset(f, 'qualified', qualifiedMeta());
+    assert.equal((await post(f.v, { action: 'draft', draft: CAP_DRAFT })).status, 200);
+    insertAsset(f, 'refused', capMeta({ reason: 'Too thin to print.' }));
+    const refused = await post(f.v, { action: 'draft', draft: CAP_DRAFT });
+    assert.equal(refused.status, 409);
+    const body = await refused.json();
+    assert.equal(body.code, 'ASSET');
+    assert.match(body.error, /Too thin to print/);
+    assert.match(body.error, /Use a different logo/);
+    // The wrong host, or a logo from an older wardrobe, is not this order's.
+    insertAsset(f, 'logo', capMeta({ target: 'guest' }));
+    assert.equal((await post(f.v, { action: 'draft', draft: CAP_DRAFT })).status, 409);
+    insertAsset(f, 'logo', capMeta({ templateVersion: 'caps-v1' }));
+    assert.equal((await post(f.v, { action: 'draft', draft: CAP_DRAFT })).status, 409);
+    // A studio still heartbeating the old wardrobe cannot be quoted a cap; the new one can.
+    insertAsset(f, 'logo', capMeta());
+    const { receipt } = await (
+      await post(f.v, { action: 'draft', draft: CAP_DRAFT })
+    ).json();
+    await db.heartbeat(f.DB, 'studio', { ...CAPS, capTemplateVersion: 'caps-v1' }, Date.now());
+    const old = await post(f.v, { action: 'quote', token: receipt.token, asset: 'SOL' });
+    assert.equal(old.status, 409);
+    assert.equal((await old.json()).code, 'ASSET');
+    await db.heartbeat(f.DB, 'studio', CAPS, Date.now());
+    const quoted = await post(f.v, { action: 'quote', token: receipt.token, asset: 'SOL' });
+    assert.equal(quoted.status, 200, JSON.stringify(await quoted.clone().json()));
+  } finally {
+    f.restore();
+  }
+});
+
+/** A paid cap order leased to the heartbeating studio by hand, whatever its asset says; then the studio asks for its context. */
+async function leasedCapContext(f, status, meta) {
+  const now = Date.now();
+  await db.heartbeat(f.DB, 'studio', CAPS, now);
+  insertAsset(f, status, meta);
+  await db.createOrder(f.DB, { id: 'cap-order', tokenHash: 'cap-order', draft: CAP_DRAFT, now });
+  f.DB.sql
+    .prepare(
+      "UPDATE sponsor_orders SET status='leased',paid_attempt_id='paid',paid_at=?,lease_owner='studio',lease_token='lease',lease_until=? WHERE id='cap-order'",
+    )
+    .run(now, now + 45000);
+  return post(
+    f.v,
+    { action: 'context', orderId: 'cap-order', leaseToken: 'lease' },
+    { 'x-studio-id': 'studio', 'x-studio-token': f.v.STUDIO_TOKEN },
+  );
+}
+// Moved from tests/sponsor-render.test.mjs, where a take was refused 409 ASSET when the design
+// was not what the lease promised. The air gate makes the same refusal before any clip is made.
+void test('the air gate refuses a cap whose look is not in place, even when the order is leased by hand', async (t) => {
+  const without = (key) => {
+    const m = qualifiedMeta();
+    delete m[key];
+    return m;
+  };
+  for (const [name, status, meta] of [
+    ['still tailoring', 'logo', capMeta({ tailor: { round: 1, requestedAt: 100 } })],
+    ['refused by the tailor', 'refused', capMeta({ reason: 'Too thin.' })],
+    ['qualified without a wardrobe version', 'qualified', without('templateVersion')],
+    ['qualified but the look and the source disagree', 'qualified', { ...qualifiedMeta(), sha256: 'f'.repeat(64) }],
+    ['qualified without a source image', 'qualified', without('sourceUrl')],
+  ]) {
+    await t.test(name, async () => {
+      const f = await fixture();
+      try {
+        const r = await leasedCapContext(f, status, meta);
+        assert.equal(r.status, 409);
+        assert.equal((await r.json()).code, 'ASSET');
+      } finally {
+        f.restore();
+      }
+    });
+  }
+  await t.test('a finished look is handed to the studio with what the route pins', async () => {
+    const f = await fixture();
+    try {
+      const r = await leasedCapContext(f, 'qualified', qualifiedMeta());
+      assert.equal(r.status, 200, JSON.stringify(await r.clone().json()));
+      const { order } = await r.json();
+      assert.equal(order.assetUrl, lookUrl);
+      assert.equal(order.assetMetadata.sourceUrl, lookUrl);
+      assert.equal(order.assetMetadata.sha256, LOOK_SHA);
+      assert.equal(order.assetMetadata.templateVersion, 'looks-v1');
+    } finally {
+      f.restore();
+    }
+  });
+});

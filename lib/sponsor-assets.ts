@@ -1,15 +1,14 @@
-import type { SponsorVars } from './sponsor-server';
-import { sponsorDatabase, sponsorFailure } from './sponsor-server';
+import {
+  sponsorDatabase,
+  sponsorFailure,
+  sponsorMediaConfig,
+  type SponsorMediaVars,
+} from './sponsor-server';
+export { sponsorMediaConfig, type SponsorMediaVars } from './sponsor-server';
 import { SponsorError } from './sponsorship';
 import { allowSponsorRequest } from './sponsor-db';
 import { perMinuteCounter } from './throttle';
 const tooMany = perMinuteCounter();
-export type SponsorMediaVars = SponsorVars & {
-  SPONSOR_ASSETS?: R2Bucket;
-  SPONSOR_MEDIA_URL?: string;
-  SPONSOR_MEDIA_TOKEN?: string;
-  SITE_URL?: string;
-};
 const MAX_UPLOAD = 4 * 1024 * 1024;
 const json = (body: unknown, status = 200) =>
   Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
@@ -24,44 +23,6 @@ function decode(base64: string) {
   if (base64.length > 12 * 1024 * 1024)
     throw new SponsorError(502, 'Artwork response is too large.');
   return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-}
-/**
- * Where the media service lives and the secret its /preview and /render calls carry. Those
- * two are all this side needs: the logo now travels inside each render request, so nothing
- * here depends on the service being able to reach this site.
- */
-export function sponsorMediaConfig(v: SponsorMediaVars) {
-  let url: URL | undefined;
-  try {
-    url = v.SPONSOR_MEDIA_URL ? new URL(v.SPONSOR_MEDIA_URL) : undefined;
-  } catch {
-    throw new SponsorError(
-      503,
-      'The wardrobe service URL is invalid.',
-      'MEDIA',
-    );
-  }
-  if (!url || !v.SPONSOR_MEDIA_TOKEN || v.SPONSOR_MEDIA_TOKEN.length < 24)
-    throw new SponsorError(
-      503,
-      'The wardrobe desk is not connected yet.',
-      'MEDIA',
-    );
-  if (
-    url.username ||
-    url.password ||
-    (url.protocol !== 'https:' &&
-      !(
-        url.protocol === 'http:' &&
-        ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
-      ))
-  )
-    throw new SponsorError(
-      503,
-      'The wardrobe service URL is invalid.',
-      'MEDIA',
-    );
-  return { url, token: v.SPONSOR_MEDIA_TOKEN };
 }
 type MediaHealth = {
   ready: boolean;

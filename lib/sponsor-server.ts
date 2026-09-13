@@ -2,6 +2,7 @@ import { clusterOf, explorerTx, type Cluster } from './cluster';
 import { interactLimits, readStudioId } from './interact';
 import {
   SponsorError,
+  LOOK_VERSION,
   sponsorOffers,
   sponsorProducts,
   sponsorLimits,
@@ -10,6 +11,7 @@ import {
   amountBaseForCents,
   amountUi,
   validateSponsorDraft,
+  type LookAssetMetadata,
   type SponsorAsset,
   type SponsorCatalog,
   type SponsorCapabilities,
@@ -48,6 +50,50 @@ export type SponsorVars = {
   SPONSOR_FLAT_PRICE_CENTS?: string;
   SPONSOR_SOL_USD?: string;
 };
+/** The site's media-side bindings: the asset bucket, and where the wardrobe desk is and its secret. */
+export type SponsorMediaVars = SponsorVars & {
+  SPONSOR_ASSETS?: R2Bucket;
+  SPONSOR_MEDIA_URL?: string;
+  SPONSOR_MEDIA_TOKEN?: string;
+  SITE_URL?: string;
+};
+/**
+ * Where the media desk lives and the secret its /logo and /tailor calls carry, and that its
+ * look callbacks must present. Those are all this side needs.
+ */
+export function sponsorMediaConfig(v: SponsorMediaVars) {
+  let url: URL | undefined;
+  try {
+    url = v.SPONSOR_MEDIA_URL ? new URL(v.SPONSOR_MEDIA_URL) : undefined;
+  } catch {
+    throw new SponsorError(
+      503,
+      'The wardrobe service URL is invalid.',
+      'MEDIA',
+    );
+  }
+  if (!url || !v.SPONSOR_MEDIA_TOKEN || v.SPONSOR_MEDIA_TOKEN.length < 24)
+    throw new SponsorError(
+      503,
+      'The wardrobe desk is not connected yet.',
+      'MEDIA',
+    );
+  if (
+    url.username ||
+    url.password ||
+    (url.protocol !== 'https:' &&
+      !(
+        url.protocol === 'http:' &&
+        ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
+      ))
+  )
+    throw new SponsorError(
+      503,
+      'The wardrobe service URL is invalid.',
+      'MEDIA',
+    );
+  return { url, token: v.SPONSOR_MEDIA_TOKEN };
+}
 const response = (
   body: unknown,
   status = 200,
@@ -162,20 +208,22 @@ async function producer(d: D1Database, now: number) {
     capabilities: capabilities(row ? JSON.parse(row.capabilities) : null),
   };
 }
+/**
+ * The asset an order names, checked for the stage it is at. `order` (draft, quote,
+ * replaceLogo): the logo is this host's, on the current wardrobe, and the tailor has not
+ * given up on it. `air` (context, pull, reschedule): the look is in place, so the studio
+ * gets a `sourceUrl`, `sha256` and `templateVersion` the route can pin every dressed shot to.
+ */
 export async function qualifiedSponsorAsset(
   d: D1Database,
   draft: ReturnType<typeof validateSponsorDraft>,
   caps?: SponsorCapabilities,
+  stage: 'order' | 'air' = 'order',
 ) {
   if (!draft.assetId) return null;
   const asset = await db.getAsset(d, draft.assetId);
-  if (!asset || asset.status !== 'qualified' || asset.mime !== 'image/png')
-    throw new SponsorError(
-      409,
-      'This artwork is not qualified for broadcast.',
-      'ASSET',
-    );
-  let meta: Record<string, unknown>;
+  if (!asset) throw new SponsorError(409, 'Add your logo first.', 'ASSET');
+  let meta: Omit<Partial<LookAssetMetadata>, 'kind'> & { kind?: string };
   try {
     meta = JSON.parse(asset.metadata);
   } catch {
@@ -185,27 +233,45 @@ export async function qualifiedSponsorAsset(
       'ASSET',
     );
   }
+  if (draft.product === 'spotlight') {
+    if (meta.kind !== 'logo' || asset.status !== 'qualified')
+      throw new SponsorError(
+        409,
+        'Choose a project logo for the spotlight.',
+        'ASSET',
+      );
+    return asset;
+  }
+  if (draft.product !== 'cap') return asset;
+  if (asset.status === 'refused')
+    throw new SponsorError(
+      409,
+      `This logo could not be dressed${meta.reason ? ` (${meta.reason})` : ''}. Use a different logo.`,
+      'ASSET',
+    );
   if (
-    draft.product === 'cap' &&
-    (meta.kind !== 'cap' ||
-      meta.target !== draft.target ||
-      !meta.qualificationVersion ||
-      !meta.templateVersion ||
-      (caps && meta.templateVersion !== caps.capTemplateVersion))
+    meta.kind !== 'cap' ||
+    meta.target !== draft.target ||
+    meta.templateVersion !== LOOK_VERSION ||
+    (caps && meta.templateVersion !== caps.capTemplateVersion) ||
+    !['logo', 'qualified'].includes(asset.status)
   )
     throw new SponsorError(
       409,
-      'This cap is not qualified for the current studio template.',
+      'This logo is not ready for this host on the current wardrobe.',
       'ASSET',
     );
-  if (draft.product === 'spotlight' && meta.kind !== 'logo')
-    throw new SponsorError(
-      409,
-      'Choose a project logo for the spotlight.',
-      'ASSET',
-    );
+  if (
+    stage === 'air' &&
+    (asset.status !== 'qualified' ||
+      typeof meta.sourceUrl !== 'string' ||
+      !meta.look?.sha256 ||
+      meta.look.sha256 !== meta.sha256)
+  )
+    throw new SponsorError(409, 'This look is still being tailored.', 'ASSET');
   return asset;
 }
+
 function mintFor(v: SponsorVars, asset: SponsorAsset) {
   return asset === 'SOL'
     ? null
@@ -652,7 +718,7 @@ async function quote(
         'The studio cannot deliver this placement right now.',
         'OFFAIR',
       );
-    await qualifiedSponsorAsset(d, JSON.parse(o.draft), live.capabilities);
+    await qualifiedSponsorAsset(d, JSON.parse(o.draft), live.capabilities, 'order');
     const state = await assetState(d, v, asset, now),
       cents = sponsorPriceCents(o.product, asset, devnetPricing(v).flatCents),
       amount = amountBaseForCents(cents, state.priceUsd, state.decimals);
@@ -812,7 +878,7 @@ export async function sponsorContext(
       'CAPABILITY',
     );
   const draft = JSON.parse(o.draft);
-  const asset = await qualifiedSponsorAsset(d, draft, caps);
+  const asset = await qualifiedSponsorAsset(d, draft, caps, 'air');
   return {
     id: o.id,
     draft,
@@ -1008,9 +1074,7 @@ export async function handleSponsorship(
         const orders: SponsorLease[] = await Promise.all(
           rows.map(async (o) => {
             const draft = JSON.parse(o.draft),
-              asset = draft.assetId
-                ? await db.getAsset(d, draft.assetId)
-                : null;
+              asset = await qualifiedSponsorAsset(d, draft, currentCaps, 'air');
             return {
               id: o.id,
               draft,
@@ -1060,7 +1124,7 @@ export async function handleSponsorship(
       );
     if (action === 'draft') {
       const draft = validateSponsorDraft(body.draft);
-      await qualifiedSponsorAsset(d, draft);
+      await qualifiedSponsorAsset(d, draft, undefined, 'order');
       const token = secretToken(),
         id = crypto.randomUUID();
       await db.createOrder(d, {
@@ -1117,6 +1181,7 @@ export async function handleSponsorship(
         d,
         JSON.parse(order.draft),
         live.capabilities,
+        'air',
       );
       await db.reschedule(d, order.id, Date.now());
     } else throw new SponsorError(400, 'Unknown action.');
