@@ -54,6 +54,8 @@ type Placement = SponsorDelivery & {
   retired?: boolean;
 };
 /** The program owns delivery decisions. Only playback callbacks can advance its counters. */
+/** Dressed free lines a cap may lose in a row before its order is paused for a new lease. */
+export const WARDROBE_STRIKES = 3;
 export class SponsorProgram {
   private orders = new Map<string, Placement>();
   private lastPaidAt = -Infinity;
@@ -67,6 +69,8 @@ export class SponsorProgram {
     string,
     { order: Placement; eventId: string }
   >();
+  /** Dressed free lines that failed in a row, per cap order; a played appearance clears it. */
+  private strikes = new Map<string, number>();
   constructor(
     private service: SponsorServices,
     private changed: () => void = () => {},
@@ -400,6 +404,7 @@ export class SponsorProgram {
             ...(stage ? { stage } : {}),
           });
           this.played.add(eventId);
+          if (line.wardrobe?.orderId === id) this.strikes.delete(id);
           if (stage) order.pending = undefined;
           const f = order.fulfillment;
           if (
@@ -428,6 +433,21 @@ export class SponsorProgram {
   }
   /** Pause relinquishes delivery; a new lease resumes the unfinished work where it stopped. */
   failedRender(line: Line, error: unknown) {
+    // A dressed line is free dialogue the cap happened to be on. One such line failing, for a
+    // bad take or a refused composite, costs the cap that appearance and nothing more: the
+    // engine airs the line undressed and dresses the next one. On devnet a single free line
+    // with a figure in it failed its speech check four times and paused a paying cap. Only a
+    // run of failures says the cap itself cannot be delivered, and that is what the pause and
+    // its cooldown are for.
+    if (line.wardrobe && !line.sponsorship) {
+      const id = line.wardrobe.orderId;
+      const strikes = (this.strikes.get(id) ?? 0) + 1;
+      if (strikes < WARDROBE_STRIKES) {
+        this.strikes.set(id, strikes);
+        return Promise.resolve();
+      }
+      this.strikes.delete(id);
+    }
     this.queuePauses(this.references(line).values(), line.id, error);
     return this.enqueue(() => this.drainPauses());
   }
