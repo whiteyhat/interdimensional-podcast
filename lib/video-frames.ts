@@ -4,22 +4,26 @@ export const videoFrames = {
     image: '/pepe-video.png',
     poster: '/pepe-video.avif',
     source:
-      'https://v3b.fal.media/files/b/0aa9a903/QCxe-llC5mNr7pB3T3HsK_pepe-video.png',
+      'https://v3b.fal.media/files/b/0aaa4f98/NC0myfkiCbWsCEXUHdLID_pepe-video.png',
     width: 1344,
     height: 768,
     original: 'public/pepe-cartoon.png',
+    originalUrl:
+      'https://v3b.fal.media/files/b/0aaa4f2b/ly3epfk-xwL5t4R4G5kRa_nStAZqTf.png',
     originalSha256:
-      'a0a82631870c4ae63d3f1091e1cd4c9342950bbbc7ac23d0f25b1528fae80e99',
+      '283e3b30ee09b12b77334ef63113b5716c14f59a0eb90c2d7601aa86e036e08e',
   },
   guest: {
     image: '/gigachad-video.png',
     poster: '/gigachad-video.avif',
     source:
-      'https://v3b.fal.media/files/b/0aa9a8eb/l-pQ87NUGdsXuCoOUFdQS_gigachad-video.png',
+      'https://v3b.fal.media/files/b/0aaa4f98/35khQhGSkwgEy0P-4I7dE_gigachad-video.png',
     width: 1344,
     height: 768,
     original: 'public/gigachad-cartoon.png',
+    originalUrl:
+      'https://v3b.fal.media/files/b/0aaa4f8b/G_PoG-TKbm7CHZNrVm3aV_UMRlpkQ3.png',
     originalSha256:
-      'dd9ed2c82268750bf66d142a15fab301a7ddeffa7d2e01b5b86c860e3c1a0521',
+      'ca7ae80bad925a13a1c13d1de43cf1f74aa09895a28f94e0a6602ea00564e16d',
   },
 } as const;
