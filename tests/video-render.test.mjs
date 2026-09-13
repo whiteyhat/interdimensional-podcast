@@ -75,27 +75,47 @@ void test('each host carries the fal URL of its uncropped original, the still th
   assert.match(generator, /\boriginalUrl\b/);
 });
 
-void test('a pinned cap keeps its canonical reference and defers obstructing gestures', () => {
-  const sourceUrl = 'https://show.test/wearables/pepe-cap.png';
-  const input = show.shotInput({
+// A dressed line is conditioned, at both ends, on the look: the host already wearing the tee
+// with the logo printed on the chest and the cap in the brand's colours. The prompt keeps that
+// print visible and invents nothing on it; a gesture would put a hand or a mug over the chest,
+// so it is dropped on a dressed line and the shot is timed as plain speech.
+void test('a dressed line conditions both frames on the look, keeps the print in shot and drops the gesture', () => {
+  const sourceUrl =
+    'https://show.test/api/sponsorship/assets/asset1?part=look&v=look1';
+  const line = {
     id: 0,
-    speaker: 'host',
+    speaker: 'guest',
     text: 'Of course.',
     gesture: 'tea',
     wardrobe: {
       orderId: 'order',
       leaseToken: 'lease',
-      target: 'host',
-      assetId: 'design',
-      designHash: 'hash',
+      target: 'guest',
+      assetId: 'asset1',
+      designHash: 'look1',
       sourceUrl,
-      templateVersion: 'caps-v1',
+      templateVersion: 'looks-v1',
     },
-  });
-  assert.equal(input.image_url, sourceUrl);
-  assert.equal(input.end_image_url, sourceUrl);
-  assert.match(input.prompt, /cap front unobstructed and blank/);
-  assert.doesNotMatch(input.prompt, /takes a sip|lifts the mug/);
+  };
+  const input = show.shotInput(line);
+  assert.equal(input.image_url, sourceUrl, 'the look is the start frame');
+  assert.equal(input.end_image_url, sourceUrl, 'and the end frame');
+  assert.ok(
+    input.prompt.endsWith(
+      ' Keep the cap and the printed T-shirt exactly as in the reference: no new lettering, logos or accessories. Hands stay below the chest so the print stays visible. Headphones keep their exact placement; the camera stays fixed.',
+    ),
+    input.prompt.slice(-320),
+  );
+  assert.doesNotMatch(input.prompt, /blank cap|cap front unobstructed|cap scale/);
+  const plain = show.shotInput({ ...line, gesture: undefined });
+  assert.equal(input.prompt, plain.prompt, 'the gesture is dropped on a dressed line');
+  assert.equal(input.duration, plain.duration, 'and the shot is timed as plain speech');
+  assert.match(
+    show.shotInput({ ...line, wardrobe: undefined }).prompt,
+    /unhurried sip/,
+    'the same line undressed would have performed the gesture',
+  );
+  assert.doesNotMatch(input.prompt, /unhurried sip/);
 });
 
 void test('uncertain cap tracking retries a bounded number of takes and never downloads the failed result', async (t) => {

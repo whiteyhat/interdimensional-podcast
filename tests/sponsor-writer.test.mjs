@@ -606,6 +606,24 @@ void test('a cap callback needs its sponsor named once; a cap introduction needs
   );
 });
 
+// The system prompt tells the writer what a wardrobe placement is. Both garments are named,
+// so an introduction can say what the wearer has on without inventing it.
+void test('the sponsorship rules describe a wardrobe introduction as a tee and a cap', () => {
+  assert.match(
+    S.sponsorshipRules,
+    /A wardrobe introduction names its sponsor and the host wearing its tee and cap; a callback names the same sponsor again naturally\./,
+  );
+  assert.doesNotMatch(S.sponsorshipRules, /A cap introduction/);
+  assert.ok(
+    W.sponsoredWriterSystem().includes(S.sponsorshipRules),
+    'the sponsored system prompt carries the same rules',
+  );
+  assert.ok(
+    S.writerSystemFor().includes(S.sponsorshipRules),
+    'and so does the free writer, which must refuse an unverified one',
+  );
+});
+
 void test('an exchange that is not four spoken turns fails', () => {
   assert.match(
     W.checkSponsoredDialogue(grounded.slice(0, 3), elixir).join(' '),
