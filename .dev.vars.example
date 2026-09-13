@@ -15,6 +15,9 @@ COIN_MINT=
 COIN_NAME=Frogclench
 COIN_TICKER=FROGCLENCH
 # Operator-side only: scripts/launch.mjs uses Pinata for image and metadata uploads.
+# The launch CLI authenticates with PINATA_JWT. Keep all three credentials private.
+PINATA_API_KEY=
+PINATA_API_SECRET=
 PINATA_JWT=
 # Wallet that receives every five-dollar payment. It must already hold a token account
 # for the coin (buy a dust amount once) or quotes answer 409 TREASURY.
@@ -25,29 +28,20 @@ SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
 # to every visitor; a provider URL with an api-key in it publishes that key. Empty means the
 # browser is handed this deployment's own /api/rpc, which reaches SOLANA_RPC_URL server-side.
 # A URL carrying a query string, credentials or a path is refused and logged rather than served.
-CLIENT_RPC_URL=
 # Shared secret between the studio and the deployed site for pull/aired. Required in
 # production; locally, token-less pulls are allowed only from localhost.
 STUDIO_TOKEN=
-# Studio only: the deployed site, e.g. https://pepe-chad.example.workers.dev. When set, the
+# Studio only: the production site. When set, the
 # local worker proxies pull/aired there with STUDIO_TOKEN instead of using its own database.
-INTERACT_ORIGIN=
+INTERACT_ORIGIN=https://frogclench.fun
 # Dollars one request costs.
 INTERACT_USD=5
 # Cloudflare Stream Live iframe URL for the public site; empty shows the watch buttons.
 STREAM_EMBED_URL=
 # Link to the X live broadcast.
 X_LIVE_URL=
-# Devnet only: tokens per dollar. Bypasses the Jupiter and pump.fun price feeds.
-PRICE_FIXED=
-
-# ---- Rehearsal. Before the coin exists there is no chart for the hosts to react to, so the
-# chart lane can borrow one. Studio only: never set this on the public site.
-# An address follows that coin; "auto" follows whichever live pump.fun coin is trading
-# hardest right now, re-picked at most every twenty minutes. Empty follows COIN_MINT.
-# This never touches the payment path, which reads COIN_MINT and only COIN_MINT, and the
-# public site refuses to display a borrowed chart even if this is set.
-CHART_MINT=
+# Keep PRICE_FIXED and CHART_MINT absent for production. The devnet and borrowed-chart
+# settings in docs/LAUNCH.md belong only to a rehearsal configuration.
 
 # ---- The hosted broadcast box (scripts/air.mjs). Optional: the Mac and OBS still work.
 # What THIS machine's studio calls itself. The site lets one studio hold the air at a time and
@@ -67,12 +61,12 @@ RAILWAY_ENVIRONMENT_ID=
 RAILWAY_SERVICE_ID=
 # A live input to broadcast to instead of the show's own. A rehearsal input has no simulcast
 # destinations, so nothing said into it can reach X or pump.fun. Empty uses CF_LIVE_INPUT_ID.
-AIR_RTMP_INPUT=
+# AIR_RTMP_INPUT=<rehearsal-input-only; remove after rehearsal>
 # Railway service name, if the project has more than one.
 AIR_SERVICE=
 # The box turns itself off after this many minutes, whatever happens. Generation is the
 # expensive part of a forgotten broadcast, not the hosting.
-AIR_MAX_MINUTES=1440
+AIR_MAX_MINUTES=45
 # Encode height, frame rate and bitrate. Drop to 720 if the box runs short of CPU.
 AIR_HEIGHT=1080
 AIR_FPS=30

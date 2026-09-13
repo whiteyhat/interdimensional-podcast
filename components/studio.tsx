@@ -26,6 +26,7 @@ import {
   type Snapshot,
 } from '@/lib/engine';
 import { createServices } from '@/lib/services';
+import { videoFrames } from '@/lib/video-frames';
 import { Player } from '@/components/player';
 import { Ticker } from '@/components/ticker';
 import { CoinCard } from '@/components/coin-card';
@@ -279,7 +280,7 @@ export function Studio() {
     <main className={broadcast ? 'podcast broadcast-mode' : 'podcast'}>
       <header>
         <Link className="brand" href="/studio">
-          <img className="brand-mark" src="/logo.png" alt="" />
+          <img className="brand-mark" src="/logo.avif" alt="" />
           {show.name.toUpperCase()}
           <span className="edition">{show.edition}</span>
         </Link>
@@ -320,7 +321,7 @@ export function Studio() {
         <section className="broadcast">
           <div className="stage" ref={stage}>
             <img
-              src={cast.host.image}
+              src={videoFrames.host.poster}
               alt={`${cast.host.name} at his podcast microphone`}
             />
             <Player
@@ -334,7 +335,7 @@ export function Studio() {
             />
             {!state.current && (
               <div className="opening">
-                <img className="opening-mark" src="/logo.png" alt={show.name} />
+                <img className="opening-mark" src="/logo.avif" alt={show.name} />
                 <p className="eyebrow">OPEN MIC / NO FINAL EPISODE</p>
                 <h1>{show.headline}</h1>
                 <p>

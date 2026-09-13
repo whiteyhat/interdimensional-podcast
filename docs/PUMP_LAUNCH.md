@@ -40,6 +40,12 @@ incomplete input. Name and ticker start as Frogclench / FROGCLENCH; confirm them
 - `cashback`, `mayhemMode`, `tokenizedAgent`, `frontRunningProtection`: false in this version.
 
 Put `SOLANA_RPC_URL` and `PINATA_JWT` in your local `.dev.vars` or process environment.
+Store the accompanying Pinata key and secret as `PINATA_API_KEY` and `PINATA_API_SECRET`
+in the same private file. The upload command uses the JWT; none of these Pinata credentials
+belongs in the browser or deployed Worker. Configure `JUPITER_API_KEY` locally and as a
+production Worker secret for sponsorship pricing. A working price API key does not make an
+unlaunched coin payable: the real mint, treasury token account and a fresh market price are
+still required. New checkouts select $FROGCLENCH; customers can choose SOL or USDC explicitly.
 Use an authenticated HTTPS RPC with the needed read, simulation, and send methods. Keep it
 server-side. The local signing page uses the same configured RPC through `/api/rpc`.
 Never put creator private keys or seed phrases in any launch configuration or JSON artifact.
@@ -61,7 +67,7 @@ npm run launch -- report --prelaunch --out public/launch/report.json
 npm run launch -- check-site --prelaunch
 ```
 
-The public `/allocations` page and coin-card link show common project ownership, intended
+The public `/launch/report.json` snapshot records common project ownership, intended
 allocations, and the declared sale policy. Before minting, observed balances are unknown.
 Only the sanitized `public/launch/report.json` is allowlisted for publication. Private state,
 configuration, mint keys, and signed artifacts stay under ignored `work/`.
@@ -145,9 +151,9 @@ node tests/browser/launch-serve.mjs
 ```
 
 The launch tests use real SDK instruction construction and simulated RPC responses; they
-do not spend SOL. Open `http://127.0.0.1:3315/tests/browser/launch-report.html` and
-`http://127.0.0.1:3315/tests/browser/launch-sign.html`; `await window.launchChecks` in the
-browser console returns their assertions. These fixtures use a mock wallet and no RPC. A devnet
+do not spend SOL. Open `http://127.0.0.1:3315/tests/browser/launch-sign.html`;
+`await window.launchChecks` in the browser console returns its assertions. This fixture uses
+a mock wallet and no RPC. A devnet
 Pump integration test requires the actual Pump programs and lookup table to be available;
 the repository's ordinary SPL test mint is not proof of a Pump launch. No mainnet transaction
 is part of the automated verification.

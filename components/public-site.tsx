@@ -67,7 +67,7 @@ export function PublicSite() {
     <main className="podcast public-site">
       <header>
         <Link className="brand" href="/">
-          <img className="brand-mark" src="/logo.webp" alt="" />
+          <img className="brand-mark" src="/logo.avif" alt="" />
           {show.name.toUpperCase()}
           <span className="edition">{show.edition}</span>
         </Link>

@@ -16,18 +16,35 @@ void test('checkout persistence retains an unfinished draft and asset without tr
   assert.equal(saved.draft.product, 'cap');
   assert.equal(saved.asset, 'FROGCLENCH');
   assert.equal(saved.token, 'a'.repeat(48));
-  assert.equal(C.readCheckout('{broken').draft.product, 'message');
+  assert.equal(C.readCheckout('{broken').draft.product, 'spotlight');
+  // A draft saved for the withdrawn five-dollar message keeps its words under an offer on sale.
+  const withdrawn = C.readCheckout(
+    JSON.stringify({
+      version: 1,
+      draft: { product: 'message', name: 'ser', message: 'gm frens' },
+    }),
+  ).draft;
+  assert.equal(withdrawn.product, 'spotlight');
+  assert.equal(withdrawn.message, 'gm frens');
   assert.equal(
     C.readCheckout(
       JSON.stringify({ version: 1, asset: 'BTC', draft: { product: 'scam' } }),
     ).asset,
-    'USDC',
+    'FROGCLENCH',
   );
   assert.equal(
     C.readCheckout(JSON.stringify({ version: 1, token: 'javascript:bad' }))
       .token,
     null,
   );
+});
+void test('fresh and unreadable checkout storage defaults to FROGCLENCH', () => {
+  for (const raw of [null, '', '{broken', 'null', '{}', '{"version":2,"asset":"SOL"}', '{"version":1,"asset":"BTC"}'])
+    assert.equal(C.readCheckout(raw).asset, 'FROGCLENCH', raw);
+});
+void test('valid saved currency choices survive the new checkout default', () => {
+  for (const asset of ['FROGCLENCH', 'SOL', 'USDC'])
+    assert.equal(C.readCheckout(JSON.stringify({ version: 1, asset })).asset, asset);
 });
 void test('an ambiguous wallet response stays attached to its receipt and must not offer payment again', () => {
   const receipt = {

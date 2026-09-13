@@ -636,7 +636,7 @@ aside.sponsor-rail {
 }
 .sponsor-assets > div {
   display: grid;
-  grid-template-columns: 1fr 1fr 1.5fr;
+  grid-template-columns: max-content minmax(0, 1fr) minmax(0, 1fr);
   background: #121912;
   border: 1px solid #ffffff14;
   border-radius: 6px;

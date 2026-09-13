@@ -24,6 +24,7 @@ import {
   capQueueLabel,
   catalogPriceCents,
   checkoutKey,
+  defaultSponsorAsset,
   dollars,
   emptyDraft,
   hostName,
@@ -61,13 +62,13 @@ const BADGES: Partial<Record<SponsorDraft['product'], string>> = {
   spotlight: 'Top seller',
   cap: 'Most value',
 };
-const ASSETS: SponsorAsset[] = ['USDC', 'SOL', 'FROGCLENCH'];
+const ASSETS: SponsorAsset[] = ['FROGCLENCH', 'USDC', 'SOL'];
 const STEPS = ['Choose', 'Write', 'Pay'];
 
 /** The public contribution surface owns the draft; wallet providers arrive only at review. */
 export function SponsorPanel() {
   const [draft, setDraft] = useState<SponsorDraft>({ ...emptyDraft });
-  const [asset, setAsset] = useState<SponsorAsset>('USDC');
+  const [asset, setAsset] = useState<SponsorAsset>(defaultSponsorAsset);
   const [catalog, setCatalog] = useState<SponsorCatalog | null>(null);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -95,7 +96,6 @@ export function SponsorPanel() {
   const operation = useRef(false);
   const assetEpoch = useRef(0);
   const touchedToken = useRef<string | null>(null);
-  const chosenAsset = useRef(false);
   const updateReceipt = useCallback((next: Receipt) => {
     receiptRef.current = next;
     setReceipt(next);
@@ -174,14 +174,6 @@ export function SponsorPanel() {
         const data = await loadSponsorCatalog(controller.signal);
         if (!controller.signal.aborted) {
           setCatalog(data);
-          // Opening on an asset this deployment cannot take would dead-end checkout on a
-          // choice nobody made. Until the customer picks one, follow what is payable.
-          setAsset((current) => {
-            if (chosenAsset.current) return current;
-            if (data.assets.find((a) => a.id === current)?.available)
-              return current;
-            return data.assets.find((a) => a.available)?.id ?? current;
-          });
           setConnectionError('');
         }
       } catch {
@@ -216,7 +208,6 @@ export function SponsorPanel() {
             next.attempts[0];
           // A payment already quoted in this asset owns the choice from here on.
           if (attempt) {
-            chosenAsset.current = true;
             setAsset(attempt.asset);
           }
           touchedToken.current = token;
@@ -384,7 +375,7 @@ export function SponsorPanel() {
     }
   }
   async function useQR() {
-    if (!receipt || operation.current) return;
+    if (!receipt || operation.current || !available) return;
     operation.current = true;
     setBusy(true);
     setError('');
@@ -462,7 +453,6 @@ export function SponsorPanel() {
   }
   function pickAsset(next: SponsorAsset) {
     if (next === asset || signing) return;
-    chosenAsset.current = true;
     setAsset(next);
     setMethod('wallet');
     setQr('');
@@ -490,6 +480,28 @@ export function SponsorPanel() {
         {fieldErrors[field]}
       </span>
     ) : null;
+  const assetSelector = (
+    <fieldset className="sponsor-assets" disabled={!loaded || signing || busy}>
+      <legend>
+        Choose how to pay <span>Solana</span>
+      </legend>
+      <div>
+        {ASSETS.map((a) => (
+          <label key={a} className={asset === a ? 'selected' : ''}>
+            <input
+              type="radio"
+              name="sponsor-asset"
+              value={a}
+              checked={asset === a}
+              onChange={() => pickAsset(a)}
+            />
+            <span>{a === 'FROGCLENCH' ? '$FROGCLENCH' : a}</span>
+            {a === 'FROGCLENCH' && <small>−30%</small>}
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
   return (
     <section className="sponsor-panel" aria-labelledby="sponsor-title">
       <div className="sponsor-panel-top">
@@ -565,7 +577,7 @@ export function SponsorPanel() {
                         <span className="sponsor-product-price">
                           {dollars(catalogPriceCents(catalog, p.id, asset))}
                           <small>
-                            {asset === 'FROGCLENCH' ? 'with FROG' : 'USD'}
+                            {asset === 'FROGCLENCH' ? 'with FROGCLENCH' : 'USD'}
                           </small>
                         </span>
                         <span className="sponsor-radio" aria-hidden="true">
@@ -575,6 +587,7 @@ export function SponsorPanel() {
                     );
                   })}
                 </fieldset>
+                {assetSelector}
                 <button
                   type="button"
                   className="sponsor-button"
@@ -710,6 +723,7 @@ export function SponsorPanel() {
                     out of the spoken brief.
                   </small>
                 </label>
+                {assetSelector}
                 <button
                   type="submit"
                   className="sponsor-button"
@@ -757,26 +771,7 @@ export function SponsorPanel() {
                     </strong>
                   </div>
                 </div>
-                <fieldset className="sponsor-assets" disabled={signing || busy}>
-                  <legend>
-                    Choose how to pay <span>Solana</span>
-                  </legend>
-                  <div>
-                    {ASSETS.map((a) => (
-                      <label key={a} className={asset === a ? 'selected' : ''}>
-                        <input
-                          type="radio"
-                          name="sponsor-asset"
-                          value={a}
-                          checked={asset === a}
-                          onChange={() => pickAsset(a)}
-                        />
-                        <span>{a === 'FROGCLENCH' ? '$FROG' : a}</span>
-                        {a === 'FROGCLENCH' && <small>−30%</small>}
-                      </label>
-                    ))}
-                  </div>
-                </fieldset>
+                {assetSelector}
                 <fieldset
                   className="sponsor-payment-methods"
                   aria-label="Payment method"
@@ -793,7 +788,7 @@ export function SponsorPanel() {
                   <button
                     type="button"
                     className={method === 'qr' ? 'selected' : ''}
-                    disabled={signing || busy}
+                    disabled={signing || busy || !available}
                     onClick={useQR}
                   >
                     <ScanLine size={15} />
@@ -806,6 +801,7 @@ export function SponsorPanel() {
                     receipt={receipt}
                     asset={asset}
                     endpoint={catalog?.clientRpcUrl || '/api/rpc'}
+                    canPay={available}
                     onReceipt={updateReceipt}
                     onPending={setSigning}
                   />
@@ -815,8 +811,9 @@ export function SponsorPanel() {
                   <p className="sponsor-working">Preparing your wallet link…</p>
                 )}
                 <p className="sponsor-checkout-note">
-                  Your payment goes directly to the studio. This pass is saved
-                  if you leave the page.
+                  {!available
+                    ? connectionError || unavailableReason || 'Payment services are unavailable.'
+                    : 'Your payment goes directly to the studio. This pass is saved if you leave the page.'}
                 </p>
                 {receipt.attempts.length === 0 && (
                   <button

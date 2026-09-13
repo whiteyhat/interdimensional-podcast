@@ -48,11 +48,11 @@ const MAX_TAILOR_BODY = 16 * 1024;
 export const BASE_STILLS = {
   host: {
     path: 'public/pepe-cartoon.png',
-    url: 'https://v3b.fal.media/files/b/0aa99e7e/ViWtBAcKK0DXjM7kBLIvD_eid12yRD.png',
+    url: 'https://v3b.fal.media/files/b/0aaa4f2b/ly3epfk-xwL5t4R4G5kRa_nStAZqTf.png',
   },
   guest: {
     path: 'public/gigachad-cartoon.png',
-    url: 'https://v3b.fal.media/files/b/0aa99e9a/UUct9hv94FEzgs2dz2H26_JZaGMdjK.png',
+    url: 'https://v3b.fal.media/files/b/0aaa4f8b/G_PoG-TKbm7CHZNrVm3aV_UMRlpkQ3.png',
   },
 };
 

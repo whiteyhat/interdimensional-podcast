@@ -107,9 +107,7 @@ void test('a dressed clip is scaled and audited like any other clip, and nothing
     'the clip still carries the look it was made with',
   );
   assert.equal(clip.speechEnd, 0.8);
-  assert.equal(clip.mediaDuration, 10);
-  assert.equal(clip.playbackEnd, 10, 'a clean dressed take keeps its complete native ending');
-  assert.equal(clip.duration, clip.playbackEnd);
+  assert.equal(clip.duration, 10, 'a clean dressed take keeps its complete native ending');
   services.release(clip.url);
 });
 

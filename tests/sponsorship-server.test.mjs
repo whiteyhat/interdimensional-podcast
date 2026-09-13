@@ -62,6 +62,14 @@ function database() {
     },
   };
 }
+/** A placement on sale, for the tests that only need some order to pay for. */
+const DRAFT = {
+  product: 'spotlight',
+  projectName: 'Game',
+  style: 'intro',
+  name: 'Joe',
+  message: 'Hello everyone',
+};
 const post = (v, body, headers = {}) =>
   server.handleSponsorship(
     new Request('https://show.test/api/sponsorship', {
@@ -114,7 +122,7 @@ void test('private receipt capability is separate from the Solana Pay capability
     const draft = await (
       await post(f.v, {
         action: 'draft',
-        draft: { product: 'message', name: 'Joe', message: 'Hello everyone' },
+        draft: DRAFT,
       })
     ).json();
     const quote = await (
@@ -158,7 +166,7 @@ void test('ambiguous broadcasts persist deterministic signature and cannot issue
     const { receipt } = await (
       await post(f.v, {
         action: 'draft',
-        draft: { product: 'message', name: 'Joe', message: 'Hello everyone' },
+        draft: DRAFT,
       })
     ).json();
     const quote = await (
@@ -334,7 +342,7 @@ void test('expiry requires a reference sweep begun after blockhash finality, not
     const { receipt } = await (
       await post(f.v, {
         action: 'draft',
-        draft: { product: 'message', name: 'Joe', message: 'Hello everyone' },
+        draft: DRAFT,
       })
     ).json();
     await (
@@ -369,7 +377,7 @@ void test('wallet requests carry a server cosignature that fixes their blockhash
     const { receipt } = await (
       await post(f.v, {
         action: 'draft',
-        draft: { product: 'message', name: 'Joe', message: 'Hello everyone' },
+        draft: DRAFT,
       })
     ).json();
     const q = await (
@@ -411,7 +419,7 @@ void test('Solana Pay preflight permits the official helper cache-control header
     f.restore();
   }
 });
-void test('USDC remains exactly five tokens without a Jupiter service', async () => {
+void test('USDC stays one token per dollar without a Jupiter service', async () => {
   const f = await fixture();
   try {
     f.v.JUPITER_API_KEY = undefined;
@@ -442,7 +450,7 @@ void test('USDC remains exactly five tokens without a Jupiter service', async ()
     const { receipt } = await (
       await post(f.v, {
         action: 'draft',
-        draft: { product: 'message', name: 'Joe', message: 'Hello everyone' },
+        draft: DRAFT,
       })
     ).json();
     const r = await post(f.v, {
@@ -452,7 +460,7 @@ void test('USDC remains exactly five tokens without a Jupiter service', async ()
     });
     const q = await r.json();
     assert.equal(r.status, 200, JSON.stringify(q));
-    assert.equal(q.attempt.amountBase, '5000000');
+    assert.equal(q.attempt.amountBase, '25000000');
     assert.equal(q.attempt.priceUsd, '1');
   } finally {
     f.restore();
@@ -464,7 +472,7 @@ void test('studio context resolves immutable draft and rejects relinquished leas
     const { receipt } = await (
       await post(f.v, {
         action: 'draft',
-        draft: { product: 'message', name: 'Joe', message: 'Hello everyone' },
+        draft: DRAFT,
       })
     ).json();
     const q = await (
@@ -711,7 +719,7 @@ void test('finalized cosigned payment credits its actual payer exactly once', as
     const { receipt } = await (
       await post(f.v, {
         action: 'draft',
-        draft: { product: 'message', name: 'Joe', message: 'Hello everyone' },
+        draft: DRAFT,
       })
     ).json();
     const q = await (
@@ -734,9 +742,9 @@ void test('finalized cosigned payment credits its actual payer exactly once', as
       index = keys.findIndex((k) => k.pubkey === f.v.TREASURY_WALLET),
       pre = keys.map(() => 0),
       after = keys.map(() => 0);
-    pre[0] = 100000000;
+    pre[0] = 300000000;
     after[0] = 49000000;
-    after[index] = 50000000;
+    after[index] = 250000000;
     f.c.getParsedTransaction = async () => ({
       blockTime: Math.floor(Date.now() / 1000),
       meta: { err: null, preBalances: pre, postBalances: after },
@@ -754,7 +762,7 @@ void test('finalized cosigned payment credits its actual payer exactly once', as
                 info: {
                   source: f.wallet.publicKey.toBase58(),
                   destination: f.v.TREASURY_WALLET,
-                  lamports: 50000000,
+                  lamports: 250000000,
                 },
               },
             },
@@ -797,7 +805,7 @@ void test('a held builder lock prevents recovery from expiring its in-flight att
     const { receipt } = await (
       await post(f.v, {
         action: 'draft',
-        draft: { product: 'message', name: 'Joe', message: 'Hello everyone' },
+        draft: DRAFT,
       })
     ).json();
     const q = await (
@@ -827,12 +835,9 @@ void test('a held builder lock prevents recovery from expiring its in-flight att
 // thing D1 bills against a daily allowance, and what an idle reconciler must not spend.
 const rowsWritten = (f) =>
   f.DB.sql.prepare('SELECT total_changes() AS n').get().n;
-async function quoted(f, product = 'message') {
+async function quoted(f) {
   const { receipt } = await (
-    await post(f.v, {
-      action: 'draft',
-      draft: { product, name: 'Joe', message: 'Hello everyone' },
-    })
+    await post(f.v, { action: 'draft', draft: DRAFT })
   ).json();
   const q = await (
     await post(f.v, {
@@ -1037,6 +1042,67 @@ void test('the catalog keeps caps on sale while caps are queued and counts what 
       2,
       'the overall queue position is unchanged',
     );
+  } finally {
+    f.restore();
+  }
+});
+void test('the five-dollar message is off sale: no new pass, no new charge, and paid ones still air', async () => {
+  const f = await fixture();
+  try {
+    const catalog = await (
+      await server.handleSponsorship(
+        new Request('https://show.test/api/sponsorship?action=catalog'),
+        f.v,
+      )
+    ).json();
+    assert.deepEqual(
+      catalog.products.map((p) => p.id),
+      ['spotlight', 'cap'],
+    );
+    const message = { product: 'message', name: 'Joe', message: 'Hello' };
+    const refused = await post(f.v, { action: 'draft', draft: message });
+    assert.equal(refused.status, 400);
+    // A pass saved before the message came off sale is never charged again.
+    const token = 'a'.repeat(64);
+    await db.createOrder(f.DB, {
+      id: 'saved',
+      tokenHash: await server.hashSponsorToken(token),
+      draft: message,
+      now: 100,
+    });
+    const quote = await post(f.v, { action: 'quote', token, asset: 'SOL' });
+    assert.equal(quote.status, 409);
+    assert.match((await quote.json()).error, /no longer offered/);
+    // One already paid for still goes to the studio: every placement is final once paid.
+    await db.createOrder(f.DB, {
+      id: 'paid',
+      tokenHash: 'paid',
+      draft: message,
+      now: 100,
+    });
+    await db.insertAttempt(f.DB, {
+      id: 'paid-a',
+      order_id: 'paid',
+      pay_token: 'paid',
+      asset: 'SOL',
+      mint: null,
+      decimals: 9,
+      amount_base: '50000000',
+      price_usd: '100',
+      price_cents: 500,
+      recipient: f.v.TREASURY_WALLET,
+      reference: 'paid',
+      issued_at: 100,
+      expires_at: 200,
+    });
+    await db.settlePayment(
+      f.DB,
+      'paid-a',
+      { signature: 'sig-paid', payer: 'payer', blockTime: 150 },
+      300,
+    );
+    const [leased] = await db.leaseOrders(f.DB, 'studio', Date.now());
+    assert.equal(leased?.id, 'paid');
   } finally {
     f.restore();
   }

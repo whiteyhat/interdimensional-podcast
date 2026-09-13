@@ -13,9 +13,9 @@ export const metadata: Metadata = {
   metadataBase: new URL(site),
   title: `${show.name} | ${cast.host.name} and ${cast.guest.name}`,
   description: show.description,
-  // The 431 KB logo was serving as the favicon on every tab load; the SVG is 712 bytes.
-  // apple-touch-icon has no SVG support, so that one keeps the raster.
-  icons: { icon: '/favicon.svg', apple: '/logo.png' },
+  // Both icons are small PNG cuts of the coin. Browsers do not decode AVIF for tab or
+  // home-screen icons, and the full logo.png is the pump.fun and wallet image, not a favicon.
+  icons: { icon: '/favicon.png', apple: '/apple-icon.png' },
   openGraph: {
     type: 'website',
     siteName: show.name,

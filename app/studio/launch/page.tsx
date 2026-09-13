@@ -21,7 +21,7 @@ export default async function LaunchPage() {
   }
   return (
     <main className="launch-page">
-      <nav className="launch-nav" aria-label="Launch navigation"><Link href="/studio">← Back to the studio</Link><Link href="/allocations">Public allocations ↗</Link></nav>
+      <nav className="launch-nav" aria-label="Launch navigation"><Link href="/studio">← Back to the studio</Link></nav>
       <div className="launch-page-heading"><p className="launch-kicker">LOCAL STUDIO / SIGN ONLY</p><h1>Review the launch</h1><p>Import the prepared transaction, check its addresses and maximum budget, then sign with the creator wallet. This page downloads a signed file. The CLI submit command broadcasts it.</p></div>
       <LaunchStudio />
     </main>
