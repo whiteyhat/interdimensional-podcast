@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { fal, falKey } from './fal.mjs';
+import { avif } from './site-images.mjs';
 
 const key = await falKey();
 const frames = {};
@@ -27,13 +28,11 @@ for (const [role, name] of [
     '-y',
     `public${image}`,
   ]);
-  // The same frame as WebP, for the pages that merely display it. The PNG below is the one
-  // fal conditions on, so it must stay a pixel-exact PNG; the poster is ~20x smaller and is
+  // The same frame as AVIF, for the pages that merely display it. The PNG below is the one
+  // fal conditions on, so it must stay a pixel-exact PNG; the poster is ~30x smaller and is
   // what a phone downloads when someone opens a pasted link.
-  const poster = `/${name}-video.webp`;
-  execFileSync('ffmpeg', [
-    '-v', 'error', '-i', `public${image}`, '-quality', '82', '-y', `public${poster}`,
-  ]);
+  const poster = `/${name}-video.avif`;
+  await avif(`public${image}`, `public${poster}`);
   const bytes = await readFile(`public${image}`);
   const upload = await fal(
     'https://rest.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3',

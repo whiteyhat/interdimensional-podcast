@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Play, Square, Volume2, VolumeX, Radio } from 'lucide-react';
-import { cast, show } from '@/lib/show';
+import { show } from '@/lib/show';
+import { videoFrames } from '@/lib/video-frames';
 import type { createDirector } from '@/lib/director-live';
 import type { DirectorBrief } from '@/lib/director-program';
 import type { DirectorSnapshot } from '@/lib/director-rotation';
@@ -237,7 +238,7 @@ export function DirectorStudio() {
     <main className={broadcast ? 'podcast broadcast-mode' : 'podcast'}>
       <header>
         <Link className="brand" href="/studio">
-          <img className="brand-mark" src="/logo.png" alt="" />
+          <img className="brand-mark" src="/logo.avif" alt="" />
           {show.name.toUpperCase()}
         </Link>
         <span className="strap">DIRECTOR / CONTINUOUS BROADCAST</span>
@@ -259,11 +260,11 @@ export function DirectorStudio() {
       <div className="studio">
         <section className="broadcast">
           <div className="stage">
-            <img src={cast.host.image} alt="Pepe at the podcast microphone" />
+            <img src={videoFrames.host.poster} alt="Pepe at the podcast microphone" />
             <div ref={stage} style={{ position: 'absolute', inset: 0 }} />
             {!snapshot.activeId && (
               <div className="opening">
-                <img className="opening-mark" src="/logo.png" alt={show.name} />
+                <img className="opening-mark" src="/logo.avif" alt={show.name} />
                 <p className="eyebrow">OPEN MIC / NO FINAL EPISODE</p>
                 <h1>{show.headline}</h1>
                 <p>

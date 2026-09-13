@@ -2,6 +2,7 @@
 // Brand assets: a logo, then the same logo mounted in both studio frames.
 //   node scripts/brand.mjs logo --variants 2            candidates in work/brand/
 //   node scripts/brand.mjs stills --logo 0              re-edit both stills with logo candidate 0
+//   node scripts/brand.mjs stills --logo 0 --role guest re-edit only the mug still
 //   node scripts/brand.mjs pick --logo 0 --host 0 --guest 1   promote to public/ + assets json
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
@@ -21,7 +22,7 @@ const PALETTE =
 const LOGO_PROMPT = `Design for a vintage enamel pin or screen-printed patch for the podcast "PEPE & CHAD LIVE", drawn in ${CEL}. Palette strictly limited to: ${PALETTE} — muted and slightly desaturated throughout, nothing bright, glossy or neon. A round badge with a worn, slightly uneven outline, like it has faded a little. Inside, two profiles face each other across a black studio microphone: on the left a green cartoon frog with big round eyes and wide red lips wearing black headphones, on the right a heavily bearded man with an enormous square jaw wearing black headphones, both rendered with the same soft cel-shading gradients as the rest of the palette, not flat vector color. A condensed hand-lettered-style wordmark "PEPE & CHAD" arched across the top in aged cream, and the word "LIVE" in a small muted-amber box at the bottom, not glowing. Underneath the badge, small monospace text "$FROGCLENCH" in sage green. Subtle fabric or enamel texture and grain, soft matte shading, no gloss, no gradients that look digital, no drop shadow, no watermark. The background behind the badge is transparent or a plain dark teal-olive flat color, not a separate colored square.`;
 
 const signPrompt = (side) =>
-  `Edit this 2D animated podcast frame. Add ONE small framed print or fabric patch pinned to the acoustic panel wall, showing EXACTLY the badge in the second image: the same worn circular badge, the same frog and bearded man profiles facing off across a mic, the same "PEPE & CHAD" wordmark, the same muted "LIVE" box and the same "$FROGCLENCH" text, in the same muted teal, walnut, amber and cream palette as the badge and the rest of this scene. Mount it flat on the dark teal acoustic panel wall in the upper ${side} of the background, above head height and behind the microphone boom, sized to about one eighth of the frame width — small, like a backstage keepsake, not a marquee. It is lit ONLY by the existing room light: the same dim, warm-cool lighting, the same brightness and the same slight haze as the shelf items behind it. It must NOT glow, NOT be brighter than its surroundings, and must cast only a soft, ordinary shadow like a framed print would. It must not cover any part of the character, the headphones, the microphone or the lamp. Change nothing else: keep the character, pose, expression, clothes, desk, lamp, shelves, panels, lighting, palette, line weight, camera angle and 16:9 framing identical to the first image. No other text, no watermark.`;
+  `Edit this 2D animated podcast frame. Add ONE small framed print or fabric patch pinned to the acoustic panel wall, showing EXACTLY the badge in the second image: the same worn circular badge, the same frog and bearded man profiles facing off across a mic, the same "PEPE & CHAD" wordmark and the same muted "LIVE" box, in the same muted teal, walnut, amber and cream palette as the badge and the rest of this scene. Mount it flat on the dark teal acoustic panel wall in the upper ${side} of the background, above head height and behind the microphone boom, sized to about one eighth of the frame width — small, like a backstage keepsake, not a marquee. It is lit ONLY by the existing room light: the same dim, warm-cool lighting, the same brightness and the same slight haze as the shelf items behind it. It must NOT glow, NOT be brighter than its surroundings, and must cast only a soft, ordinary shadow like a framed print would. It must not cover any part of the character, the headphones, the microphone or the lamp. Change nothing else: keep the character, pose, expression, clothes, desk, lamp, shelves, panels, lighting, palette, line weight, camera angle and 16:9 framing identical to the first image. No other text, no watermark.`;
 
 // A branded mug reads as a real prop in the room, which is why it is used for the co-host
 // instead of a second wall sign — a studio would not hang two of the same badge.
@@ -40,6 +41,7 @@ const { positionals, values: opt } = parseArgs({
     host: { type: 'string', default: '0' },
     guest: { type: 'string', default: '0' },
     seed: { type: 'string' },
+    role: { type: 'string' },
   },
 });
 const mode = positionals[0] || 'logo';
@@ -74,8 +76,10 @@ async function stills(key) {
   const chosen = data.logo?.[Number(opt.logo ?? 0)];
   if (!chosen) throw Error('Run `logo` first and pass --logo <index>.');
   const assets = JSON.parse(await readFile(ASSETS, 'utf8'));
-  data.stills = {};
+  // One role at a time keeps the other's chosen candidates.
+  data.stills = opt.role ? (data.stills ?? {}) : {};
   for (const [role, spec] of Object.entries(ROLES)) {
+    if (opt.role && role !== opt.role) continue;
     const name = spec.file.replace(/\.png$/, '');
     // Always brand the unbranded original. Editing an already-branded still compounds
     // the edits and leaves the previous logo behind next to the new one.
