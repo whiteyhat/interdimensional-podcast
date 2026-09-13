@@ -800,7 +800,10 @@ void test('/logo relays the script’s refusal as 422 and hides a machine fault 
   assert.equal(ok.json().target, 'guest');
 });
 
-void test('/health says whether this desk can tailor, and which look version it makes', async (t) => {
+// The tailor tests below run the desk with a stand-in wardrobe script, but a desk is ready only
+// when the real vision runtime answered its boot probe, so on a stock CI runner they skip like
+// the render tests above; the media workflow, which installs cv2, runs them.
+void test('/health says whether this desk can tailor, and which look version it makes', { skip: needsRuntime }, async (t) => {
   const python = await fakeWardrobe('health-tailor');
   const bare = await desk(t, { python });
   const state = await (await fetch(`${bare.url}/health`)).json();
@@ -2082,7 +2085,7 @@ void test('the vision judge’s thresholds: chest print and scene decide, the ca
   assert.match(prompt, /#8B8F96 baseball cap/);
 });
 
-void test('the tailor has its own lane: BUSY when it is full, /render untouched, and a clock that adds up', async (t) => {
+void test('the tailor has its own lane: BUSY when it is full, /render untouched, and a clock that adds up', { skip: needsRuntime }, async (t) => {
   falPlan.hang = true;
   const media = await tailorDesk(t, {}, { tailorConcurrency: 1, tailorQueue: 0, tailorDeadlineMs: 1_500, tailorFitMs: 400, tailorTailMs: 100, tailorSubmitMs: 300, judgeMs: 50 });
   const first = tailorOrder();
@@ -2109,7 +2112,7 @@ void test('the tailor has its own lane: BUSY when it is full, /render untouched,
   assert.ok(SHUTDOWN_MS >= drainMs + 3_000, 'the callback wait at close fits before the hard stop');
 });
 
-void test('three failed fits fall back to the cap print, so the paid order still airs dressed', async (t) => {
+void test('three failed fits fall back to the cap print, so the paid order still airs dressed', { skip: needsRuntime }, async (t) => {
   const media = await tailorDesk(t, { judge: 'DRIFT,INK,GEOMETRY' });
   const order = tailorOrder();
   const before = submissions.length;
@@ -2134,7 +2137,7 @@ void test('three failed fits fall back to the cap print, so the paid order still
   assert.equal(line.fits, 3);
 });
 
-void test('a logo the fallback cannot print is refused; a broken renderer is an error the site asks about again', async (t) => {
+void test('a logo the fallback cannot print is refused; a broken renderer is an error the site asks about again', { skip: needsRuntime }, async (t) => {
   const refusing = await tailorDesk(t, { judge: 'DRIFT', fallback: 'refuse' });
   const order = tailorOrder();
   assert.equal((await post(refusing, order, { path: '/tailor' })).status, 202);
@@ -2250,7 +2253,7 @@ void test('the callback lands only on SPONSOR_SITE_ORIGIN, survives a short outa
   siteAnswers = [];
 });
 
-void test('the desk process tailors a look with every stdout line a JSON object, and never prints its key', async (t) => {
+void test('the desk process tailors a look with every stdout line a JSON object, and never prints its key', { skip: needsRuntime }, async (t) => {
   const port = await freePort();
   const workdir = await mkdtemp(join(scratch, 'cli-tailor-'));
   const judgeFile = join(scratch, 'cli-judge.txt');
