@@ -155,10 +155,25 @@ export const productCopy = {
     icon: 'spotlight',
   },
   cap: {
-    title: 'Sponsor the podcast',
-    short: 'Your brand. Their very big heads.',
+    title: 'Dress the host',
+    short: 'Your logo on the tee, a cap in your colours',
     description:
-      'A branded cap on Pepe or Chad for 10 live minutes. Six clear appearances, an introduction, and a callback.',
+      'Your logo printed on the tee and a cap in your colours, worn by Pepe or Chad for 10 live minutes. Six clear appearances, an introduction and a callback.',
     icon: 'cap',
   },
+} as const;
+/**
+ * Every line the wardrobe card and the receipt say while a tee and cap are made, pinned
+ * here so the panel, the preview and the receipt cannot drift apart. The look is tailored
+ * after payment only, so the pre-payment caption is a promise and the rest is a clock.
+ */
+export const LOOK_COPY = {
+  previewCaption:
+    'Your tee and cap are tailored right after payment · usually one to two minutes',
+  tailoring: 'Tailoring your tee and cap · usually one to two minutes',
+  anotherFit: 'Still tailoring — trying another fit',
+  slow: 'This is taking longer than usual',
+  replace: 'Use a different logo',
+  improving: "We'll keep improving the fit",
+  refused: 'This logo could not be dressed.',
 } as const;

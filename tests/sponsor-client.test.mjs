@@ -91,3 +91,23 @@ void test('the cap chooser and receipt say how many caps go on first, never that
   ])
     assert.doesNotMatch(copy, /reserved/i);
 });
+
+void test('the cap sells as a tee and a cap made for the brand, and every waiting line is pinned', () => {
+  assert.deepEqual(C.productCopy.cap, {
+    title: 'Dress the host',
+    short: 'Your logo on the tee, a cap in your colours',
+    description:
+      'Your logo printed on the tee and a cap in your colours, worn by Pepe or Chad for 10 live minutes. Six clear appearances, an introduction and a callback.',
+    icon: 'cap',
+  });
+  assert.deepEqual(C.LOOK_COPY, {
+    previewCaption:
+      'Your tee and cap are tailored right after payment · usually one to two minutes',
+    tailoring: 'Tailoring your tee and cap · usually one to two minutes',
+    anotherFit: 'Still tailoring — trying another fit',
+    slow: 'This is taking longer than usual',
+    replace: 'Use a different logo',
+    improving: "We'll keep improving the fit",
+    refused: 'This logo could not be dressed.',
+  });
+});

@@ -464,7 +464,7 @@ export function SponsorPanel() {
       </div>
       <h2 id="sponsor-title">Be part of the show.</h2>
       <p className="sponsor-lead">
-        A thought. A project. A cap with your name on it.
+        A thought. A project. A tee and cap with your name on it.
       </p>
       {received && receipt ? (
         <SponsorReceipt
@@ -627,7 +627,7 @@ export function SponsorPanel() {
                           : draft.assetId
                             ? 'Change your logo'
                             : 'Add your logo'}
-                        <small>Preview it on the actual cap</small>
+                        <small>Tailored onto the tee and cap after payment</small>
                       </span>
                       {draft.assetId && <Check size={16} />}
                     </button>
