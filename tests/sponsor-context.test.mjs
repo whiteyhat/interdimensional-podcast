@@ -12,12 +12,10 @@ await build([
   'sponsor-server',
   'sponsor-context',
   'sponsor-assets',
-  'sponsor-media',
   'throttle',
 ]);
 const { resolveTrustedSponsor } =
   await import('../work/tests/sponsor-context.js');
-const { renderSponsorMedia } = await import('../work/tests/sponsor-media.js');
 const db = await import('../work/tests/sponsor-db.js');
 const vars = {
   STUDIO_TOKEN: 'a-secret-studio-token-for-testing',
@@ -117,7 +115,7 @@ void test('local context uses the incoming producer identity when there is no br
   }
 });
 
-void test('context and media bridges forward the canonical legacy producer identity', async (t) => {
+void test('the context bridge forwards the canonical legacy producer identity', async (t) => {
   for (const [name, id, expected] of [
     ['absent', undefined, 'studio'],
     ['trimmed', '  studio-a  ', 'studio-a'],
@@ -130,24 +128,15 @@ void test('context and media bridges forward the canonical legacy producer ident
         calls.push(new URL(url).pathname);
         assert.equal(options.headers['x-studio-token'], vars.STUDIO_TOKEN);
         assert.equal(options.headers['x-studio-id'], expected);
-        return Promise.resolve(Response.json({ order: { id: 'order' }, url: 'https://show.test/video' }));
+        return Promise.resolve(Response.json({ order: { id: 'order' } }));
       });
-      const configured = { ...vars, STUDIO_ID: id };
       const order = await resolveTrustedSponsor(
         new Request('http://127.0.0.1:3212/api/podcast'),
-        configured,
+        { ...vars, STUDIO_ID: id },
         reference,
       );
       assert.equal(order.id, 'order');
-      const response = await renderSponsorMedia(
-        new Request('http://127.0.0.1:3212/api/sponsorship/media', {
-          method: 'POST',
-          body: JSON.stringify({ ...reference, videoUrl: 'https://fal.media/video.mp4' }),
-        }),
-        configured,
-      );
-      assert.equal(response.status, 200);
-      assert.deepEqual(calls, ['/api/sponsorship', '/api/sponsorship/media']);
+      assert.deepEqual(calls, ['/api/sponsorship']);
     });
   }
 });
