@@ -9,7 +9,8 @@
 // PROJECT and STYLE (intro, debate or gentle-roast). A cap takes PROJECT, TARGET (host or
 // guest) and LOGO, a PNG, JPG or WebP path the site has the desk normalise before anything is
 // quoted; the tee and cap are tailored after payment. ASSET_ID reuses a logo already uploaded.
-// MESSAGE overrides the buyer's text for any of them. REPLACE_LOGO, a second image path, is
+// MESSAGE overrides the buyer's text for any of them. RECEIPT_OUT writes the receipt link to
+// that file for a browser to open. REPLACE_LOGO, a second image path, is
 // "Use a different logo" after payment: the paid cap order is pointed at the new logo and the
 // script waits for the replacement look.
 //
@@ -23,7 +24,7 @@ import {
   createSolanaRpcSubscriptions,
   sendAndConfirmTransactionFactory,
 } from '@solana/kit';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import {
   holdAir,
@@ -210,6 +211,10 @@ check(
     : JSON.stringify(drafted.body),
 );
 const token = drafted.body.receipt?.token;
+// RECEIPT_OUT writes the receipt link to a file (never to the console), so a person can open
+// the real receipt in a browser after the script has paid.
+if (process.env.RECEIPT_OUT && token)
+  await writeFile(process.env.RECEIPT_OUT, `${SITE}/?receipt=${encodeURIComponent(token)}\n`);
 
 const quoted = token
   ? await api({ action: 'quote', token, asset: 'SOL', wallet: viewer.address })

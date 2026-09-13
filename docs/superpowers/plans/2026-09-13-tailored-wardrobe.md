@@ -11998,17 +11998,17 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Consumes: everything above, deployed; `FAL_KEY` and `SPONSOR_SITE_ORIGIN` set on the desk (desk-12); the devnet site deployed from `main` with `SPONSOR_MEDIA_URL`/`SPONSOR_MEDIA_TOKEN` (already set).
 - Produces: the rehearsal audit with the eight checks below, each with the order id, look sha256 and what was seen.
 
-- [ ] **Step 1: Deploy the desk and read its health**
+- [x] **Step 1: Deploy the desk and read its health**
 
 Run: `node scripts/media.mjs deploy` (devnet), then `node scripts/media.mjs health`
 Expected: "Ready to tailor looks"; raw `/health` shows `tailor: true`, `templateVersion: 'looks-v1'`, `ready: true`.
 
-- [ ] **Step 2: Deploy the devnet site and confirm the catalog**
+- [x] **Step 2: Deploy the devnet site and confirm the catalog**
 
 Run: `gh workflow run deploy-devnet.yml --ref main -R whiteyhat/interdimensional-podcast`, wait for success, then `curl -s "$SITE/api/sponsorship?catalog=1"`
 Expected: `capabilities.cap === true`, `capabilities.capTemplateVersion === 'looks-v1'`, product `cap` available at 100 cents (devnet flat price).
 
-- [ ] **Step 3: Tailor four logos for both hosts by hand**
+- [x] **Step 3: Tailor four logos for both hosts by hand**
 
 Upload, through the devnet panel, four PNGs (a dark wordmark on a transparent background, a light mark, a colourful mark, an 8-letter text-only wordmark) for Pepe and for GigaChad; pay each with `node scripts/sponsorpay.mjs` or a devnet Phantom.
 Expected: each receipt shows "Tailoring your tee and cap" then the look within ~90 s (single fit) or within 210 s; every look reviewed by eye — the logo reads on the chest, the cap is in a brand colour, the scene is unchanged; the wordmark passes on both hosts. Record `look.sha256`, fit number and `fallback` for each.
@@ -12018,21 +12018,21 @@ Expected: each receipt shows "Tailoring your tee and cap" then the look within ~
 Run: `node scripts/rehearsal-box.mjs on --minutes 60`, watch the devnet stream.
 Expected: the character wears the tee and cap in every clip of theirs; the receipt reaches "on air" then "delivered" with 6+ appearances, intro and callback; the box log's `wardrobe-flip` count is 0 or each flip is explained in the audit.
 
-- [ ] **Step 5: A second purchase of the same logo reuses the look**
+- [x] **Step 5: A second purchase of the same logo reuses the look**
 
 Buy the same logo on the same host again.
 Expected: the receipt shows the look immediately (`look.status: 'ready'`), the desk log shows no `/tailor` request for it, and the second order airs after the first (`capAhead` copy).
 
-- [ ] **Step 6: Refusal, fallback and replacement**
+- [x] **Step 6: Refusal, fallback and replacement**
 
 Upload a 1-px PNG → expected: refused at upload with the desk's reason; nothing stored. Upload a logo built to fail the judge (a photo with fine text) and pay → expected: after three fits the fallback cap-v1 look airs, the receipt says "We'll keep improving the fit" and offers "Use a different logo"; use it with a clean logo → expected: the replacement look airs.
 
-- [ ] **Step 7: Production untouched**
+- [x] **Step 7: Production untouched**
 
 Run: `curl -s https://frogclench.fun/api/sponsorship?catalog=1`
 Expected: `SPONSOR_ENABLED` still off (products unavailable with the existing reason), prices 500/2500/10000, no `looks-v1` anywhere on production; production D1 row counts unchanged.
 
-- [ ] **Step 8: Write the audit and commit it**
+- [x] **Step 8: Write the audit and commit it**
 
 ```bash
 git add docs/audits/<date>-tailored-wardrobe-rehearsal.md
