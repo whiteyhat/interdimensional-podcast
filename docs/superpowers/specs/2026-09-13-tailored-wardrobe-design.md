@@ -392,8 +392,9 @@ deterministic and free.
   monochrome and wearer-camouflage cases); prompt snapshot; `/tailor` validation
   (assetId, round, logoUrl host, 503 without origin/key), 202/200/409, key dedupe, own lane
   and deadline, fit budget arithmetic; fal client aborts mid-poll at the deadline (loopback
-  stand-in counts GETs); geometry refusal; deterministic judge calibration on committed
-  fixture pairs (pass set and fail set pinned by sha256); vision-judge threshold cases
+  stand-in counts GETs); geometry refusal; deterministic judge calibration on the committed
+  base stills with synthetic pass/fail variants (garment-zone edits pass; a 20 px shift and
+  a replaced scene fail), the stills pinned by sha256; vision-judge threshold cases
   ("chest good, cap mark garbled" → pass; "cap carries letters" → fail; scene changed →
   fail); fallback path; every outcome calls back, callback lands only on
   `SPONSOR_SITE_ORIGIN`, retries, close() bound; `/health.tailor` and `templateVersion`;
