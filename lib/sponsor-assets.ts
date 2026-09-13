@@ -5,11 +5,17 @@ import {
   type SponsorMediaVars,
 } from './sponsor-server';
 export { sponsorMediaConfig, type SponsorMediaVars } from './sponsor-server';
-import { LOOK_VERSION, SponsorError, type LookPalette } from './sponsorship';
+import {
+  LOOK_VERSION,
+  SponsorError,
+  type LookAssetMetadata,
+  type LookPalette,
+} from './sponsorship';
 import * as db from './sponsor-db';
 import { perMinuteCounter } from './throttle';
 const tooMany = perMinuteCounter();
 const MAX_UPLOAD = 4 * 1024 * 1024;
+const HEX64 = /^[a-f0-9]{64}$/;
 const json = (body: unknown, status = 200) =>
   Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
 /** Hex SHA-256, the identity every stored artwork and take is filed and checked under. */
@@ -438,22 +444,60 @@ export async function uploadSponsorAsset(
     return sponsorFailure(e);
   }
 }
+/** The asset's standing for a bare GET: a redirect to whatever image stands for it now, or JSON on request. */
+async function assetStatus(request: Request, v: SponsorMediaVars, id: string) {
+  try {
+    const d = await sponsorDatabase(v);
+    const asset = await db.getAsset(d, id);
+    if (!asset) throw new SponsorError(404, 'Artwork not found.');
+    if (!/application\/json/.test(request.headers.get('accept') ?? ''))
+      return new Response(null, {
+        status: 302,
+        headers: { location: asset.url, 'cache-control': 'no-store' },
+      });
+    let meta: Partial<LookAssetMetadata> = {};
+    try {
+      meta = JSON.parse(asset.metadata);
+    } catch {}
+    return json({
+      status: asset.status,
+      url: asset.url,
+      ...(asset.status === 'qualified' ? { lookUrl: asset.url } : {}),
+      ...(meta.reason ? { reason: meta.reason } : {}),
+      ...(meta.tailor ? { tailor: meta.tailor } : {}),
+    });
+  } catch (e) {
+    return sponsorFailure(e);
+  }
+}
+/**
+ * GET /api/sponsorship/assets/{id}: `?part=logo` is the normalised logo, `?part=look&v=<sha>`
+ * one look; both are named by content, so they are cached for good and readable from any
+ * origin (fal fetches both). A bare address follows the asset to the image that stands for
+ * it now, and says where it stands to a caller that asks for JSON.
+ */
 export async function readSponsorAsset(
   request: Request,
   v: SponsorMediaVars,
   id: string,
 ) {
-  if (!/^[a-f0-9]{64}$/.test(id) || !v.SPONSOR_ASSETS)
+  if (!HEX64.test(id) || !v.SPONSOR_ASSETS)
     return new Response('Artwork not found', { status: 404 });
-  const part = new URL(request.url).searchParams.get('part');
+  const url = new URL(request.url),
+    part = url.searchParams.get('part');
+  if (part === null) return assetStatus(request, v, id);
+  const version = url.searchParams.get('v') ?? '';
   const key =
-    part === 'video'
-      ? `${id}/video.mp4`
-      : `${id}/${part === 'logo' ? 'logo' : 'preview'}.png`;
+    part === 'logo'
+      ? `${id}/logo.png`
+      : part === 'look' && HEX64.test(version)
+        ? `${id}/look-${version}.png`
+        : null;
+  if (!key) return new Response('Artwork not found', { status: 404 });
   const object = await v.SPONSOR_ASSETS.get(key, { range: request.headers });
   if (!object) return new Response('Artwork not found', { status: 404 });
   const headers: Record<string, string> = {
-    'content-type': part === 'video' ? 'video/mp4' : 'image/png',
+    'content-type': 'image/png',
     'cache-control': 'public,max-age=31536000,immutable',
     'x-content-type-options': 'nosniff',
     'content-security-policy': "default-src 'none'",

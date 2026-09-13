@@ -14,7 +14,7 @@ await build([
   'producer-lease',
   'throttle',
 ]);
-const { uploadSponsorAsset, sponsorAssetHealth } =
+const { uploadSponsorAsset, sponsorAssetHealth, readSponsorAsset } =
   await import('../work/tests/sponsor-assets.js');
 const PNG = Buffer.concat([
   Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -461,5 +461,87 @@ void test('a desk that is up but cannot tailor is reported as such, on the curre
     ready: true,
     tailor: false,
     templateVersion: 'looks-v1',
+  });
+});
+// ---- serving: the logo and every look are immutable; a bare address follows the asset.
+/** A bucket holding what was put, answering get() the way R2 does for whole objects. */
+function bucket(entries = {}) {
+  const objects = new Map(
+    Object.entries(entries).map(([key, bytes]) => [key, Buffer.from(bytes)]),
+  );
+  return {
+    objects,
+    async put(key, bytes) {
+      objects.set(key, Buffer.from(bytes));
+    },
+    async get(key) {
+      const bytes = objects.get(key);
+      return bytes
+        ? {
+            body: new Blob([bytes]).stream(),
+            size: bytes.length,
+            httpEtag: '"etag"',
+            range: undefined,
+          }
+        : null;
+    },
+  };
+}
+function assetRow(DB, status, url, metadata) {
+  DB.sql
+    .prepare(
+      'INSERT OR REPLACE INTO sponsor_assets(id,status,url,mime,created_at,metadata) VALUES(?,?,?,?,?,?)',
+    )
+    .run(ASSET_ID, status, url, 'image/png', 100, JSON.stringify(metadata));
+}
+const LOOK_SHA = 'b'.repeat(64);
+const LOOK_URL = `https://show.test/api/sponsorship/assets/${ASSET_ID}?part=look&v=${LOOK_SHA}`;
+void test('the logo and each look are served immutable and cross-origin; a bare address follows the asset', async () => {
+  const DB = d1();
+  const assets = bucket({
+    [`${ASSET_ID}/logo.png`]: normalised,
+    [`${ASSET_ID}/look-${LOOK_SHA}.png`]: Buffer.from('the look'),
+  });
+  const v = { DB, SITE_URL: 'https://show.test', SPONSOR_ASSETS: assets };
+  const get = (query, headers = {}) =>
+    readSponsorAsset(
+      new Request(`https://show.test/api/sponsorship/assets/${ASSET_ID}${query}`, { headers }),
+      v,
+      ASSET_ID,
+    );
+  const logo = await get('?part=logo');
+  assert.equal(logo.status, 200);
+  assert.equal(logo.headers.get('content-type'), 'image/png');
+  assert.equal(logo.headers.get('cache-control'), 'public,max-age=31536000,immutable');
+  assert.equal(logo.headers.get('access-control-allow-origin'), '*');
+  assert.deepEqual(Buffer.from(await logo.arrayBuffer()), normalised);
+  const look = await get(`?part=look&v=${LOOK_SHA}`);
+  assert.equal(look.status, 200);
+  assert.equal(await look.text(), 'the look');
+  assert.equal((await get('?part=look')).status, 404, 'a look is named by its hash');
+  assert.equal((await get('?part=preview')).status, 404, 'the preview is gone');
+  assert.equal((await get('?part=video')).status, 404);
+  // Bare: 404 for no row; the logo while tailoring; the look once qualified; never cached.
+  assert.equal((await get('')).status, 404, 'no such asset');
+  assetRow(DB, 'logo', LOGO_URL, { kind: 'cap', tailor: { round: 1, requestedAt: 5 } });
+  let bare = await get('', { accept: 'image/*' });
+  assert.equal(bare.status, 302);
+  assert.equal(bare.headers.get('location'), LOGO_URL);
+  assert.equal(bare.headers.get('cache-control'), 'no-store');
+  assetRow(DB, 'qualified', LOOK_URL, { kind: 'cap', look: { sha256: LOOK_SHA } });
+  bare = await get('', { accept: 'image/*' });
+  assert.equal(bare.status, 302);
+  assert.equal(bare.headers.get('location'), LOOK_URL);
+  const status = await get('', { accept: 'application/json' });
+  assert.equal(status.status, 200);
+  assert.equal(status.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(await status.json(), { status: 'qualified', url: LOOK_URL, lookUrl: LOOK_URL });
+  const tailor = { round: 3, requestedAt: 5, outcome: 'refused', at: 9, reasons: ['Too thin.'] };
+  assetRow(DB, 'refused', LOGO_URL, { kind: 'cap', reason: 'Too thin.', tailor });
+  assert.deepEqual(await (await get('', { accept: 'application/json' })).json(), {
+    status: 'refused',
+    url: LOGO_URL,
+    reason: 'Too thin.',
+    tailor,
   });
 });
