@@ -38,12 +38,23 @@ export function ensureSchema(db: D1Database): Promise<void> {
   let pending = ready.get(db);
   if (!pending) {
     pending = db.batch(schema.map((sql) => db.prepare(sql))).then(async () => {
-      const columns=await db.prepare('PRAGMA table_info(requests)').all<{name:string}>();
-      if(!columns.results.some(c=>c.name==='broadcast_signature')){
-        try{await db.prepare('ALTER TABLE requests ADD COLUMN broadcast_signature TEXT').run();}
-        catch(e){if(!/duplicate column/i.test(String(e)))throw e;}
+      const columns = await db
+        .prepare('PRAGMA table_info(requests)')
+        .all<{ name: string }>();
+      if (!columns.results.some((c) => c.name === 'broadcast_signature')) {
+        try {
+          await db
+            .prepare('ALTER TABLE requests ADD COLUMN broadcast_signature TEXT')
+            .run();
+        } catch (e) {
+          if (!/duplicate column/i.test(String(e))) throw e;
+        }
       }
-      await db.prepare("UPDATE requests SET broadcast_signature=COALESCE(broadcast_signature,signature),signature=NULL WHERE status IN ('quoted','submitted','expired','failed') AND signature IS NOT NULL").run();
+      await db
+        .prepare(
+          "UPDATE requests SET broadcast_signature=COALESCE(broadcast_signature,signature),signature=NULL WHERE status IN ('quoted','submitted','expired','failed') AND signature IS NOT NULL",
+        )
+        .run();
     });
     pending.catch(() => ready.delete(db)); // a failed attempt must not poison the isolate
     ready.set(db, pending);
@@ -51,7 +62,10 @@ export function ensureSchema(db: D1Database): Promise<void> {
   return pending;
 }
 
-export type NewQuote = Omit<RequestRow, 'status' | 'signature' | 'paid_at' | 'claimed_at' | 'aired_at'>;
+export type NewQuote = Omit<
+  RequestRow,
+  'status' | 'signature' | 'paid_at' | 'claimed_at' | 'aired_at'
+>;
 export async function insertQuote(db: D1Database, q: NewQuote) {
   await db
     .prepare(
@@ -80,7 +94,9 @@ export function getByReference(db: D1Database, reference: string) {
   return byReference(db, reference).first<RequestRow>();
 }
 
-const stampColumn: Partial<Record<RowStatus, 'paid_at' | 'claimed_at' | 'aired_at'>> = {
+const stampColumn: Partial<
+  Record<RowStatus, 'paid_at' | 'claimed_at' | 'aired_at'>
+> = {
   paid: 'paid_at',
   claimed: 'claimed_at',
   aired: 'aired_at',
@@ -105,12 +121,18 @@ export async function setStatus(
     params.push(now);
   }
   if (signature) {
-    sets.push(status==='submitted'?'broadcast_signature = ?':'signature = COALESCE(signature, ?)');
+    sets.push(
+      status === 'submitted'
+        ? 'broadcast_signature = ?'
+        : 'signature = COALESCE(signature, ?)',
+    );
     params.push(signature);
   }
   const marks = from.map(() => '?').join(', ');
   const result = await db
-    .prepare(`UPDATE requests SET ${sets.join(', ')} WHERE reference = ? AND status IN (${marks})`)
+    .prepare(
+      `UPDATE requests SET ${sets.join(', ')} WHERE reference = ? AND status IN (${marks})`,
+    )
     .bind(...params, reference, ...from)
     .run();
   return result.meta.changes > 0;
@@ -171,11 +193,17 @@ export async function statusReads(
   const statements = [queueRead(db), recentRead(db, limit)];
   if (reference) statements.push(byReference(db, reference));
   const [queued, latest, found] = await db.batch<RequestRow>(statements);
-  return { queue: queued.results, recent: latest.results, row: found?.results[0] ?? null };
+  return {
+    queue: queued.results,
+    recent: latest.results,
+    row: found?.results[0] ?? null,
+  };
 }
 export async function countQueued(db: D1Database) {
   const n = await db
-    .prepare(`SELECT COUNT(*) AS n FROM requests WHERE status IN ('paid', 'claimed')`)
+    .prepare(
+      `SELECT COUNT(*) AS n FROM requests WHERE status IN ('paid', 'claimed')`,
+    )
     .first<number>('n');
   return n ?? 0;
 }
@@ -204,19 +232,32 @@ export async function expireStale(db: D1Database, now: number) {
       `UPDATE requests SET status = 'expired'
        WHERE (status = 'quoted' AND created_at < ?) OR (status = 'submitted' AND created_at < ?)`,
     )
-    .bind(now - interactLimits.staleQuoteMs, now - interactLimits.staleSubmittedMs)
+    .bind(
+      now - interactLimits.staleQuoteMs,
+      now - interactLimits.staleSubmittedMs,
+    )
     .run();
   return result.meta.changes;
 }
 /** Recent quotes the page gave up on; their payment may still have landed on chain. */
+/** How long an unsettled seat is still watched for a late payment, and how often. */
+const LATE_PAYMENT_WINDOW_MS = 86400000,
+  LATE_PAYMENT_RECHECK_MS = 600000;
 export async function recoverable(db: D1Database, now: number, limit: number) {
+  // Only inside a day of the quote, and no more than every few minutes each: every pass used
+  // to re-check and re-stamp the same two long-dead requests forever, a write a minute each.
   const result = await db
     .prepare(
       `SELECT r.* FROM requests r LEFT JOIN legacy_payment_recovery c ON c.reference=r.reference
-       WHERE r.status IN ('quoted','expired','submitted','failed') AND r.created_at < ?
+       WHERE r.status IN ('quoted','expired','submitted','failed') AND r.created_at < ? AND r.created_at > ? AND COALESCE(c.checked_at,0) < ?
        ORDER BY COALESCE(c.checked_at,0),r.created_at LIMIT ?`,
     )
-    .bind(now - interactLimits.staleQuoteMs, limit)
+    .bind(
+      now - interactLimits.staleQuoteMs,
+      now - LATE_PAYMENT_WINDOW_MS,
+      now - LATE_PAYMENT_RECHECK_MS,
+      limit,
+    )
     .all<RequestRow>();
   return result.results;
 }
@@ -248,7 +289,8 @@ async function setMeta(db: D1Database, key: string, now: number) {
 }
 /** True once per recoverEveryMs, so the sweep costs at most a couple of RPC calls a minute. */
 export async function recoverDue(db: D1Database, now: number) {
-  if (now - (await getMeta(db, RECOVER)) < interactLimits.recoverEveryMs) return false;
+  if (now - (await getMeta(db, RECOVER)) < interactLimits.recoverEveryMs)
+    return false;
   await setMeta(db, RECOVER, now);
   return true;
 }
@@ -273,7 +315,9 @@ export async function quoteGates(db: D1Database, wallet: string, now: number) {
   const [seen, quotes] = await db.batch<Record<string, unknown>>([
     metaRead(db, HEARTBEAT),
     db
-      .prepare('SELECT COUNT(*) AS n FROM requests WHERE wallet = ? AND created_at > ?')
+      .prepare(
+        'SELECT COUNT(*) AS n FROM requests WHERE wallet = ? AND created_at > ?',
+      )
       .bind(wallet, now - 60_000),
   ]);
   return {

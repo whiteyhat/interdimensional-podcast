@@ -198,3 +198,43 @@ void test('a stalled archival RPC is canceled without clearing the recoverable r
     'no incomplete scan is committed',
   );
 });
+
+void test('an unsettled seat is re-checked at most every ten minutes, and never after a day', async () => {
+  const d = d1();
+  await db.ensureSchema(d);
+  const now = 10 * 86400000;
+  const seat = (id, created_at) =>
+    db.insertQuote(d, {
+      id,
+      reference: `${ref}-${id}`.slice(0, 44),
+      wallet: ref,
+      name: 'Joe',
+      message: 'Remember this payment',
+      amount_ui: 5,
+      amount_base: '5000000',
+      mint: ref,
+      recipient: ref,
+      price_usd: 1,
+      created_at,
+      expires_at: created_at + 60000,
+    });
+  await seat('fresh', now - 3600000);
+  await seat('ancient', now - 2 * 86400000);
+  const picked = async () => (await db.recoverable(d, now, 5)).map((r) => r.id);
+  assert.deepEqual(await picked(), ['fresh'], 'a day-old seat is left alone');
+  const checked = (id, at) =>
+    d
+      .prepare(
+        'INSERT INTO legacy_payment_recovery(reference,checked_at) VALUES(?,?) ON CONFLICT(reference) DO UPDATE SET checked_at=excluded.checked_at',
+      )
+      .bind(`${ref}-${id}`.slice(0, 44), at)
+      .run();
+  await checked('fresh', now - 300000);
+  assert.deepEqual(
+    await picked(),
+    [],
+    'checked five minutes ago: not again yet',
+  );
+  await checked('fresh', now - 660000);
+  assert.deepEqual(await picked(), ['fresh'], 'eleven minutes on, once more');
+});
