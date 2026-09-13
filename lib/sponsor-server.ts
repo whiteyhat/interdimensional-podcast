@@ -923,17 +923,21 @@ export async function reconcileSponsorships(v: SponsorMediaVars) {
     .bind(now - 3600000)
     .run();
   // Open quotes always; an expired one only while a late payment could still arrive, and
-  // then no more than every few minutes; a verified one never.
-  const attempts = await d
-    .prepare(
-      `SELECT * FROM sponsor_payment_attempts WHERE status IN ('issued','submitted') OR (status='expired' AND issued_at>? AND last_checked_at<?) ORDER BY CASE WHEN status IN ('issued','submitted') THEN 0 ELSE 1 END,last_checked_at ASC LIMIT 10`,
-    )
-    .bind(
-      now - interactLimits.recoverWindowMs,
-      now - interactLimits.recoverRecheckMs,
-    )
-    .all<db.AttemptRow>();
-  if (!attempts.results.length)
+  // then no more than every few minutes; a verified one never. And the looks the tailor
+  // still owes: a round that went unanswered, a spent logo, a fallback due its upgrade.
+  const [attempts, tailoring] = await Promise.all([
+    d
+      .prepare(
+        `SELECT * FROM sponsor_payment_attempts WHERE status IN ('issued','submitted') OR (status='expired' AND issued_at>? AND last_checked_at<?) ORDER BY CASE WHEN status IN ('issued','submitted') THEN 0 ELSE 1 END,last_checked_at ASC LIMIT 10`,
+      )
+      .bind(
+        now - interactLimits.recoverWindowMs,
+        now - interactLimits.recoverRecheckMs,
+      )
+      .all<db.AttemptRow>(),
+    db.tailorProbe(d, now),
+  ]);
+  if (!attempts.results.length && !tailoring.length)
     return { ok: true, idle: true, checked: 0, errors: 0 };
   const lock = await db.acquireLock(d, 'reconcile', now, 90000);
   if (!lock) return { ok: true, busy: true };
@@ -961,7 +965,22 @@ export async function reconcileSponsorships(v: SponsorMediaVars) {
           .run();
       }
     }
-    return { ok: true, checked, errors };
+    let tailored = 0;
+    for (const job of tailoring) {
+      if (Date.now() - now > 40000) break;
+      if (job.nextRound > 3) {
+        // Three rounds without a look: the logo is refused, and the receipt offers a new one.
+        await db.applyLook(d, job.assetId, {
+          kind: 'refused',
+          reason: "We couldn't finish tailoring this logo.",
+          round: 3,
+        });
+        continue;
+      }
+      await requestTailor(d, v, job.orderId, job.nextRound);
+      tailored++;
+    }
+    return { ok: true, checked, errors, tailored };
   } finally {
     await db.releaseLock(d, 'reconcile', lock);
   }

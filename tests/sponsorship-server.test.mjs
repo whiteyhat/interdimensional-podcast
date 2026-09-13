@@ -1411,3 +1411,56 @@ void test('a desk that refuses the request outright refuses the logo; a busy or 
     });
   }
 });
+
+void test('the reconciler re-requests a stuck look with the next round, gives up after the third, and upgrades a fallback', async (t) => {
+  const f = await fixture();
+  try {
+    t.mock.method(console, 'warn', () => {});
+    const desk = withDesk(f);
+    const MIN = 60000;
+    let clock = Date.now();
+    t.mock.method(Date, 'now', () => clock);
+    await db.createOrder(f.DB, { id: 'stuck', tokenHash: 'stuck', draft: CAP_DRAFT, now: clock });
+    f.DB.sql
+      .prepare("UPDATE sponsor_orders SET status='paid',paid_attempt_id='paid',paid_at=? WHERE id='stuck'")
+      .run(clock);
+    insertAsset(f, 'logo', capMeta({ tailor: { round: 1, requestedAt: clock } }));
+    // Inside the round's four minutes: idle, and not one row written.
+    const before = rowsWritten(f);
+    assert.deepEqual(await server.reconcileSponsorships(desk.v), { ok: true, idle: true, checked: 0, errors: 0 });
+    assert.equal(rowsWritten(f), before);
+    assert.equal(desk.tailors.length, 0);
+    clock += 4 * MIN + 1;
+    const result = await server.reconcileSponsorships(desk.v);
+    assert.equal(result.tailored, 1, JSON.stringify(result));
+    assert.equal(desk.tailors.length, 1);
+    assert.equal(desk.tailors[0].body.round, 2);
+    assert.equal(assetMeta(f).tailor.round, 2);
+    assert.equal((await server.reconcileSponsorships(desk.v)).idle, true, 'round 2 is in flight');
+    clock += 4 * MIN + 1;
+    await server.reconcileSponsorships(desk.v);
+    assert.equal(desk.tailors.length, 2);
+    assert.equal(desk.tailors[1].body.round, 3);
+    clock += 4 * MIN + 1;
+    await server.reconcileSponsorships(desk.v);
+    assert.equal(desk.tailors.length, 2, 'no fourth round');
+    const row = f.DB.sql.prepare('SELECT status,metadata FROM sponsor_assets WHERE id=?').get(ASSET);
+    assert.equal(row.status, 'refused');
+    assert.match(JSON.parse(row.metadata).reason, /couldn't finish tailoring/);
+    clock += 60 * MIN;
+    assert.equal((await server.reconcileSponsorships(desk.v)).idle, true, 'a refused logo is left alone');
+    // A first-round fallback gets one upgrade after ten minutes.
+    const fallback = qualifiedMeta();
+    fallback.look.fallback = 'cap-v1';
+    fallback.tailor = { round: 1, requestedAt: clock, outcome: 'look', at: clock };
+    insertAsset(f, 'qualified', fallback);
+    clock += 10 * MIN + 1;
+    await server.reconcileSponsorships(desk.v);
+    assert.equal(desk.tailors.length, 3);
+    assert.equal(desk.tailors[2].body.round, 2);
+    clock += 60 * MIN;
+    assert.equal((await server.reconcileSponsorships(desk.v)).idle, true, 'one upgrade only');
+  } finally {
+    f.restore();
+  }
+});
