@@ -1680,29 +1680,32 @@ void test(
   },
 );
 
-// These numbers live in three places: this desk, the site (lib/sponsor-media.ts) and Railway's
-// settings. Each promise below is one the docs make, and one broke when a side moved.
+// These numbers live in three places: this desk, the site (lib/sponsor-db.ts) and Railway's
+// settings. Each promise below is one the spec makes, and one broke when a side moved.
 void test('the desk’s clock agrees with the site’s retry and with Railway’s shutdown window', async () => {
-  const site = await readFile('lib/sponsor-media.ts', 'utf8');
-  const constant = (name) =>
-    Number(site.match(new RegExp(`const ${name} = (\\d+);`))?.[1]);
-  const budget = constant('RENDER_BUDGET_MS'),
-    floor = constant('RETRY_FLOOR_MS');
-  assert.ok(budget > 0 && floor > 0, 'the site’s budget and retry floor moved');
-  // Before its one retry the site waits what the desk asked, 1 s at least and 5 s at most, plus
-  // up to half a second of jitter, and it retries only while `floor` of its budget remains.
-  const shortestWait = 1_000,
-    longestWait = 5_500;
-  const { deadlineMs, minRunMs, drainMs } = MEDIA_DEFAULTS;
-  // Every answer, DEADLINE included, reaches the site before its own timeout does.
-  assert.ok(deadlineMs + 5_000 <= budget);
-  // A take turned away on arrival, because the queue is full or the desk is draining, is retried.
-  assert.ok(budget - longestWait >= floor);
-  // A take that waited in the queue until it could no longer finish hears BUSY with at most
-  // budget - (deadlineMs - minRunMs) of the site's clock left, under its floor even after the
-  // shortest wait. So the site does not retry it, as the docs and minRunMs's comment say. If this
-  // fails, the site now does: say so there.
-  assert.ok(budget - (deadlineMs - minRunMs) - shortestWait < floor);
+  const site = await readFile('lib/sponsor-db.ts', 'utf8');
+  const retry = Number(
+    site.match(/export const TAILOR_RETRY_MS = (\d+);/)?.[1],
+  );
+  assert.ok(retry > 0, 'the site’s tailor retry moved');
+  const {
+    tailorDeadlineMs,
+    tailorFitMs,
+    tailorSubmitMs,
+    judgeMs,
+    tailorTailMs,
+    callbackMs,
+    deadlineMs,
+    drainMs,
+  } = MEDIA_DEFAULTS;
+  // Three fits and the tail (the logo, the fallback print, the callback) make the deadline,
+  // so a job settles inside it by construction.
+  assert.equal(3 * tailorFitMs + tailorTailMs, tailorDeadlineMs);
+  // One fit is one edit and one verdict, each on its own clock, inside the fit's slot.
+  assert.ok(tailorSubmitMs + judgeMs <= tailorFitMs);
+  // The site asks for the next round only after the desk has settled and had a whole callback
+  // attempt to say so, so the reconciler never relies on in-flight dedupe.
+  assert.ok(tailorDeadlineMs + callbackMs <= retry);
   // A drain lasts until the last running take meets its deadline. The process then stops itself
   // well inside the window Railway gives a replaced deployment.
   const railway = JSON.parse(
@@ -1711,6 +1714,10 @@ void test('the desk’s clock agrees with the site’s retry and with Railway’
   assert.ok(drainMs >= deadlineMs);
   assert.ok(SHUTDOWN_MS > drainMs);
   assert.ok(SHUTDOWN_MS <= railway.deploy.drainingSeconds * 1000 - 10_000);
+  // A tailor cannot finish inside that window: a deploy aborts it at the drain and tells the
+  // site `shutdown`, which asks again after `retry`; nothing waits on a dead process.
+  assert.ok(drainMs < tailorDeadlineMs);
+  assert.ok(railway.deploy.drainingSeconds * 1000 < tailorDeadlineMs);
 });
 
 const PALETTES = {
