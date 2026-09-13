@@ -2,11 +2,12 @@ import { createRequire } from 'node:module';
 import BN from 'bn.js';
 import { Keypair, PublicKey, TransactionMessage, VersionedTransaction, ComputeBudgetProgram, AddressLookupTableAccount } from '@solana/web3.js';
 import { getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
+import { NETWORKS } from '../../lib/launch/config.mjs';
 const { PUMP_SDK } = createRequire(import.meta.url)('@pump-fun/pump-sdk');
 export async function launchFixture() {
   const creator = Keypair.generate(), mint = Keypair.generate();
   const a = { schemaVersion: 1, id: 'test-launch', revision: 1, kind: 'create', network: 'devnet',
-    genesisHash: 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1', creator: creator.publicKey.toBase58(), treasury: creator.publicKey.toBase58(),
+    genesisHash: NETWORKS.devnet, creator: creator.publicKey.toBase58(), treasury: creator.publicKey.toBase58(),
     mint: mint.publicKey.toBase58(), name: 'Test', symbol: 'TEST', metadataUri: 'https://ipfs.io/ipfs/test',
     buyLamports: '1000000', maxTotalLamports: '50000000', quotedTokens: '1000', estimatedTotalLamports: '11000000',
     blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: 1000 };
