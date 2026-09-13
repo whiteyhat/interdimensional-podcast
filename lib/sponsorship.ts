@@ -49,6 +49,8 @@ export type SponsorLook = {
   reason?: string;
   fallback?: 'cap-v1';
   round?: number;
+  /** When this logo's tailoring began: the payment, or the later swap for a different logo. */
+  since?: number;
 };
 export type SponsorDraft = {
   product: SponsorProduct;

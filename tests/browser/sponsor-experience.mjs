@@ -582,8 +582,13 @@ try {
     reason: 'This logo could not be dressed. Use a different logo.',
   };
   await cap
-    .locator('.sponsor-look-replace', { hasText: 'This logo could not be dressed.' })
+    .getByRole('heading', { name: 'Your logo needs a change' })
     .waitFor({ timeout: 10000 });
+  assert.equal(
+    await cap.locator('.sponsor-receipt > p:not(.sponsor-kicker)').first().innerText(),
+    'This logo could not be dressed. Use a different logo.',
+  );
+  await cap.getByRole('button', { name: 'Use a different logo' }).waitFor();
   assert.match(await card.locator('.sponsor-preview-label').innerText(), /TAILORING/);
   assert.equal(await card.evaluate((el) => el.classList.contains('tailoring')), false);
   assert.match(

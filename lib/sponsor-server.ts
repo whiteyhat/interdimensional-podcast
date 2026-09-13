@@ -426,13 +426,19 @@ function attemptView(a: db.AttemptRow, site: Site): SponsorAttempt {
   };
 }
 /** Where a cap order's look stands, for the receipt: tailoring, ready (fallback or not), or refused. */
-function lookState(asset: db.AssetRow): SponsorLook {
+function lookState(asset: db.AssetRow, o: db.OrderRow): SponsorLook {
   let meta: Partial<LookAssetMetadata> = {};
   try {
     meta = JSON.parse(asset.metadata);
   } catch {}
   const round = meta.look?.round ?? meta.tailor?.round;
-  const withRound = round === undefined ? {} : { round };
+  // The clock the receipt's waiting copy reads, the same one replaceLogo keeps: the payment,
+  // moved forward by a swap for a different logo. Read from the order, it survives a reload
+  // and a receipt opened on another device.
+  const withRound = {
+    ...(round === undefined ? {} : { round }),
+    ...(o.paid_at ? { since: Math.max(o.paid_at, o.updated_at) } : {}),
+  };
   if (asset.status === 'qualified')
     return {
       status: 'ready',
@@ -494,7 +500,7 @@ export async function sponsorReceipt(
     assetUrl: asset?.url ?? null,
     queuePosition,
     capAhead,
-    ...(o.product === 'cap' && asset ? { look: lookState(asset) } : {}),
+    ...(o.product === 'cap' && asset ? { look: lookState(asset, o) } : {}),
   };
 }
 async function authenticateReceipt(d: D1Database, raw: unknown) {

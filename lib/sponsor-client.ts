@@ -214,12 +214,15 @@ export function lookView(
   if (receipt.status === 'draft' || receipt.status === 'payment-pending')
     return null;
   const look = receipt.look;
+  // The site lets a paid cap that is not on air yet take a different logo, and refuses the
+  // swap once the cap is leased; the receipt offers it only while the site would accept it.
+  const canReplace = receipt.status === 'paid';
   if (look?.status === 'ready' && look.url)
     return {
       kind: 'ready',
       label: 'YOUR ON-AIR PASS',
       line: look.fallback ? LOOK_COPY.improving : null,
-      replace: !!look.fallback,
+      replace: !!look.fallback && canReplace,
       url: look.url,
     };
   if (look?.status === 'refused')
@@ -227,10 +230,17 @@ export function lookView(
       kind: 'refused',
       label: 'TAILORING',
       line: look.reason || LOOK_COPY.refused,
-      replace: true,
+      replace: canReplace,
       url: null,
     };
-  const since = Math.max(receipt.paidAt ?? now, replacedAt ?? 0);
+  // The clock starts at the payment, or at the swap for a different logo: the receipt's own
+  // `since` carries that across reloads and devices, `replacedAt` covers the moment before
+  // the next receipt arrives.
+  const since = Math.max(
+    receipt.paidAt ?? now,
+    look?.since ?? 0,
+    replacedAt ?? 0,
+  );
   const elapsed = now - since;
   return {
     kind: 'tailoring',
@@ -241,7 +251,7 @@ export function lookView(
         : elapsed < 600_000
           ? LOOK_COPY.anotherFit
           : LOOK_COPY.slow,
-    replace: elapsed >= 600_000,
+    replace: elapsed >= 600_000 && canReplace,
     url: null,
   };
 }

@@ -75,10 +75,10 @@ export function SponsorReceipt({
       </div>
       <p className="sponsor-kicker">{look?.label ?? 'YOUR ON-AIR PASS'}</p>
       <h3 aria-live="polite" aria-atomic="true">
-        {labels[stage]}
+        {look?.kind === 'refused' ? 'Your logo needs a change' : labels[stage]}
       </h3>
       <p>
-        {stage === 'tailoring' && look?.line
+        {(stage === 'tailoring' || look?.kind === 'refused') && look?.line
           ? look.line
           : stage === 'paused'
             ? 'Your remaining placement is safe. It resumes in the next live slot.'
@@ -111,7 +111,7 @@ export function SponsorReceipt({
           same check and the order keeps its place. The order is never lost. */}
       {look?.replace ? (
         <div className="sponsor-look-replace">
-          {stage !== 'tailoring' && look.line ? <p>{look.line}</p> : null}
+          {look.kind === 'ready' && look.line ? <p>{look.line}</p> : null}
           <input
             className="sr-only"
             ref={replaceFile}

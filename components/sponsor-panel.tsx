@@ -440,7 +440,11 @@ export function SponsorPanel() {
         assetId: uploaded.id,
       });
       setReplacedAt(Date.now());
-      if (result.receipt) updateReceipt(result.receipt);
+      if (result.receipt) {
+        updateReceipt(result.receipt);
+        // The card's swatch reads the draft, so the new logo shows at once, not at the next poll.
+        setDraft(result.receipt.draft);
+      }
     } catch (e) {
       setError(
         e instanceof Error ? e.message : 'Your logo could not be replaced.',

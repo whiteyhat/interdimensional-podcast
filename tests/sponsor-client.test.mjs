@@ -183,10 +183,24 @@ void test('the wardrobe card follows the order: the payment clock while tailorin
   });
   // A missing look on a paid cap is a tailor that has not reported yet, not a finished pass.
   assert.equal(C.lookView({ ...paid, look: undefined }, 1_000_000).kind, 'tailoring');
-  // A replaced logo restarts the clock from the replacement, not from the payment.
+  // A replaced logo restarts the clock from the replacement, not from the payment: the page
+  // knows the moment it swapped, and the receipt itself carries it for a reload elsewhere.
   assert.equal(
     C.lookView(paid, 1_000_000 + 700_000, 1_000_000 + 650_000).line,
     'Tailoring your tee and cap · usually one to two minutes',
+  );
+  assert.deepEqual(
+    C.lookView(
+      { ...paid, look: { status: 'tailoring', since: 1_000_000 + 650_000 } },
+      1_000_000 + 700_000,
+    ),
+    {
+      kind: 'tailoring',
+      label: 'TAILORING',
+      line: 'Tailoring your tee and cap · usually one to two minutes',
+      replace: false,
+      url: null,
+    },
   );
   const url = '/api/sponsorship/assets/asset-1?part=look&v=' + 'c'.repeat(64);
   assert.deepEqual(
@@ -229,6 +243,24 @@ void test('the wardrobe card follows the order: the payment clock while tailorin
     C.lookView({ ...paid, look: { status: 'refused' } }, 1_000_000).line,
     'This logo could not be dressed.',
   );
+  // The site takes a different logo only from a paid cap that is not on air yet, so the
+  // receipt stops offering it once the cap is leased, playing, paused or delivered.
+  for (const status of ['leased', 'prepared', 'playing', 'paused', 'delivered']) {
+    assert.equal(
+      C.lookView(
+        { ...paid, status, look: { status: 'ready', url, fallback: 'cap-v1' } },
+        1_000_000,
+      ).replace,
+      false,
+      status,
+    );
+    assert.equal(
+      C.lookView({ ...paid, status, look: { status: 'refused' } }, 1_000_000)
+        .replace,
+      false,
+      status,
+    );
+  }
   assert.equal(C.lookAlt('host'), 'Pepe wearing your tee and cap');
   assert.equal(C.lookAlt('guest'), 'Chad wearing your tee and cap');
   assert.equal(C.lookAlt(undefined), 'Pepe wearing your tee and cap');

@@ -1292,6 +1292,13 @@ void test('a cap receipt says where its look stands', async () => {
       }),
     );
     assert.deepEqual((await receipt()).look, { status: 'refused', reason: 'Too thin.', round: 3 });
+    // A paid cap carries the clock the panel's waiting copy reads: the payment, or the later
+    // swap for a different logo (replaceLogo moves updated_at), whichever is later.
+    await f.DB.prepare("UPDATE sponsor_orders SET status='paid',paid_at=?,updated_at=? WHERE id=?")
+      .bind(500, 700, 'cap-look')
+      .run();
+    insertAsset(f, 'logo', capMeta());
+    assert.deepEqual((await receipt()).look, { status: 'tailoring', since: 700 });
     // A spotlight has no look.
     const { receipt: spotlight } = await (
       await post(f.v, {
@@ -1409,7 +1416,9 @@ void test('the first proof that pays a cap asks the desk for its look exactly on
     const meta = assetMeta(f);
     assert.equal(meta.tailor.round, 1);
     assert.equal(typeof meta.tailor.requestedAt, 'number');
-    assert.deepEqual(paid.receipt.look, { status: 'tailoring', round: 1 });
+    // The look carries the clock the panel reads (the payment, moved by a logo swap).
+    assert.ok(typeof paid.receipt.look.since === 'number' && paid.receipt.look.since > 0, 'since');
+    assert.deepEqual(paid.receipt.look, { status: 'tailoring', round: 1, since: paid.receipt.look.since });
     // Confirming again, and a late second transfer, ask for nothing.
     await post(desk.v, { action: 'confirm', token: receipt.token, attemptId: q.attempt.id });
     await db.settlePayment(f.DB, q.attempt.id, { signature: 'late', payer: 'payer', blockTime: 150 }, Date.now());
@@ -1570,7 +1579,9 @@ void test('a paid buyer may swap the logo when the tailor gave up, stalled, or f
     assert.equal(swapped.status, 200, JSON.stringify(await swapped.clone().json()));
     const { receipt } = await swapped.json();
     assert.equal(receipt.draft.assetId, OTHER);
-    assert.deepEqual(receipt.look, { status: 'tailoring', round: 1 });
+    // The look carries the clock the panel reads (the payment, moved by a logo swap).
+    assert.ok(typeof receipt.look.since === 'number' && receipt.look.since > 0, 'since');
+    assert.deepEqual(receipt.look, { status: 'tailoring', round: 1, since: receipt.look.since });
     assert.deepEqual(desk.tailors.map((c) => [c.body.assetId, c.body.round]), [[OTHER, 1]]);
     // 3. A logo that is tailoring stays put for ten minutes, then may go.
     const early = await swap(THIRD);
