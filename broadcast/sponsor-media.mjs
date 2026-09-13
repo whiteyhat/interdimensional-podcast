@@ -976,6 +976,37 @@ export function falClient({ origin, key, log = () => {}, pollMs = 2_000 }) {
 }
 
 /**
+ * Every settlement of a tailor job is told to the site: one PUT to the asset's look URL, three
+ * attempts about half a minute apart at most. A 4xx is the site's verdict on the callback and is
+ * not retried; an outage or a timeout is. Returns the last status, 0 when nothing ever answered.
+ */
+export async function sendLook(
+  url,
+  { headers, body },
+  { attempts = 3, timeoutMs = 20_000, retryMs = 5_000 } = {},
+) {
+  let status = 0;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: 'PUT',
+        headers,
+        body,
+        redirect: 'error',
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      await response.body?.cancel().catch(() => {});
+      status = response.status;
+      if (response.ok || (status >= 400 && status < 500)) return status;
+    } catch {
+      status = 0;
+    }
+    if (attempt < attempts) await new Promise((done) => setTimeout(done, retryMs));
+  }
+  return status;
+}
+
+/**
  * One media desk: its queue, in-flight takes, result cache and the state it measured at boot.
  * The HTTP server and the tests both drive it through `handle`.
  */

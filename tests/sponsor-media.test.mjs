@@ -30,6 +30,7 @@ import {
   NEUTRALS,
   qualifiedTemplates,
   renderKey,
+  sendLook,
   SHUTDOWN_MS,
   startMediaServer,
   tailorPrompt,
@@ -1829,4 +1830,33 @@ void test('the fal client makes three hops, stops polling the moment it is aband
     /failed/,
   );
   falPlan.fail = false;
+});
+
+void test('a look callback is retried through outages, accepted once, and never retried after the site’s verdict', async () => {
+  const id = sha('callback-asset');
+  const url = `${SITE}/api/sponsorship/assets/${id}?part=look`;
+  const body = Buffer.concat([PNG_HEADER, Buffer.from('look-bytes')]);
+  const headers = {
+    authorization: `Bearer ${TOKEN}`,
+    'content-type': 'image/png',
+    'x-look-round': '1',
+    'x-look-outcome': 'look',
+    'x-look-sha256': sha(body),
+  };
+  const before = looks.length;
+  siteAnswers = [503, 503];
+  assert.equal(await sendLook(url, { headers, body }, { retryMs: 20, timeoutMs: 2_000 }), 200);
+  const mine = looks.slice(before).filter((l) => l.id === id);
+  assert.equal(mine.length, 3, 'two outages, then the answer');
+  assert.ok(mine[2].body.equals(body));
+  assert.equal(mine[2].headers['x-look-sha256'], sha(body));
+  assert.equal(mine[2].headers.authorization, `Bearer ${TOKEN}`);
+  assert.equal(mine[2].url, `/api/sponsorship/assets/${id}?part=look`);
+  siteAnswers = [401];
+  assert.equal(await sendLook(url, { headers, body }, { retryMs: 20, timeoutMs: 2_000 }), 401);
+  assert.equal(looks.slice(before).filter((l) => l.id === id).length, 4, 'a 4xx was retried');
+  siteAnswers = [];
+  const started = Date.now();
+  assert.equal(await sendLook('http://127.0.0.1:1/api/sponsorship/assets/x?part=look', { headers, body }, { retryMs: 20, timeoutMs: 500 }), 0);
+  assert.ok(Date.now() - started < 3_000, 'a dead site held the desk');
 });
