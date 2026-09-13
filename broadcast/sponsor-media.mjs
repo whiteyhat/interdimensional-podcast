@@ -2755,6 +2755,10 @@ export function configFromEnv(env = process.env) {
       env.NODE_ENV === 'test' ? env.SPONSOR_MEDIA_TEST_VIDEO_HOST : undefined,
     falOriginForTests:
       env.NODE_ENV === 'test' ? env.SPONSOR_MEDIA_TEST_FAL_HOST : undefined,
+    // A test drives the process with a stand-in interpreter that has no OpenCV to measure, so
+    // it is told how that stand-in decodes, the way in-process test desks are.
+    decoder:
+      env.NODE_ENV === 'test' ? env.SPONSOR_MEDIA_TEST_DECODER || undefined : undefined,
   };
 }
 

@@ -2242,3 +2242,62 @@ void test('the callback lands only on SPONSOR_SITE_ORIGIN, survives a short outa
   assert.equal(submissions.length, before, 'a remembered error bought a fit');
   siteAnswers = [];
 });
+
+void test('the desk process tailors a look with every stdout line a JSON object, and never prints its key', async (t) => {
+  const port = await freePort();
+  const workdir = await mkdtemp(join(scratch, 'cli-tailor-'));
+  const judgeFile = join(scratch, 'cli-judge.txt');
+  await writeFile(judgeFile, 'pass');
+  const python = await fakeWardrobe('cli-wardrobe', { judgeFile });
+  const child = spawn(process.execPath, ['broadcast/sponsor-media.mjs'], {
+    env: {
+      PATH: process.env.PATH,
+      PORT: String(port),
+      SPONSOR_MEDIA_WORKDIR: workdir,
+      SPONSOR_MEDIA_TOKEN: TOKEN,
+      SPONSOR_SITE_ORIGIN: SITE,
+      FAL_KEY: 'fal-cli-key',
+      WEARABLE_PYTHON: python,
+      NODE_ENV: 'test',
+      SPONSOR_MEDIA_TEST_VIDEO_HOST: FAL,
+      SPONSOR_MEDIA_TEST_FAL_HOST: FALQ,
+      SPONSOR_MEDIA_TEST_DECODER: 'direct',
+    },
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  t.after(() => child.kill('SIGKILL'));
+  const raw = [],
+    lines = [];
+  createInterface({ input: child.stdout }).on('line', (line) => {
+    raw.push(line);
+    try {
+      lines.push(JSON.parse(line));
+    } catch {
+      lines.push({ event: 'NOT_JSON', line });
+    }
+  });
+  const exited = new Promise((done) => child.once('close', done));
+  assert.ok(await until(() => lines.some((l) => l.event === 'boot'), 20_000), 'the desk never booted');
+  const boot = lines.find((l) => l.event === 'boot');
+  assert.equal(boot.ready, true);
+  assert.equal(boot.tailor, true);
+  assert.equal(boot.templateVersion, 'looks-v1');
+  assert.equal('capQualified' in boot, false);
+  const media = { url: `http://127.0.0.1:${port}` };
+  const order = tailorOrder();
+  const r = await post(media, order, { path: '/tailor' });
+  assert.equal(r.status, 202, r.bytes.toString());
+  assert.ok(await landed(order.assetId), 'the process never called the site back');
+  assert.ok(await until(() => lines.some((l) => l.event === 'tailor' && l.outcome === 'look'), 10_000));
+  child.kill('SIGTERM');
+  assert.equal(await exited, 0);
+  assert.ok(lines.some((l) => l.event === 'stopped'));
+  assert.deepEqual(lines.filter((l) => l.event === 'NOT_JSON'), [], 'something wrote to stdout past log()');
+  for (const line of raw) {
+    assert.ok(!line.includes('fal-cli-key'), 'the key was printed');
+    assert.ok(!line.includes(TOKEN), 'the token was printed');
+  }
+  const request = lines.find((l) => l.event === 'request' && l.path === '/tailor');
+  assert.equal(request.status, 202);
+  assert.equal(request.key, tailorKey(order.logoSha256, 'host', 1).slice(0, 12));
+});
