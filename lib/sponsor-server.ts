@@ -431,7 +431,9 @@ function lookState(asset: db.AssetRow, o: db.OrderRow): SponsorLook {
   try {
     meta = JSON.parse(asset.metadata);
   } catch {}
-  const round = meta.look?.round ?? meta.tailor?.round;
+  // Round 0 is "no round spent yet": a request the desk never took hands its round back.
+  const spentRound = meta.look?.round ?? meta.tailor?.round;
+  const round = spentRound ? spentRound : undefined;
   // The clock the receipt's waiting copy reads, the same one replaceLogo keeps: the payment,
   // moved forward by a swap for a different logo. Read from the order, it survives a reload
   // and a receipt opened on another device.
@@ -537,50 +539,67 @@ export async function requestTailor(
     const upgrade =
       asset.status === 'qualified' && !!meta.look?.fallback && round === 2;
     if (asset.status !== 'logo' && !upgrade) return;
+    const spent = meta.tailor?.round ?? 0;
     await db.markTailorRequested(d, asset.id, {
       round,
       requestedAt: Date.now(),
       ...(meta.tailor?.reasons ? { reasons: meta.tailor.reasons } : {}),
     });
-    const { url, token } = sponsorMediaConfig(v);
-    const response = await fetch(new URL('/tailor', url), {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${token}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        assetId: asset.id,
-        round,
-        target: draft.target,
-        logoUrl: meta.logoUrl,
-        logoSha256: meta.logoSha256,
-        palette: meta.palette,
-        projectName: draft.projectName ?? '',
-      }),
-      redirect: 'manual',
-      signal: AbortSignal.timeout(5000),
-    });
-    if (response.ok) return;
-    const body = (await response.json().catch(() => ({}))) as {
-      code?: string;
-      error?: string;
-    };
-    if (response.status >= 400 && response.status < 500 && response.status !== 409) {
-      await db.applyLook(d, asset.id, {
-        kind: 'refused',
-        reason:
-          body.error ||
-          `The tailor refused this logo (${body.code ?? response.status}).`,
-        round,
+    let refused: { status: number; code: string } | null = null;
+    try {
+      // A site with no desk configured is one more desk that did not take the job.
+      const { url, token } = sponsorMediaConfig(v);
+      const response = await fetch(new URL('/tailor', url), {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          assetId: asset.id,
+          round,
+          target: draft.target,
+          logoUrl: meta.logoUrl,
+          logoSha256: meta.logoSha256,
+          palette: meta.palette,
+          projectName: draft.projectName ?? '',
+        }),
+        redirect: 'manual',
+        signal: AbortSignal.timeout(5000),
       });
-      return;
+      if (response.ok) return;
+      const body = (await response.json().catch(() => ({}))) as {
+        code?: string;
+      };
+      refused = { status: response.status, code: body.code ?? '' };
+    } catch (e) {
+      refused = {
+        status: 0,
+        code: e instanceof Error ? e.message : 'request failed',
+      };
     }
-    console.warn(
-      '[sponsorship] tailor deferred',
+    // Only the desk's callback refuses a logo. An answer to this request refuses the request:
+    // 503 while the desk boots, 409 while it is full, 4xx because this site's body or its
+    // configuration is wrong, 401 for a stale token, nothing at all when it is down. None of
+    // them looked at the logo, so the round is handed back and the reconciler asks again in
+    // four minutes; otherwise a desk that was down for twelve minutes would spend every round
+    // and refuse a logo nobody ever saw. An upgrade keeps its round: the paid order already
+    // wears a look and does not need another try.
+    await db.markTailorRequested(d, asset.id, {
+      round: upgrade ? round : spent,
+      requestedAt: Date.now(),
+      ...(meta.tailor?.reasons ? { reasons: meta.tailor.reasons } : {}),
+    });
+    // A 4xx is this site's own bug or configuration, not a passing condition: say so loudly.
+    const ourFault =
+      refused.status >= 400 && refused.status < 500 && refused.status !== 409;
+    (ourFault ? console.error : console.warn)(
+      ourFault
+        ? '[sponsorship] the tailor refused this request'
+        : '[sponsorship] tailor deferred',
       asset.id,
-      response.status,
-      body.code ?? '',
+      refused.status,
+      refused.code,
     );
   } catch (e) {
     console.warn(

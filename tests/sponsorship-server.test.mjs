@@ -1439,7 +1439,7 @@ void test('a site without a desk still takes the payment, and warns', async (t) 
       warned.mock.calls.some((c) => c.arguments[0] === '[sponsorship] tailor deferred'),
       'the deferral is logged',
     );
-    assert.equal(assetMeta(f).tailor.round, 1, 'the reconciler will ask again');
+    assert.equal(assetMeta(f).tailor.round, 0, 'no round was spent: no desk took the job');
   } finally {
     f.restore();
   }
@@ -1459,31 +1459,92 @@ void test('a second order for a logo whose look exists asks the desk for nothing
   }
 });
 
-void test('a desk that refuses the request outright refuses the logo; a busy or absent one is asked again later', async (t) => {
-  t.mock.method(console, 'warn', () => {});
-  for (const [name, answer, status] of [
+// Only the desk's callback refuses a logo. An answer to the request refuses the request: a
+// malformed body, a stale token, a desk that is full, unconfigured or down. None of them looked
+// at the logo, so none of them may spend the buyer's round or end their order.
+void test('an answer that refuses the request never refuses the logo, and spends no round', async (t) => {
+  const warned = t.mock.method(console, 'warn', () => {});
+  const cried = t.mock.method(console, 'error', () => {});
+  for (const [name, answer, loud] of [
     [
-      'bad hash',
+      'the site sent a malformed request',
       () => Response.json({ code: 'LOGO_HASH', error: 'The logo does not match its hash.' }, { status: 400 }),
-      'refused',
+      true,
     ],
-    ['busy', () => Response.json({ code: 'BUSY', retryAfterMs: 5000 }, { status: 409 }), 'logo'],
-    ['down', () => Promise.reject(new TypeError('fetch failed')), 'logo'],
+    ['a stale token', () => Response.json({ code: 'AUTH' }, { status: 401 }), true],
+    ['a desk with no fal key', () => Response.json({ code: 'TAILOR_UNAVAILABLE' }, { status: 503 }), false],
+    ['busy', () => Response.json({ code: 'BUSY', retryAfterMs: 5000 }, { status: 409 }), false],
+    ['down', () => Promise.reject(new TypeError('fetch failed')), false],
   ]) {
     await t.test(name, async () => {
       const f = await fixture();
       try {
+        warned.mock.resetCalls();
+        cried.mock.resetCalls();
         const desk = withDesk(f, answer);
         insertAsset(f, 'logo', capMeta());
         await buyCap(f, desk.v);
         const row = f.DB.sql.prepare('SELECT status,metadata FROM sponsor_assets WHERE id=?').get(ASSET);
-        assert.equal(row.status, status);
-        if (status === 'refused') assert.match(JSON.parse(row.metadata).reason, /does not match/);
-        assert.equal(JSON.parse(row.metadata).tailor.round, 1);
+        assert.equal(row.status, 'logo', 'the buyer keeps their logo and their place');
+        const meta = JSON.parse(row.metadata);
+        assert.equal(meta.reason, undefined, 'nothing was said about the logo');
+        assert.equal(meta.tailor.round, 0, 'the round is handed back');
+        assert.ok(meta.tailor.requestedAt > 0, 'and the reconciler waits its four minutes');
+        assert.equal(meta.tailor.outcome, undefined);
+        // A 4xx is this site's own bug: it is reported as an error, not as a passing condition.
+        assert.equal(
+          cried.mock.calls.some((c) => c.arguments[0] === '[sponsorship] the tailor refused this request'),
+          loud,
+          'a 4xx must be reported as this site\'s own fault',
+        );
       } finally {
         f.restore();
       }
     });
+  }
+});
+
+// Three rounds the desk actually took, and no look: the logo is refused and a new one offered.
+void test('only rounds the desk took are spent, so a desk that was down never refuses a logo', async (t) => {
+  const f = await fixture();
+  try {
+    t.mock.method(console, 'warn', () => {});
+    t.mock.method(console, 'error', () => {});
+    const MIN = 60000;
+    let clock = Date.now();
+    t.mock.method(Date, 'now', () => clock);
+    let up = false;
+    const desk = withDesk(f, () =>
+      up ? Response.json({ queued: true }, { status: 202 }) : Promise.reject(new TypeError('fetch failed')),
+    );
+    await db.createOrder(f.DB, { id: 'down', tokenHash: 'down', draft: CAP_DRAFT, now: clock });
+    f.DB.sql
+      .prepare("UPDATE sponsor_orders SET status='paid',paid_attempt_id='paid',paid_at=? WHERE id='down'")
+      .run(clock);
+    insertAsset(f, 'logo', capMeta());
+    // Twelve minutes with the desk down: three passes, no round spent, nothing refused.
+    for (let i = 0; i < 3; i++) {
+      clock += 4 * MIN + 1;
+      await server.reconcileSponsorships(desk.v);
+    }
+    assert.equal(desk.tailors.length, 3, 'it kept asking');
+    assert.deepEqual(desk.tailors.map((t) => t.body.round), [1, 1, 1], 'always the first round');
+    let row = f.DB.sql.prepare('SELECT status,metadata FROM sponsor_assets WHERE id=?').get(ASSET);
+    assert.equal(row.status, 'logo', 'a logo nobody looked at is never refused');
+    // The desk comes back and takes three rounds that land nothing: now the logo is refused.
+    up = true;
+    for (const round of [1, 2, 3]) {
+      clock += 4 * MIN + 1;
+      await server.reconcileSponsorships(desk.v);
+      assert.equal(desk.tailors.at(-1).body.round, round);
+    }
+    clock += 4 * MIN + 1;
+    await server.reconcileSponsorships(desk.v);
+    row = f.DB.sql.prepare('SELECT status,metadata FROM sponsor_assets WHERE id=?').get(ASSET);
+    assert.equal(row.status, 'refused');
+    assert.match(JSON.parse(row.metadata).reason, /couldn’t finish tailoring|couldn't finish tailoring/);
+  } finally {
+    f.restore();
   }
 });
 
