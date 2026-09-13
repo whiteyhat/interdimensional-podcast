@@ -453,6 +453,9 @@ void test('the media upload is exactly what its Dockerfile copies, plus its two 
     'broadcast/sponsor-media.mjs',
     'scripts/wearable-render.py',
     'scripts/wearable_panel.py',
+    'scripts/wardrobe.py',
+    'public/pepe-cartoon.png',
+    'public/gigachad-cartoon.png',
     'public/wearables/caps-v1-qualification.json',
     'public/wearables/pepe-cap-v1.json',
     'public/wearables/pepe-cap-v1.png',
@@ -490,6 +493,17 @@ void test('the media upload is exactly what its Dockerfile copies, plus its two 
     String(listed.stdout).trim().split('\n').sort(byName),
     names,
   );
+});
+
+void test('every Python script the desk spawns, and every still it judges against, is in the media upload', async () => {
+  const desk = await readFile(join(REPO, 'broadcast/sponsor-media.mjs'), 'utf8');
+  const scripts = new Set([...desk.matchAll(/'(scripts\/[\w-]+\.py)'/g)].map((m) => m[1]));
+  const stills = new Set([...desk.matchAll(/'(public\/[\w-]+\.png)'/g)].map((m) => m[1]));
+  assert.ok(scripts.has('scripts/wardrobe.py') && scripts.has('scripts/wearable-render.py'));
+  assert.ok(stills.has('public/pepe-cartoon.png') && stills.has('public/gigachad-cartoon.png'));
+  const files = await media.uploadFiles('media');
+  for (const path of [...scripts, ...stills])
+    assert.ok(files.includes(path), `${path} is named by the desk but not uploaded`);
 });
 
 void test('the reconciler upload is its Dockerfile, its config and its one script', async () => {
