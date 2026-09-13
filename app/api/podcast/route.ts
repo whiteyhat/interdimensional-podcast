@@ -303,8 +303,12 @@ export async function POST(request: Request) {
           asset.sha256 !== renderLine.wardrobe.designHash ||
           asset.templateVersion !== renderLine.wardrobe.templateVersion
         )
-          throw Error(
+          // A replaced look is the site's refusal, not a generation failure: the studio
+          // drops the dressing at once instead of buying takes that can only fail the same way.
+          throw new SponsorError(
+            409,
             'The wardrobe revision does not match this purchased cap.',
+            'ASSET',
           );
         renderLine = { ...renderLine, gesture: undefined };
       }
