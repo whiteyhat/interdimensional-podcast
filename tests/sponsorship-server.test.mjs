@@ -1464,3 +1464,90 @@ void test('the reconciler re-requests a stuck look with the next round, gives up
     f.restore();
   }
 });
+
+void test('a paid buyer may swap the logo when the tailor gave up, stalled, or fell back', async (t) => {
+  const f = await fixture();
+  try {
+    t.mock.method(console, 'warn', () => {});
+    const desk = withDesk(f);
+    const MIN = 60000;
+    let clock = Date.now();
+    t.mock.method(Date, 'now', () => clock);
+    const OTHER = 'e'.repeat(64),
+      THIRD = 'a'.repeat(63) + 'b';
+    const metaFor = (id, extra = {}) =>
+      capMeta({
+        logoSha256: id.slice(0, 1).repeat(64),
+        logoUrl: `https://show.test/api/sponsorship/assets/${id}?part=logo`,
+        ...extra,
+      });
+    const token = 'f'.repeat(64);
+    await db.createOrder(f.DB, {
+      id: 'swap',
+      tokenHash: await server.hashSponsorToken(token),
+      draft: CAP_DRAFT,
+      now: clock,
+    });
+    const swap = (assetId) => post(desk.v, { action: 'replaceLogo', token, assetId });
+    const current = () =>
+      JSON.parse(f.DB.sql.prepare('SELECT draft FROM sponsor_orders WHERE id=?').get('swap').draft).assetId;
+    insertAsset(f, 'refused', capMeta({ reason: 'Too thin.' }));
+    insertAsset(f, 'logo', metaFor(OTHER), OTHER);
+    insertAsset(f, 'logo', metaFor(THIRD), THIRD);
+    // 1. Not before it is paid.
+    assert.equal((await swap(OTHER)).status, 409);
+    f.DB.sql
+      .prepare("UPDATE sponsor_orders SET status='paid',paid_attempt_id='paid',paid_at=?,updated_at=? WHERE id='swap'")
+      .run(clock, clock);
+    // 2. A refused logo is swapped at once; the new one starts its rounds fresh.
+    const swapped = await swap(OTHER);
+    assert.equal(swapped.status, 200, JSON.stringify(await swapped.clone().json()));
+    const { receipt } = await swapped.json();
+    assert.equal(receipt.draft.assetId, OTHER);
+    assert.deepEqual(receipt.look, { status: 'tailoring', round: 1 });
+    assert.deepEqual(desk.tailors.map((c) => [c.body.assetId, c.body.round]), [[OTHER, 1]]);
+    // 3. A logo that is tailoring stays put for ten minutes, then may go.
+    const early = await swap(THIRD);
+    assert.equal(early.status, 409);
+    assert.match((await early.json()).error, /still being tailored/);
+    clock += 10 * MIN + 1;
+    assert.equal((await swap(THIRD)).status, 200);
+    assert.equal(current(), THIRD);
+    assert.equal(desk.tailors.length, 2);
+    // 4. The new logo must itself be dressable for this host: the tailor's reason comes back.
+    clock += 10 * MIN + 1;
+    const bad = await swap(ASSET);
+    assert.equal(bad.status, 409);
+    assert.match((await bad.json()).error, /Too thin/);
+    assert.equal(current(), THIRD);
+    // 5. A fallback look may be improved on; a real look may not be swapped away.
+    const fallback = { ...qualifiedMeta(), ...metaFor(THIRD) };
+    fallback.look = { ...qualifiedMeta().look, fallback: 'cap-v1' };
+    insertAsset(f, 'qualified', fallback, THIRD);
+    assert.equal((await swap(OTHER)).status, 200, 'a fallback can be improved on');
+    assert.equal(current(), OTHER);
+    assert.equal(desk.tailors.length, 3);
+    clock += 10 * MIN + 1;
+    insertAsset(f, 'qualified', { ...qualifiedMeta(), ...metaFor(THIRD) }, THIRD);
+    const ready = await swap(THIRD);
+    assert.equal(ready.status, 200, 'a finished look is taken as it is');
+    assert.equal((await ready.json()).receipt.look.status, 'ready');
+    assert.equal(desk.tailors.length, 3, 'nothing to tailor for a finished look');
+    assert.equal((await swap(OTHER)).status, 409, 'a real look is not swapped away');
+    // 6. The same logo again resets its rounds instead of changing the order.
+    insertAsset(
+      f,
+      'logo',
+      metaFor(THIRD, { tailor: { round: 3, requestedAt: clock - 30 * MIN, outcome: 'deadline', at: clock - 20 * MIN } }),
+      THIRD,
+    );
+    clock += 10 * MIN + 1;
+    assert.equal((await swap(THIRD)).status, 200);
+    assert.equal(current(), THIRD);
+    assert.equal(desk.tailors.length, 4);
+    assert.equal(desk.tailors[3].body.assetId, THIRD);
+    assert.equal(desk.tailors[3].body.round, 1);
+  } finally {
+    f.restore();
+  }
+});

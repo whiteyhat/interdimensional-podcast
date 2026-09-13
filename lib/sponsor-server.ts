@@ -1061,6 +1061,63 @@ async function studioProxy(
   }
   return response(data, upstream.status);
 }
+/** How long a logo may keep tailoring before the buyer may swap it for another. */
+const REPLACE_AFTER_MS = 600000;
+/**
+ * A paid buyer picks a different logo when the tailor gave up on theirs, has been at it for
+ * more than ten minutes, or could only manage the fallback cap print. The new logo must pass
+ * the order gate for the same host; the order's draft then names it and round 1 starts. The
+ * same logo again resets its rounds instead.
+ */
+async function replaceLogo(
+  d: D1Database,
+  v: SponsorMediaVars,
+  order: db.OrderRow,
+  assetId: string,
+) {
+  const draft = JSON.parse(order.draft) as SponsorDraft;
+  if (order.product !== 'cap' || order.status !== 'paid')
+    throw new SponsorError(
+      409,
+      'A logo can be changed on a paid cap that is not on air yet.',
+    );
+  if (!/^[a-f0-9]{64}$/.test(assetId))
+    throw new SponsorError(400, 'Choose a logo to use instead.');
+  await qualifiedSponsorAsset(d, { ...draft, assetId }, undefined, 'order');
+  const current = draft.assetId ? await db.getAsset(d, draft.assetId) : null;
+  let meta: Partial<LookAssetMetadata> = {};
+  try {
+    meta = current ? JSON.parse(current.metadata) : {};
+  } catch {}
+  const now = Date.now();
+  const since = Math.max(order.paid_at ?? 0, order.updated_at);
+  const swappable =
+    !current ||
+    current.status === 'refused' ||
+    (current.status === 'logo' && now - since > REPLACE_AFTER_MS) ||
+    (current.status === 'qualified' && !!meta.look?.fallback);
+  if (!swappable)
+    throw new SponsorError(
+      409,
+      'This logo is still being tailored. Give it a few more minutes.',
+    );
+  const changed = await d
+    .prepare(
+      `UPDATE sponsor_orders SET draft=json_set(draft,'$.assetId',?),updated_at=? WHERE id=? AND status='paid'`,
+    )
+    .bind(assetId, now, order.id)
+    .run();
+  if (changed.meta.changes !== 1)
+    throw new SponsorError(409, 'This cap just went on air.', 'LEASE');
+  if (current && current.id === assetId)
+    await d
+      .prepare(
+        `UPDATE sponsor_assets SET metadata=json_remove(metadata,'$.tailor') WHERE id=? AND status='logo'`,
+      )
+      .bind(assetId)
+      .run();
+  await requestTailor(d, v, order.id, 1);
+}
 export async function handleSponsorship(
   request: Request,
   v: SponsorMediaVars,
@@ -1287,7 +1344,9 @@ export async function handleSponsorship(
           token,
         ),
       );
-    if (action === 'confirm' && !body.attemptId) {
+    if (action === 'replaceLogo') {
+      await replaceLogo(d, v, order, string(body.assetId, 100));
+    } else if (action === 'confirm' && !body.attemptId) {
       const attempts = await d
         .prepare(
           'SELECT * FROM sponsor_payment_attempts WHERE order_id=? ORDER BY last_checked_at ASC LIMIT 5',
