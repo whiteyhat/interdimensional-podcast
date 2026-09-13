@@ -39,7 +39,14 @@ function database() {
       sql.exec('BEGIN');
       try {
         const out = [];
-        for (const s of statements) out.push(await s.all());
+        for (const s of statements) {
+          const result = await s.all();
+          // D1 reports the rows each statement changed; settlePayment reads it.
+          out.push({
+            ...result,
+            meta: { changes: sql.prepare('SELECT changes() AS n').get().n },
+          });
+        }
         sql.exec('COMMIT');
         return out;
       } catch (e) {
@@ -493,5 +500,35 @@ void test('the producer lease reports a live studio while the request queue sits
     lease.seenAt,
     10_000,
     'the lease carries the liveness the public page asks about',
+  );
+});
+void test('settlement says whether this is the payment that paid the order', async () => {
+  const d = await fixture();
+  const first = await db.settlePayment(
+    d,
+    'a1',
+    { signature: 'sig1', payer: 'payer', blockTime: 150 },
+    300,
+  );
+  assert.deepEqual(first, { orderId: 'order', orderPaidNow: true });
+  // The same proof again, and a late second transfer: recorded, but they paid nothing new.
+  const again = await db.settlePayment(
+    d,
+    'a1',
+    { signature: 'sig1', payer: 'payer', blockTime: 150 },
+    300,
+  );
+  assert.deepEqual(again, { orderId: 'order', orderPaidNow: false });
+  const late = await db.settlePayment(
+    d,
+    'a1',
+    { signature: 'sig2', payer: 'payer', blockTime: 151 },
+    301,
+  );
+  assert.deepEqual(late, { orderId: 'order', orderPaidNow: false });
+  assert.equal(
+    d.sql.prepare('SELECT count(*) n FROM sponsor_payments').get().n,
+    2,
+    'both transfers are still on record',
   );
 });

@@ -302,8 +302,8 @@ export async function settlePayment(
   attemptId: string,
   p: { signature: string; payer: string; blockTime: number },
   now: number,
-) {
-  await d.batch([
+): Promise<{ orderId: string; orderPaidNow: boolean }> {
+  const rows = await d.batch([
     d
       .prepare(
         `INSERT OR IGNORE INTO sponsor_payments(signature,attempt_id,order_id,payer,block_time,verified_at) SELECT ?,id,order_id,?,?,? FROM sponsor_payment_attempts WHERE id=?`,
@@ -337,6 +337,16 @@ export async function settlePayment(
     // and there are no refunds: it stays recorded in sponsor_payments with is_late=1, which is
     // the whole record of it.
   ]);
+  // The order UPDATE changes one row the first time a proof pays the order, and none for a
+  // replay or a late second transfer. That one moment is what starts the tailor.
+  const attempt = await d
+    .prepare('SELECT order_id FROM sponsor_payment_attempts WHERE id=?')
+    .bind(attemptId)
+    .first<{ order_id: string }>();
+  return {
+    orderId: attempt?.order_id ?? '',
+    orderPaidNow: rows[1]?.meta?.changes === 1,
+  };
 }
 export function fulfillment(row: OrderRow): SponsorFulfillment {
   return {
