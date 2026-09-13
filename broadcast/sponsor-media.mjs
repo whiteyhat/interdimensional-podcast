@@ -64,6 +64,8 @@ const DEFAULTS = {
   minRunMs: 30_000,
   previewMs: 30_000,
   previewConcurrency: 2,
+  // A logo is normalized while the buyer waits at the upload field; the site gives it 10 s.
+  logoMs: 10_000,
   cacheTtlMs: 10 * 60_000,
   cacheMax: 32,
   // A failed boot check is run again after this long, until it passes. One that passed is not
@@ -549,6 +551,56 @@ function spawnGroup(command, args, signal, onSpawn) {
     child.stderr.on('error', () => {});
     child.once('error', () => finish(null, null));
     child.once('exit', finish);
+    signal.addEventListener('abort', group, { once: true });
+    if (signal.aborted) group();
+    if (child.pid) onSpawn(child.pid);
+  });
+}
+
+// Like spawnGroup, but the script answers on stdout: scripts/wardrobe.py prints one JSON object
+// as its last line. 'close', not 'exit', so that line has been read before the answer is parsed.
+function spawnCapture(command, args, signal, onSpawn) {
+  return new Promise((done) => {
+    let child;
+    try {
+      child = spawn(command, args, {
+        cwd: ROOT,
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: rendererEnv(),
+      });
+    } catch {
+      done({ code: null, signal: null, stdout: '', stderr: 'spawn failed' });
+      return;
+    }
+    let stdout = '',
+      stderr = '',
+      finished = false;
+    const group = () => {
+      if (!child.pid) return;
+      try {
+        process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        /* Already gone. */
+      }
+    };
+    const finish = (code, exitSignal) => {
+      if (finished) return;
+      finished = true;
+      signal.removeEventListener('abort', group);
+      group();
+      done({ code, signal: exitSignal, stdout, stderr });
+    };
+    child.stdout.on('data', (chunk) => {
+      stdout = (stdout + chunk).slice(-65536);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr = (stderr + chunk).slice(-4000);
+    });
+    child.stdout.on('error', () => {});
+    child.stderr.on('error', () => {});
+    child.once('error', () => finish(null, null));
+    child.once('close', finish);
     signal.addEventListener('abort', group, { once: true });
     if (signal.aborted) group();
     if (child.pid) onSpawn(child.pid);
@@ -1068,6 +1120,39 @@ export function createMediaService(options = {}) {
       'The media worker could not process this file.',
     );
   }
+  // scripts/wardrobe.py: normalize, judge or zones. A verdict ({ ok: false, code }) is the
+  // caller's to act on; anything else that is not { ok: true } is this machine failing.
+  async function wardrobe(args, signal, dir) {
+    const outcome = await spawnCapture(
+      cfg.python || 'python3',
+      ['scripts/wardrobe.py', ...args],
+      signal,
+      (pid) => cfg.onSpawn?.({ pid, mode: `wardrobe-${args[0]}`, dir }),
+    );
+    if (signal.aborted) throw stopped(String(signal.reason));
+    let result = null;
+    try {
+      result = JSON.parse(outcome.stdout.trim().split('\n').pop());
+    } catch {
+      /* No JSON: the script died before it could explain itself. */
+    }
+    if (outcome.code === 0 && result && typeof result.ok === 'boolean')
+      return result;
+    log({
+      level: 'error',
+      event: 'wardrobe',
+      mode: args[0],
+      exit: outcome.code,
+      signal: outcome.signal,
+      code: result?.code,
+      stderr: outcome.stderr.slice(-600) || undefined,
+    });
+    throw new MediaError(
+      503,
+      'RENDERER',
+      'The media worker could not process this file.',
+    );
+  }
 
   // Hand the renderer the take as the qualified decoder would see it: unchanged where OpenCV
   // already decodes that way, otherwise converted first.
@@ -1380,6 +1465,92 @@ export function createMediaService(options = {}) {
     }
   }
 
+  const LOGO_CODES = new Set([
+    'INVALID_IMAGE',
+    'EMPTY_IMAGE',
+    'LOGO_TOO_THIN',
+    'LOGO_TOO_SMALL',
+    'LOGO_TOO_LARGE',
+  ]);
+  // The only image codec in the system. The site forwards the raw upload and stores what comes
+  // back: a knocked-out PNG, its hash and its palette. No fal, no money, no verdict on the look.
+  async function handleLogo(request, url) {
+    const target = url.searchParams.get('target') || 'host';
+    if (!templates[target])
+      throw new MediaError(400, 'TARGET', 'Choose a supported host.');
+    if (previews >= cfg.previewConcurrency) throw busy(1_000);
+    previews++;
+    const clock = new AbortController(),
+      timer = setTimeout(() => clock.abort('deadline'), cfg.logoMs);
+    const signal = AbortSignal.any([clock.signal, request.signal]);
+    let dir;
+    try {
+      const upload = await bytesLimited(request, MAX_UPLOAD);
+      if (!imageKind(upload))
+        throw new MediaError(
+          422,
+          'INVALID_IMAGE',
+          'Use a color PNG, JPG, or WebP image.',
+        );
+      await prepared;
+      dir = await mkdtemp(join(workdir, 'job-'));
+      const input = join(dir, 'upload'),
+        normalized = join(dir, 'logo.png');
+      await writeFile(input, upload);
+      const result = await wardrobe(
+        ['normalize', '--input', input, '--output', normalized],
+        signal,
+        dir,
+      );
+      if (!result.ok) {
+        if (LOGO_CODES.has(result.code))
+          throw new MediaError(
+            422,
+            result.code,
+            String(result.message || result.code).slice(0, 300),
+          );
+        log({ level: 'error', event: 'wardrobe', mode: 'normalize', code: result.code });
+        throw new MediaError(
+          503,
+          'RENDERER',
+          'The media worker could not process this file.',
+        );
+      }
+      const logo = await readFile(normalized);
+      if (logo.length > MAX_LOGO)
+        throw new MediaError(
+          422,
+          'LOGO_TOO_LARGE',
+          `This artwork is too detailed to print; use a simpler PNG under ${MAX_LOGO / 1024 / 1024} MB.`,
+        );
+      if (hash(logo) !== result.sha256)
+        throw new MediaError(
+          503,
+          'RENDERER',
+          'The normalized logo failed its integrity check.',
+        );
+      return reply({
+        logo: logo.toString('base64'),
+        logoSha256: result.sha256,
+        width: result.width,
+        height: result.height,
+        palette: result.palette,
+        target,
+      });
+    } catch (error) {
+      if (clock.signal.aborted && error?.status === 503)
+        throw new MediaError(
+          503,
+          'DEADLINE',
+          'Artwork took too long to prepare.',
+        );
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      previews--;
+      if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
   async function handlePreview(request, url) {
     const target = url.searchParams.get('target') || 'host',
       kind = url.searchParams.get('kind') || 'logo';
@@ -1498,15 +1669,18 @@ export function createMediaService(options = {}) {
         );
       const known =
         request.method === 'POST' &&
-        (url.pathname === '/preview' || url.pathname === '/render');
+        ['/preview', '/render', '/logo'].includes(url.pathname);
       if (!known) throw new MediaError(404, 'NOT_FOUND', 'Unknown operation.');
       // A draining desk takes nothing new. BUSY is what the site retries, and by then Railway
       // routes the retry to the replacement.
       if (closing) throw busy(2_000);
       if (url.pathname === '/render')
         return await handleRender(request, url, meta, arrivedAt);
-      // A preview in progress is a buyer choosing artwork; a drain lets it finish too.
-      const work = handlePreview(request, url);
+      // A preview or a logo in progress is a buyer choosing artwork; a drain lets it finish too.
+      const work =
+        url.pathname === '/logo'
+          ? handleLogo(request, url)
+          : handlePreview(request, url);
       previewing.add(work);
       const done = () => previewing.delete(work);
       void work.then(done, done);

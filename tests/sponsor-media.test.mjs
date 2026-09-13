@@ -250,6 +250,67 @@ const TOOLS = {
   ffmpeg: '7.1',
   ffprobe: '7.1',
 };
+const PNG_HEADER = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+// Stands in for both Python scripts when a desk is driven without OpenCV. scripts/wardrobe.py
+// answers on stdout; scripts/wearable-render.py through its report file. What the judge says
+// about each fit is read from plan.judgeFile at run time (comma-separated: pass | DRIFT | INK |
+// GEOMETRY, one per call, the last one repeating), a refusal for normalize from plan.codeFile.
+async function fakeWardrobe(name, plan = {}) {
+  const path = join(scratch, `${name}.cjs`);
+  const source = `#!/usr/bin/env node
+const fs = require('node:fs');
+const { createHash } = require('node:crypto');
+const plan = ${JSON.stringify(plan)};
+const argv = process.argv.slice(2);
+const mode = argv[1];
+const arg = (name) => argv[argv.indexOf(name) + 1];
+const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const told = (file) => (file && fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim() : '');
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const PALETTE = { clusters: [{ hex: '#1B2A6B', share: 0.8 }, { hex: '#F5F5F5', share: 0.2 }], primary: '#1B2A6B', secondary: '#F5F5F5', accent: '#1B2A6B', monochrome: false };
+const say = (value) => { process.stdout.write(JSON.stringify(value) + '\\n'); process.exit(0); };
+// The desk's boot probe (\`python -c PROBE\`) must see the tools it expects, or \`ready\` is false.
+if (argv[0] === '-c') say({ python: '3.12', cv2: '5.0.0', numpy: '2.5.3' });
+if (argv[0] === 'scripts/wardrobe.py') {
+  if (mode === 'zones') say({ ok: true, zones: {}, wearers: {}, pad: 24 });
+  if (mode === 'normalize') {
+    const code = told(plan.codeFile);
+    if (code) say({ ok: false, code, message: 'refused by the stand-in' });
+    const bytes = fs.readFileSync(arg('--input'));
+    fs.writeFileSync(arg('--output'), bytes);
+    say({ ok: true, sha256: sha(bytes), width: 512, height: 512, palette: PALETTE });
+  }
+  if (mode === 'judge') {
+    const verdicts = told(plan.judgeFile).split(',').filter(Boolean);
+    const n = Number(told(plan.countFile) || 0);
+    if (plan.countFile) fs.writeFileSync(plan.countFile, String(n + 1));
+    const verdict = verdicts[n] || verdicts[verdicts.length - 1] || 'pass';
+    if (verdict === 'GEOMETRY') say({ ok: false, code: 'GEOMETRY', message: 'The fit is 1024x576, not 1376x768.' });
+    const bytes = Buffer.concat([PNG, Buffer.from('look:'), fs.readFileSync(arg('--candidate'))]);
+    fs.writeFileSync(arg('--output'), bytes);
+    if (verdict !== 'pass') say({ ok: false, code: verdict, message: verdict, pixelAgreement: 0.5, meanDrift: 20, inkPresent: verdict !== 'INK', sha256: sha(bytes) });
+    say({ ok: true, pixelAgreement: 0.97, meanDrift: 2.1, inkPresent: true, sha256: sha(bytes), width: 1344, height: 768 });
+  }
+  process.exit(3);
+}
+if (argv[0] !== 'scripts/wearable-render.py') process.exit(3);
+const report = (value) => fs.writeFileSync(arg('--report'), JSON.stringify(value));
+function preview() {
+  if (plan.fallback === 'refuse') { report({ accepted: false, code: 'LOGO_TOO_THIN', error: 'This artwork is too thin to read on the cap.' }); process.exit(2); }
+  if (plan.fallback === 'crash') process.exit(1);
+  const bytes = Buffer.concat([PNG, Buffer.from('cap:'), fs.readFileSync(arg('--asset'))]);
+  fs.writeFileSync(arg('--output'), bytes);
+  report({ accepted: true, sha256: sha(bytes), templateId: 'pepe-cap-v1' });
+  process.exit(0);
+}
+if (mode === 'preview') setTimeout(preview, plan.previewDelayMs || 0);
+else process.exit(3);
+`;
+  await writeFile(path, source);
+  await chmod(path, 0o755);
+  return path;
+}
 
 async function desk(t, options = {}) {
   const workdir = await mkdtemp(join(scratch, 'desk-'));
@@ -555,6 +616,65 @@ void test(
     assert.equal((await fetch(`${short.url}/health`)).status, 503);
   },
 );
+
+void test(
+  '/logo normalizes an upload and answers with the print, its hash, its size and its palette',
+  { skip: needsRuntime },
+  async (t) => {
+    const media = await desk(t);
+    const r = await post(media, LOGO, { path: '/logo?target=host', type: 'image/png' });
+    assert.equal(r.status, 200, r.bytes.toString().slice(0, 200));
+    const data = r.json();
+    const logo = Buffer.from(data.logo, 'base64');
+    assert.ok(logo.subarray(0, 8).equals(PNG_HEADER), 'the print is a PNG');
+    assert.equal(data.logoSha256, sha(logo));
+    assert.ok(data.width > 0 && data.width <= 1024 && data.height > 0 && data.height <= 1024);
+    assert.ok(Array.isArray(data.palette.clusters) && data.palette.clusters.length >= 1);
+    for (const c of data.palette.clusters) {
+      assert.match(c.hex, /^#[0-9A-F]{6}$/);
+      assert.ok(c.share >= 0 && c.share <= 1);
+    }
+    for (const name of ['primary', 'secondary', 'accent'])
+      assert.match(data.palette[name], /^#[0-9A-F]{6}$/);
+    assert.equal(typeof data.palette.monochrome, 'boolean');
+    assert.equal(data.target, 'host');
+    assert.ok(media.spawns.some((s) => s.mode === 'wardrobe-normalize'));
+    const bad = await post(media, 'bad PNG', { path: '/logo?target=host', type: 'image/png' });
+    assert.equal(bad.status, 422);
+    assert.equal(bad.json().code, 'INVALID_IMAGE');
+    const crowd = await post(media, LOGO, { path: '/logo?target=crowd', type: 'image/png' });
+    assert.equal(crowd.status, 400);
+    assert.equal(crowd.json().code, 'TARGET');
+    const anon = await post(media, LOGO, { path: '/logo?target=host', type: 'image/png', token: 'wrong' });
+    assert.equal(anon.status, 401);
+    const before = media.spawns.length;
+    const huge = await post(media, Buffer.concat([PNG_HEADER, Buffer.alloc(4 * 1024 * 1024)]), { path: '/logo?target=host', type: 'image/png' });
+    assert.equal(huge.status, 413);
+    assert.equal(huge.json().code, 'TOO_LARGE');
+    assert.equal(media.spawns.length, before, 'an oversized upload reached the decoder');
+  },
+);
+
+void test('/logo relays the script’s refusal as 422 and hides a machine fault as 503', async (t) => {
+  const codeFile = join(scratch, 'logo-code.txt');
+  const python = await fakeWardrobe('logo-codes', { codeFile });
+  const media = await desk(t, { python });
+  await writeFile(codeFile, 'LOGO_TOO_THIN');
+  const thin = await post(media, LOGO, { path: '/logo?target=guest', type: 'image/png' });
+  assert.equal(thin.status, 422);
+  assert.equal(thin.json().code, 'LOGO_TOO_THIN');
+  assert.match(thin.json().error, /stand-in/);
+  await writeFile(codeFile, 'SOMETHING_ELSE');
+  const odd = await post(media, LOGO, { path: '/logo?target=guest', type: 'image/png' });
+  assert.equal(odd.status, 503);
+  assert.equal(odd.json().code, 'RENDERER');
+  await writeFile(codeFile, '');
+  const ok = await post(media, LOGO, { path: '/logo?target=guest', type: 'image/png' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.json().logoSha256, sha(LOGO));
+  assert.equal(ok.json().palette.primary, '#1B2A6B');
+  assert.equal(ok.json().target, 'guest');
+});
 
 void test('scratch left behind by a desk that died mid-take is swept at boot', async () => {
   const workdir = await mkdtemp(join(scratch, 'sweep-'));
