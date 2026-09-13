@@ -177,3 +177,72 @@ export const LOOK_COPY = {
   improving: "We'll keep improving the fit",
   refused: 'This logo could not be dressed.',
 } as const;
+/** What the wardrobe card and the receipt show for a paid cap order at one moment. */
+export type LookView = {
+  kind: 'tailoring' | 'ready' | 'refused';
+  label: 'TAILORING' | 'YOUR ON-AIR PASS';
+  /** The sentence under the card: the waiting copy, the fallback note, or the refusal. */
+  line: string | null;
+  /** Offer "Use a different logo". */
+  replace: boolean;
+  /** The look, once it is ready; the card shows the host's own still until then. */
+  url: string | null;
+};
+/**
+ * The sub-states are driven by the clock, not by the desk: the tailor usually answers in
+ * one to two minutes, a second fit past two, and past ten the customer is offered a way
+ * out. `replacedAt` restarts that clock after "Use a different logo", because the payment
+ * time no longer says when this logo's tailoring began. Null before payment and for every
+ * other product, so the card stays a preview.
+ */
+export function lookView(
+  receipt: Pick<SponsorReceipt, 'status' | 'draft' | 'paidAt' | 'look'>,
+  now: number,
+  replacedAt: number | null = null,
+): LookView | null {
+  if (receipt.draft.product !== 'cap') return null;
+  if (receipt.status === 'draft' || receipt.status === 'payment-pending')
+    return null;
+  const look = receipt.look;
+  if (look?.status === 'ready' && look.url)
+    return {
+      kind: 'ready',
+      label: 'YOUR ON-AIR PASS',
+      line: look.fallback ? LOOK_COPY.improving : null,
+      replace: !!look.fallback,
+      url: look.url,
+    };
+  if (look?.status === 'refused')
+    return {
+      kind: 'refused',
+      label: 'TAILORING',
+      line: look.reason || LOOK_COPY.refused,
+      replace: true,
+      url: null,
+    };
+  const since = Math.max(receipt.paidAt ?? now, replacedAt ?? 0);
+  const elapsed = now - since;
+  return {
+    kind: 'tailoring',
+    label: 'TAILORING',
+    line:
+      elapsed < 120_000
+        ? LOOK_COPY.tailoring
+        : elapsed < 600_000
+          ? LOOK_COPY.anotherFit
+          : LOOK_COPY.slow,
+    replace: elapsed >= 600_000,
+    url: null,
+  };
+}
+/** The look's alt text: the host, dressed. The card names Chad the way its caption does. */
+export const lookAlt = (target: SponsorTarget | undefined) =>
+  `${target === 'guest' ? 'Chad' : 'Pepe'} wearing your tee and cap`;
+/** The stored, normalised logo, shown as a swatch on the card until the look replaces it. */
+export const logoSwatchUrl = (assetId: string | undefined) =>
+  assetId
+    ? `/api/sponsorship/assets/${encodeURIComponent(assetId)}?part=logo`
+    : null;
+/** The host's own still: what the card shows before the look exists. */
+export const baseStill = (target: SponsorTarget | undefined) =>
+  target === 'guest' ? '/gigachad-video.avif' : '/pepe-video.avif';

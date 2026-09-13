@@ -111,3 +111,117 @@ void test('the cap sells as a tee and a cap made for the brand, and every waitin
     refused: 'This logo could not be dressed.',
   });
 });
+
+void test('the wardrobe card follows the order: the payment clock while tailoring, then the look, never the stored asset', () => {
+  const paid = {
+    status: 'paid',
+    draft: {
+      product: 'cap',
+      name: '',
+      message: 'gm',
+      target: 'host',
+      assetId: 'asset-1',
+    },
+    paidAt: 1_000_000,
+    look: { status: 'tailoring' },
+  };
+  assert.equal(
+    C.lookView(
+      { ...paid, draft: { ...paid.draft, product: 'spotlight' } },
+      1_000_000,
+    ),
+    null,
+  );
+  assert.equal(
+    C.lookView({ ...paid, status: 'draft', paidAt: null }, 1_000_000),
+    null,
+  );
+  assert.equal(
+    C.lookView(
+      { ...paid, status: 'payment-pending', paidAt: null },
+      1_000_000,
+    ),
+    null,
+  );
+  assert.deepEqual(C.lookView(paid, 1_000_000 + 119_000), {
+    kind: 'tailoring',
+    label: 'TAILORING',
+    line: 'Tailoring your tee and cap · usually one to two minutes',
+    replace: false,
+    url: null,
+  });
+  assert.deepEqual(C.lookView(paid, 1_000_000 + 120_000), {
+    kind: 'tailoring',
+    label: 'TAILORING',
+    line: 'Still tailoring — trying another fit',
+    replace: false,
+    url: null,
+  });
+  assert.deepEqual(C.lookView(paid, 1_000_000 + 600_000), {
+    kind: 'tailoring',
+    label: 'TAILORING',
+    line: 'This is taking longer than usual',
+    replace: true,
+    url: null,
+  });
+  // A missing look on a paid cap is a tailor that has not reported yet, not a finished pass.
+  assert.equal(C.lookView({ ...paid, look: undefined }, 1_000_000).kind, 'tailoring');
+  // A replaced logo restarts the clock from the replacement, not from the payment.
+  assert.equal(
+    C.lookView(paid, 1_000_000 + 700_000, 1_000_000 + 650_000).line,
+    'Tailoring your tee and cap · usually one to two minutes',
+  );
+  const url = '/api/sponsorship/assets/asset-1?part=look&v=' + 'c'.repeat(64);
+  assert.deepEqual(
+    C.lookView({ ...paid, look: { status: 'ready', url } }, 1_000_000 + 900_000),
+    { kind: 'ready', label: 'YOUR ON-AIR PASS', line: null, replace: false, url },
+  );
+  assert.deepEqual(
+    C.lookView(
+      { ...paid, look: { status: 'ready', url, fallback: 'cap-v1' } },
+      1_000_000,
+    ),
+    {
+      kind: 'ready',
+      label: 'YOUR ON-AIR PASS',
+      line: "We'll keep improving the fit",
+      replace: true,
+      url,
+    },
+  );
+  assert.deepEqual(
+    C.lookView(
+      {
+        ...paid,
+        look: {
+          status: 'refused',
+          reason: 'This logo could not be dressed. Use a different logo.',
+        },
+      },
+      1_000_000,
+    ),
+    {
+      kind: 'refused',
+      label: 'TAILORING',
+      line: 'This logo could not be dressed. Use a different logo.',
+      replace: true,
+      url: null,
+    },
+  );
+  assert.equal(
+    C.lookView({ ...paid, look: { status: 'refused' } }, 1_000_000).line,
+    'This logo could not be dressed.',
+  );
+  assert.equal(C.lookAlt('host'), 'Pepe wearing your tee and cap');
+  assert.equal(C.lookAlt('guest'), 'Chad wearing your tee and cap');
+  assert.equal(C.lookAlt(undefined), 'Pepe wearing your tee and cap');
+  assert.equal(
+    C.logoSwatchUrl('asset/1'),
+    '/api/sponsorship/assets/asset%2F1?part=logo',
+  );
+  assert.equal(C.logoSwatchUrl(undefined), null);
+  assert.equal(C.logoSwatchUrl(''), null);
+  assert.equal(C.baseStill('host'), '/pepe-video.avif');
+  assert.equal(C.baseStill('guest'), '/gigachad-video.avif');
+  assert.equal(C.baseStill(undefined), '/pepe-video.avif');
+});
