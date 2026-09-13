@@ -228,7 +228,7 @@ try {
   await panel.getByRole('button', { name: 'Continue to payment' }).click();
   assert.equal(
     await panel
-      .locator('input[name="sponsor-asset"][value="USDC"]')
+      .locator('input[name="sponsor-asset"][value="FROGCLENCH"]')
       .isChecked(),
     true,
   );
@@ -243,9 +243,11 @@ try {
     await panel.getByRole('button', { name: 'Select Wallet' }).count(),
     0,
   );
-  await panel
-    .locator('input[name="sponsor-asset"][value="FROGCLENCH"]')
-    .check({ force: true });
+  for (const asset of ['SOL', 'USDC', 'FROGCLENCH']) {
+    const choice = panel.locator(`input[name="sponsor-asset"][value="${asset}"]`);
+    await choice.check({ force: true });
+    assert.equal(await choice.isChecked(), true);
+  }
   assert.match(
     await panel.locator('.sponsor-review-summary').innerText(),
     /17\.50/,

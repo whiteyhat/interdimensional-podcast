@@ -11,6 +11,7 @@ import type {
 } from './sponsorship';
 
 export const checkoutKey = 'pepe-chad:sponsorship:v1';
+export const defaultSponsorAsset: SponsorAsset = 'FROGCLENCH';
 export type SavedCheckout = {
   version: 1;
   draft: SponsorDraft;
@@ -28,7 +29,7 @@ export function readCheckout(raw: string | null): SavedCheckout {
   const fallback: SavedCheckout = {
     version: 1,
     draft: { ...emptyDraft },
-    asset: 'USDC',
+    asset: defaultSponsorAsset,
     token: null,
   };
   try {

@@ -16,6 +16,7 @@ type Props = {
   receipt: SponsorReceipt;
   asset: SponsorAsset;
   endpoint: string;
+  canPay: boolean;
   onReceipt: (receipt: SponsorReceipt) => void;
   onPending: (pending: boolean) => void;
 };
@@ -27,7 +28,7 @@ export function SponsorWallet(props: Props) {
     </WalletShell>
   );
 }
-function Payment({ receipt, asset, onReceipt, onPending }: Props) {
+function Payment({ receipt, asset, canPay, onReceipt, onPending }: Props) {
   const { connection } = useConnection();
   const walletContext = useWallet();
   const { wallet, publicKey, connecting, signTransaction, sendTransaction } =
@@ -80,7 +81,7 @@ function Payment({ receipt, asset, onReceipt, onPending }: Props) {
     setError('');
   }
   async function review() {
-    if (!walletKey || pending.current) return;
+    if (!canPay || !walletKey || pending.current) return;
     pending.current = true;
     setPhase('quoting');
     setError('');
@@ -133,6 +134,7 @@ function Payment({ receipt, asset, onReceipt, onPending }: Props) {
   }
   async function pay() {
     if (
+      !canPay ||
       !quote ||
       !walletKey ||
       pending.current ||
@@ -204,7 +206,7 @@ function Payment({ receipt, asset, onReceipt, onPending }: Props) {
     }
   }
   async function changeWallet() {
-    if (pending.current) return;
+    if (!canPay || pending.current) return;
     // The provider forgets a wallet the moment it disconnects, so whatever is picked
     // next in the modal is a fresh selection and connects in the same gesture, even
     // when it is the wallet that was just let go.
@@ -230,7 +232,9 @@ function Payment({ receipt, asset, onReceipt, onPending }: Props) {
         : !walletKey
           ? {
               label: connecting ? 'Connecting…' : 'Connect wallet',
-              onClick: () => setVisible(true),
+              onClick: () => {
+                if (canPay) setVisible(true);
+              },
               disabled: connecting,
             }
           : phase === 'idle'
@@ -255,7 +259,7 @@ function Payment({ receipt, asset, onReceipt, onPending }: Props) {
         <button
           type="button"
           className="sponsor-button"
-          disabled={step.disabled}
+          disabled={!canPay || step.disabled}
           onClick={step.onClick}
         >
           {step.label}
@@ -271,6 +275,7 @@ function Payment({ receipt, asset, onReceipt, onPending }: Props) {
             type="button"
             className="sponsor-text-button"
             onClick={review}
+            disabled={!canPay}
           >
             Refresh quote
           </button>
@@ -295,6 +300,7 @@ function Payment({ receipt, asset, onReceipt, onPending }: Props) {
               type="button"
               className="sponsor-text-button"
               onClick={changeWallet}
+              disabled={!canPay}
             >
               Change wallet
             </button>

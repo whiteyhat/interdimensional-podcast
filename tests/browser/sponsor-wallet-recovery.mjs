@@ -44,7 +44,8 @@ let drafts = 0,
   attempts = 0,
   submits = 0,
   confirms = 0,
-  receipt = null;
+  receipt = null,
+  paymentsAvailable = true;
 try {
   await context.addInitScript(
     ({ walletBytes, signed }) => {
@@ -100,15 +101,15 @@ try {
                   id: 'message',
                   priceCents: 500,
                   frogPriceCents: 350,
-                  available: true,
+                  available: paymentsAvailable,
                 },
               ],
               assets: [
-                { id: 'USDC', available: true },
-                { id: 'SOL', available: true },
-                { id: 'FROGCLENCH', available: true },
+                { id: 'USDC', available: paymentsAvailable },
+                { id: 'SOL', available: paymentsAvailable },
+                { id: 'FROGCLENCH', available: paymentsAvailable },
               ],
-              studioOnline: true,
+              studioOnline: paymentsAvailable,
               capabilities: { message: true, spotlight: true, cap: false },
               clientRpcUrl: '/api/rpc',
             }
@@ -183,14 +184,17 @@ try {
     return route.fulfill({ json: data });
   });
   const page = await context.newPage();
+  await page.clock.install();
   await page.goto(process.env.SPONSOR_TEST_ORIGIN || 'http://127.0.0.1:3316', {
     waitUntil: 'networkidle',
   });
+  await page.locator('input[name="sponsor-product"][value="message"]').check({ force: true });
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await page
     .locator('#sponsor-message')
     .fill('Ask Chad about builders in the trenches.');
   await page.getByRole('button', { name: 'Continue to payment' }).click();
+  await page.locator('.sponsor-review-summary').waitFor();
   await page
     .locator('input[name="sponsor-asset"][value="SOL"]')
     .check({ force: true });
@@ -240,6 +244,26 @@ try {
     await page.getByRole('button', { name: 'Approve and pay' }).count(),
     0,
   );
+  paymentsAvailable = false;
+  const unavailableCatalog = page.waitForResponse(response => response.url().includes('/api/sponsorship?action=catalog'));
+  await page.clock.fastForward(20001);
+  await unavailableCatalog;
+  await page.locator('.sponsor-signal.online').waitFor({ state: 'detached' });
+  assert.equal(await page.getByRole('button', { name: 'Scan to pay' }).isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: 'Check again' }).isEnabled(), true, 'catalog loss must not disable recovery of an ambiguous payment');
+  const checkedAttempt = page.waitForRequest(request => {
+    if (request.method() !== 'POST' || !request.url().endsWith('/api/sponsorship')) return false;
+    const body = request.postDataJSON();
+    return body.action === 'confirm' && body.attemptId === receipt.attempts[0].id;
+  });
+  await page.getByRole('button', { name: 'Check again' }).click();
+  await checkedAttempt;
+  assert.equal(attempts, 1, 'checking an unavailable catalog never creates another quote');
+  paymentsAvailable = true;
+  const availableCatalog = page.waitForResponse(response => response.url().includes('/api/sponsorship?action=catalog'));
+  await page.clock.fastForward(20001);
+  await availableCatalog;
+  await page.locator('.sponsor-signal.online').waitFor();
   await page.clock.setFixedTime(Date.now() + 61000);
   await page.waitForTimeout(1100);
   receipt.attempts[0].expiresAt = Date.now() - 1000;

@@ -40,6 +40,12 @@ incomplete input. Name and ticker start as Frogclench / FROGCLENCH; confirm them
 - `cashback`, `mayhemMode`, `tokenizedAgent`, `frontRunningProtection`: false in this version.
 
 Put `SOLANA_RPC_URL` and `PINATA_JWT` in your local `.dev.vars` or process environment.
+Store the accompanying Pinata key and secret as `PINATA_API_KEY` and `PINATA_API_SECRET`
+in the same private file. The upload command uses the JWT; none of these Pinata credentials
+belongs in the browser or deployed Worker. Configure `JUPITER_API_KEY` locally and as a
+production Worker secret for sponsorship pricing. A working price API key does not make an
+unlaunched coin payable: the real mint, treasury token account and a fresh market price are
+still required. New checkouts select $FROGCLENCH; customers can choose SOL or USDC explicitly.
 Use an authenticated HTTPS RPC with the needed read, simulation, and send methods. Keep it
 server-side. The local signing page uses the same configured RPC through `/api/rpc`.
 Never put creator private keys or seed phrases in any launch configuration or JSON artifact.

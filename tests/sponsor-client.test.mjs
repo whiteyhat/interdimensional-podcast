@@ -21,13 +21,21 @@ void test('checkout persistence retains an unfinished draft and asset without tr
     C.readCheckout(
       JSON.stringify({ version: 1, asset: 'BTC', draft: { product: 'scam' } }),
     ).asset,
-    'USDC',
+    'FROGCLENCH',
   );
   assert.equal(
     C.readCheckout(JSON.stringify({ version: 1, token: 'javascript:bad' }))
       .token,
     null,
   );
+});
+void test('fresh and unreadable checkout storage defaults to FROGCLENCH', () => {
+  for (const raw of [null, '', '{broken', 'null', '{}', '{"version":2,"asset":"SOL"}', '{"version":1,"asset":"BTC"}'])
+    assert.equal(C.readCheckout(raw).asset, 'FROGCLENCH', raw);
+});
+void test('valid saved currency choices survive the new checkout default', () => {
+  for (const asset of ['FROGCLENCH', 'SOL', 'USDC'])
+    assert.equal(C.readCheckout(JSON.stringify({ version: 1, asset })).asset, asset);
 });
 void test('checkout restores drafts for all currently offered placements', () => {
   for (const product of ['message', 'spotlight', 'cap']) {
