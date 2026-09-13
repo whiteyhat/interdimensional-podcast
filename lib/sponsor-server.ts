@@ -15,6 +15,7 @@ import {
   type SponsorAsset,
   type SponsorCatalog,
   type SponsorCapabilities,
+  type SponsorLook,
   type SponsorReceipt,
   type SponsorAttempt,
   type SponsorLease,
@@ -423,6 +424,29 @@ function attemptView(a: db.AttemptRow, site: Site): SponsorAttempt {
     solanaPayUrl: `solana:${encodeURIComponent(`${site.origin}/api/solana-pay/${a.pay_token}`)}`,
   };
 }
+/** Where a cap order's look stands, for the receipt: tailoring, ready (fallback or not), or refused. */
+function lookState(asset: db.AssetRow): SponsorLook {
+  let meta: Partial<LookAssetMetadata> = {};
+  try {
+    meta = JSON.parse(asset.metadata);
+  } catch {}
+  const round = meta.look?.round ?? meta.tailor?.round;
+  const withRound = round === undefined ? {} : { round };
+  if (asset.status === 'qualified')
+    return {
+      status: 'ready',
+      url: asset.url,
+      ...withRound,
+      ...(meta.look?.fallback ? { fallback: meta.look.fallback } : {}),
+    };
+  if (asset.status === 'refused')
+    return {
+      status: 'refused',
+      ...(meta.reason ? { reason: meta.reason } : {}),
+      ...withRound,
+    };
+  return { status: 'tailoring', ...withRound };
+}
 export async function sponsorReceipt(
   d: D1Database,
   o: db.OrderRow,
@@ -469,6 +493,7 @@ export async function sponsorReceipt(
     assetUrl: asset?.url ?? null,
     queuePosition,
     capAhead,
+    ...(o.product === 'cap' && asset ? { look: lookState(asset) } : {}),
   };
 }
 async function authenticateReceipt(d: D1Database, raw: unknown) {

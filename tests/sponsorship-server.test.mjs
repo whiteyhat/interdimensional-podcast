@@ -1195,3 +1195,46 @@ void test('the air gate refuses a cap whose look is not in place, even when the 
     }
   });
 });
+
+void test('a cap receipt says where its look stands', async () => {
+  const f = await fixture();
+  try {
+    const site = { origin: 'https://show.test', cluster: 'devnet' };
+    await db.createOrder(f.DB, { id: 'cap-look', tokenHash: 'cap-look', draft: CAP_DRAFT, now: 100 });
+    const receipt = async () =>
+      server.sponsorReceipt(f.DB, await db.getOrder(f.DB, 'cap-look'), 't', site);
+    insertAsset(f, 'logo', capMeta({ tailor: { round: 2, requestedAt: 100 } }));
+    let r = await receipt();
+    assert.deepEqual(r.look, { status: 'tailoring', round: 2 });
+    assert.equal(r.assetUrl, logoUrl, 'the swatch until the look lands');
+    insertAsset(f, 'logo', capMeta());
+    assert.deepEqual((await receipt()).look, { status: 'tailoring' }, 'paid, not yet requested');
+    const fallback = qualifiedMeta();
+    fallback.look.fallback = 'cap-v1';
+    insertAsset(f, 'qualified', fallback);
+    r = await receipt();
+    assert.deepEqual(r.look, { status: 'ready', url: lookUrl, round: 1, fallback: 'cap-v1' });
+    assert.equal(r.assetUrl, lookUrl);
+    insertAsset(f, 'qualified', qualifiedMeta());
+    assert.deepEqual((await receipt()).look, { status: 'ready', url: lookUrl, round: 1 });
+    insertAsset(
+      f,
+      'refused',
+      capMeta({
+        reason: 'Too thin.',
+        tailor: { round: 3, requestedAt: 100, outcome: 'refused', at: 200, reasons: ['Too thin.'] },
+      }),
+    );
+    assert.deepEqual((await receipt()).look, { status: 'refused', reason: 'Too thin.', round: 3 });
+    // A spotlight has no look.
+    const { receipt: spotlight } = await (
+      await post(f.v, {
+        action: 'draft',
+        draft: { product: 'spotlight', projectName: 'Game', style: 'intro', name: 'Joe', message: 'Hello everyone' },
+      })
+    ).json();
+    assert.equal(spotlight.look, undefined);
+  } finally {
+    f.restore();
+  }
+});
