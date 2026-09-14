@@ -1,10 +1,20 @@
 'use client';
 /* oxlint-disable jsx-a11y/media-has-caption -- Dialogue captions are rendered from the script below the live shot. */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { Snapshot } from '@/lib/engine';
+import type { Clip, Snapshot } from '@/lib/engine';
 import { cast } from '@/lib/show';
 import { PlaybackAudio } from '@/lib/playback-audio';
 import { PlaybackHealth } from '@/lib/playback-health';
+import { assignLayers } from '@/lib/video-layers';
+/** The element on the layer that shows `url`, if any. Reads committed layers, never render state. */
+function layerVideo(
+  urls: readonly (string | null)[],
+  elements: readonly (HTMLVideoElement | null)[],
+  url: string,
+) {
+  const index = urls.indexOf(url);
+  return index < 0 ? undefined : (elements[index] ?? undefined);
+}
 export function Player({
   state,
   muted,
@@ -19,7 +29,16 @@ export function Player({
   /** True means the engine relinquished this media's paid lease; this URL may never resume. */
   onPlaybackFailure?: (id: number, url: string, reason: string) => boolean;
 }) {
-  const videos = useRef(new Map<string, HTMLVideoElement>());
+  // Every element the audio bus has ever routed lives as long as its AudioContext: Chromium
+  // registers each MediaElementAudioSourceNode as an active source until the context closes.
+  // A fresh <video> per clip therefore kept one decoded player per take for the whole
+  // broadcast (about a hundred megabytes a minute on the box). Clips share a small pool of
+  // layers instead, so the bus only ever meets as many elements as there are layers.
+  const [pool, setPool] = useState<readonly (string | null)[]>([]);
+  const elements = useRef<(HTMLVideoElement | null)[]>([]);
+  // The committed layout, for effects and handlers. Playback must not restart whenever a newly
+  // buffered clip takes a free layer, so the playback effect reads this ref, not `layers`.
+  const layerUrls = useRef<readonly (string | null)[]>([]);
   const audio = useRef<PlaybackAudio | null>(null);
   const mounted = useRef(false);
   const revoked = useRef(new Set<string>());
@@ -29,11 +48,11 @@ export function Player({
   }, [onPlaybackFailure]);
   useEffect(() => {
     mounted.current = true;
-    const elements = videos.current;
+    const media = elements.current;
     return () => {
       mounted.current = false;
       audio.current?.silence();
-      for (const video of elements.values()) video.pause();
+      for (const video of media) video?.pause();
       // React StrictMode immediately mounts effects again; keep its media source reusable.
       queueMicrotask(() => {
         if (!mounted.current) void audio.current?.close();
@@ -51,10 +70,24 @@ export function Player({
     playing: false,
     epoch: 0,
   });
+  const clips = [
+    state.previous,
+    current,
+    ...state.slots.map((s) => s.clip),
+  ].filter(
+    (c, i, all): c is Clip =>
+      !!c && all.findIndex((x) => x?.id === c.id) === i,
+  );
+  const layers = assignLayers(
+    pool,
+    clips.map((clip) => clip.url),
+  );
+  // A changed layout re-renders at once; effects and handlers below see the committed one.
+  if (layers !== pool) setPool(layers);
   const failPlayback = (id: number, url: string, reason: string) => {
     if (playback.current.url !== url || !playback.current.playing) return;
     if (revoked.current.has(url)) return;
-    const video = videos.current.get(url);
+    const video = layerVideo(layerUrls.current, elements.current, url);
     if (video) {
       audio.current?.silence(video);
       video.pause();
@@ -83,11 +116,16 @@ export function Player({
       };
     };
   }, [current?.url, state.phase]);
-  const clips = [
-    state.previous,
-    current,
-    ...state.slots.map((s) => s.clip),
-  ].filter((c, i, all) => c && all.findIndex((x) => x?.id === c.id) === i);
+  useLayoutEffect(() => {
+    layerUrls.current = layers;
+    // React only drops a freed layer's src attribute; loading with no source is what discards
+    // its decoded media, so a resting layer holds nothing between clips.
+    layers.forEach((url, index) => {
+      const video = elements.current[index];
+      if (url === null && video && video.networkState !== video.NETWORK_EMPTY)
+        video.load();
+    });
+  }, [layers]);
   useLayoutEffect(() => {
     if (
       current &&
@@ -101,16 +139,22 @@ export function Player({
     }
   }, [current, visible, onShown]);
   useEffect(() => {
-    for (const [url, video] of videos.current) {
+    layerUrls.current.forEach((url, index) => {
+      const video = elements.current[index];
       if (
-        url !== current?.url ||
-        state.phase === 'paused' ||
-        state.phase === 'stopped'
+        video &&
+        (url !== current?.url ||
+          state.phase === 'paused' ||
+          state.phase === 'stopped')
       )
         video.pause();
-    }
+    });
     if (current && state.phase === 'playing') {
-      const video = videos.current.get(current.url);
+      const video = layerVideo(
+        layerUrls.current,
+        elements.current,
+        current.url,
+      );
       if (!video || revoked.current.has(current.url)) return;
       let cancelled = false;
       let failed = false;
@@ -197,61 +241,69 @@ export function Player({
   }, [current, state.phase, muted]);
   return (
     <>
-      {clips.map(
-        (clip) =>
-          clip && (
-            <video
-              key={clip.url}
-              ref={(node) => {
-                if (node) videos.current.set(clip.url, node);
-                else videos.current.delete(clip.url);
-              }}
-              src={clip.url}
-              preload="auto"
-              playsInline
-              muted={
-                muted || clip.url !== current?.url || state.phase !== 'playing'
-              }
-              style={{
-                opacity: visible === clip.url ? 1 : 0,
-                pointerEvents: 'none',
-              }}
-              onPlaying={(event) => {
-                if (
-                  clip.url === current?.url &&
-                  state.phase === 'playing' &&
-                  !revoked.current.has(clip.url)
-                )
-                  audio.current?.sync(event.currentTarget);
-                else event.currentTarget.pause();
-              }}
-              onPause={(event) => audio.current?.silence(event.currentTarget)}
-              onWaiting={(event) => audio.current?.silence(event.currentTarget)}
-              onSeeking={(event) => audio.current?.silence(event.currentTarget)}
-              onSeeked={(event) => {
-                if (!revoked.current.has(clip.url))
-                  audio.current?.sync(event.currentTarget);
-              }}
-              onRateChange={(event) => {
-                if (!revoked.current.has(clip.url))
-                  audio.current?.sync(event.currentTarget);
-              }}
-              onEnded={() => {
-                if (clip.url === current?.url && !revoked.current.has(clip.url))
-                  onEnded(clip.id);
-              }}
-              onError={() => {
-                if (clip.url === current?.url)
-                  reportFailure.current(
-                    clip.id,
-                    clip.url,
-                    'The current video could not be decoded.',
-                  );
-              }}
-              aria-label={`${cast[clip.speaker].name} speaking`}
-            />
-          ),
-      )}
+      {layers.map((url, index) => {
+        const clip =
+          url === null ? undefined : clips.find((c) => c.url === url);
+        return (
+          <video
+            key={index}
+            ref={(node) => {
+              elements.current[index] = node;
+            }}
+            src={clip?.url}
+            preload="auto"
+            playsInline
+            muted={
+              !clip ||
+              muted ||
+              clip.url !== current?.url ||
+              state.phase !== 'playing'
+            }
+            style={{
+              opacity: clip && visible === clip.url ? 1 : 0,
+              pointerEvents: 'none',
+            }}
+            onPlaying={(event) => {
+              if (
+                clip &&
+                clip.url === current?.url &&
+                state.phase === 'playing' &&
+                !revoked.current.has(clip.url)
+              )
+                audio.current?.sync(event.currentTarget);
+              else event.currentTarget.pause();
+            }}
+            onPause={(event) => audio.current?.silence(event.currentTarget)}
+            onWaiting={(event) => audio.current?.silence(event.currentTarget)}
+            onSeeking={(event) => audio.current?.silence(event.currentTarget)}
+            onSeeked={(event) => {
+              if (clip && !revoked.current.has(clip.url))
+                audio.current?.sync(event.currentTarget);
+            }}
+            onRateChange={(event) => {
+              if (clip && !revoked.current.has(clip.url))
+                audio.current?.sync(event.currentTarget);
+            }}
+            onEnded={() => {
+              if (
+                clip &&
+                clip.url === current?.url &&
+                !revoked.current.has(clip.url)
+              )
+                onEnded(clip.id);
+            }}
+            onError={() => {
+              if (clip && clip.url === current?.url)
+                reportFailure.current(
+                  clip.id,
+                  clip.url,
+                  'The current video could not be decoded.',
+                );
+            }}
+            aria-label={clip ? `${cast[clip.speaker].name} speaking` : undefined}
+          />
+        );
+      })}
       {current && (
         <>
           <span className="speaker-label">
@@ -273,7 +325,11 @@ export function Player({
             <button
               className="primary"
               onClick={() => {
-                const video = videos.current.get(current.url);
+                const video = layerVideo(
+                  layerUrls.current,
+                  elements.current,
+                  current.url,
+                );
                 const epoch = playback.current.epoch;
                 const active = () =>
                   mounted.current &&

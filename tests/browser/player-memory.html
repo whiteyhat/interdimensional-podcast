@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Player memory harness</title>
+    <style>
+      .stage { position: relative; width: 672px; height: 384px; background: #000; overflow: hidden; }
+      .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    </style>
+  </head>
+  <body>
+    <div class="stage" id="root"></div>
+    <pre id="results">Waiting for player-memory.mjs to drive the show…</pre>
+    <script type="module" src="./player-memory.jsx"></script>
+  </body>
+</html>
