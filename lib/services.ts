@@ -2,7 +2,7 @@ import type { Services, Clip } from './engine';
 import { SpeechError } from './speech';
 import { createSponsorServices } from './sponsor-delivery-client';
 import { readCoinBody } from '@/hooks/use-coin';
-import { show, shotInput, scaleInput, type Line } from './show';
+import { show, shotInput, scaleInput, type Line, pictureTailSeconds } from './show';
 import {
   PlacementLostError,
   placementLostCodes,
@@ -81,8 +81,7 @@ async function topics(body: unknown, forceSource?: TopicSource) {
     .filter((draft): draft is TopicDraft => !!draft);
   return { topics: drafts, cost: data.cost };
 }
-/** How long the picture runs past the verified speech: the last word rings, the mouth closes. */
-export const pictureTailSeconds = 0.4;
+export { pictureTailSeconds };
 export function createServices(): Services {
   const jobs = new Map<string, string>();
   const speechRetries = new Map<string, number>();

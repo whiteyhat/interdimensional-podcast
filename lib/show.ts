@@ -38,6 +38,34 @@ export const isBeat = (text: string) => wordCount(text) <= beatWords;
 export const beatWords = 7;
 export const minimumShotSeconds = 10;
 
+/** How long the picture runs past the verified speech: the last word rings, the mouth closes. */
+export const pictureTailSeconds = 0.4;
+/**
+ * How long a line airs once its take is cut after the verified speech: brisk podcast speech is
+ * about three words a second, plus a beat to land the line and the picture tail. The render is
+ * longer (shotDuration); what the reserve and the topic wire must count is airtime.
+ */
+export function airedSeconds(text: string) {
+  return Math.max(2, wordCount(text) / 3 + 0.5) + pictureTailSeconds;
+}
+/**
+ * What the hosts talk about when the wire has no live story: a rotating list of concrete,
+ * current subjects chosen by the shot number, so two brief-less exchanges in a row never
+ * follow the same thread, and none of them is a lecture on past years. One entry in the
+ * rotation plugs the show's own coin.
+ */
+export function houseBrief(start: number, spokenTicker: string, today: string): string {
+  const angles = [
+    `Right now, on the live chart of ${spokenTicker}: what a holder watching tonight should be feeling. Pepe checks the chart out loud; GigaChad reads him. Mention that ${spokenTicker} is live on pump dot fun, then undercut any buy talk with a fresh not-financial-advice joke.`,
+    'The room right now: the hosts talk to the people watching the stream tonight, ask them what they are holding and what they are afraid of, and dare them to type it in the chat.',
+    "Tonight's market mood: what crypto feels like this evening, said as a live read of the moment, no history, no dates from earlier years.",
+    'A running bit: GigaChad sets Pepe a small challenge for the rest of the show (a rule about what he may or may not say, or do, or buy), and Pepe negotiates.',
+    'Forward only: what could happen in crypto in the next seven days that would change how Pepe sleeps, and how GigaChad plans to enjoy it.',
+    `The show itself: what this podcast is, that it runs live around the clock with ${spokenTicker} on pump dot fun, and one honest thing each host wants from the audience tonight.`,
+  ];
+  const angle = angles[Math.abs(Math.trunc(start / 4)) % angles.length]!;
+  return `HOUSE SEGMENT (no live story on the wire right now). Today is ${today}. Speak about now: do not narrate past events, old hacks, or anything from earlier years unless a host is asked. Change the subject from the previous exchange.\nANGLE: ${angle}`;
+}
 export function shotDuration(text: string, gesture?: Gesture) {
   if (gesture)
     return Math.max(minimumShotSeconds, gestureConfig[gesture].duration);

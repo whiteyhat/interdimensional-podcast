@@ -75,12 +75,14 @@ async function newsTopics(): Promise<TopicDraft[]> {
           signal: AbortSignal.timeout(10000),
         });
         if (!response.ok) return [];
-        // Search feeds cluster less than topic sections, so they need a lower bar
-        // to produce anything at all; two outlets still means it is not one blog.
+        // Search feeds cluster less than topic sections. Asking for two outlets passed two of
+        // two hundred and fifty-one headlines on launch night and left the wire to history,
+        // so one outlet is enough there; the junk and sensitive filters still apply, and the
+        // brief stays at headline level.
         const parsed = parseRss(await response.text());
         // Search feeds ship no cluster block, so rebuild it from matching headlines.
         return feed.query
-          ? toDrafts(clusterItems(parsed), now, feed.category, 2)
+          ? toDrafts(clusterItems(parsed), now, feed.category, 1)
           : toDrafts(parsed, now, feed.category);
       } catch {
         return []; // one dead feed must never take the lane down
@@ -102,8 +104,13 @@ export async function GET() {
   } catch {
     // The desk being down is normal; the free lane carries the show.
   }
+  // The research lane exists only where the desk answers: on the box the desk's address is
+  // the operator's own machine, and a lane that fails every call is noise, not topics.
   return reply({
-    configured: { feed: true, fal: !!config.FAL_KEY },
+    configured: {
+      feed: (health as { ok?: unknown }).ok === true,
+      fal: !!config.FAL_KEY,
+    },
     newsdesk: health,
   });
 }

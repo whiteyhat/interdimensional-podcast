@@ -1,4 +1,4 @@
-import { isBeat, opening, runsOk, shotDuration, type Line } from './show';
+import { isBeat, opening, runsOk, shotDuration, type Line, airedSeconds } from './show';
 import { GestureSchedule } from './gestures';
 import { SpeechError } from './speech';
 import {
@@ -594,10 +594,12 @@ export class Podcast {
     });
   }
   // The free lane. Cheap and silent: it never touches state.error or the paid lane's cost.
+  // Deeper and more often than it was: with takes cut after their speech the show burns a
+  // topic every twenty-four seconds of air, and on the box this lane is the only one.
   private pumpNews() {
     const news = this.services.news;
-    if (!news || laneDepth(this.queue, 'web') >= 8) return;
-    this.lane('news', 90000, async () => {
+    if (!news || laneDepth(this.queue, 'web') >= 16) return;
+    this.lane('news', 45000, async () => {
       await news({ avoid: avoidTitles(this.queue) }).then(
         (result) => {
           this.queue = enqueue(this.queue, result.topics, Date.now());
@@ -1022,10 +1024,12 @@ export class Podcast {
       if (topic) this.queue = markTopic(this.queue, topic.id, 'buffered', next);
       // Remember where this batch ends so airing does not have to know how long a batch is.
       if (request) this.requestEnds.set(request.id, next + lines.length - 1);
+      // The wire rotates on airtime. A take is cut after its verified speech, so what a batch
+      // airs is its spoken length, not the render length it asks the model for.
       this.queue = batchWritten(
         this.queue,
         topic,
-        lines.reduce((total, line) => total + shotDuration(line.text), 0),
+        lines.reduce((total, line) => total + airedSeconds(line.text), 0),
       );
       this.set({
         requests: request

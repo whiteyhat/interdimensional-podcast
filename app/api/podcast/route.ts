@@ -13,21 +13,7 @@ import {
 } from '@/lib/sponsor-writer';
 import type { SponsorVars } from '@/lib/sponsor-server';
 import type { SponsorCue } from '@/lib/sponsor-program';
-import {
-  cast,
-  lintVoices,
-  parseLines,
-  planPrompt,
-  shotInput,
-  scaleInput,
-  spokenTicker,
-  turnPlan,
-  writerSystemFor,
-  type CoinBrand,
-  type Line,
-  type Previous,
-  type Speaker,
-} from '@/lib/show';
+import { cast, lintVoices, parseLines, planPrompt, shotInput, scaleInput, spokenTicker, turnPlan, writerSystemFor, type CoinBrand, type Line, type Previous, type Speaker, houseBrief } from '@/lib/show';
 import { checkName, requestConfig, spokenName } from '@/lib/requests';
 import {
   sanitizeBrief,
@@ -125,6 +111,7 @@ function writerRequest(
   topic: TopicBrief | undefined,
   from: string | undefined,
   coin: CoinBrand,
+  start = 0,
 ) {
   const spoken = spokenTicker(coin.ticker);
   if (cue) {
@@ -142,7 +129,7 @@ function writerRequest(
       return `THE CHART: ${topic.title}\nWHAT THE CHART SAYS: ${topic.brief}\nMOOD: ${topic.angle}\nThis is the show's own coin, ${spoken}. Use only the numbers given, rounded and spoken plainly with no dollar signs, and follow THE SHOW'S OWN COIN rules: react in character to the move, and if anyone says buy, undercut it at once with a fresh not-financial-advice joke.`;
     return `LIVE TOPIC: ${topic.title}\nWHAT'S HAPPENING: ${topic.brief}\nANGLE: ${topic.angle}\nSOURCE: ${sourceLabel(topic)}`;
   }
-  return 'Audience request: None. Keep riffing on the current subject with a fresh concrete angle.';
+  return houseBrief(start, spoken, new Date().toISOString().slice(0, 10));
 }
 /**
  * A paid exchange airs only once it holds up: the deterministic checks, then a different model
@@ -391,7 +378,7 @@ export async function POST(request: Request) {
         : {
             model: 'google/gemini-2.5-flash',
             system_prompt: writerSystemFor(coin),
-            prompt: `${transcript}\n${writerRequest(body.cue, topic, from, coin)}\nWrite the next four turns, each on its own line and each prefixed with "Pepe:" or "GigaChad:", exactly as the TURN PLAN below sets out. Move onto the new subject immediately: name it in the FIRST turn with one supplied fact, connected to whatever was just said. For sourced stories, build the next turns around what happened, a community consequence and a disagreement grounded in another supplied detail when available. Keep the actual event central through turn four. Historical stories must be introduced as memories with their year or period, never as breaking news. For audience and chat requests, answer the requested subject directly. If there is no new topic, deepen the current conversation without inventing news. Use ANGLE as a direction, never as a line to read. Keep the delivery casual and the connection understandable.\n${planPrompt(turnPlan(body.start!, prevSpeaker))}`,
+            prompt: `${transcript}\n${writerRequest(body.cue, topic, from, coin, body.start!)}\nWrite the next four turns, each on its own line and each prefixed with "Pepe:" or "GigaChad:", exactly as the TURN PLAN below sets out. Move onto the new subject immediately: name it in the FIRST turn with one supplied fact, connected to whatever was just said. For sourced stories, build the next turns around what happened, a community consequence and a disagreement grounded in another supplied detail when available. Keep the actual event central through turn four. Historical stories must be introduced as memories with their year or period, never as breaking news. For audience and chat requests, answer the requested subject directly. A HOUSE SEGMENT brief is a new subject too: move onto its ANGLE at once, without inventing news. Use ANGLE as a direction, never as a line to read. Keep the delivery casual and the connection understandable.\n${planPrompt(turnPlan(body.start!, prevSpeaker))}`,
             temperature: 0.95,
           };
       input = { ...writer, max_tokens: 700 };
