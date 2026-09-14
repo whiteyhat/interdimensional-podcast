@@ -57,6 +57,7 @@ function siteVars() {
     v: {
       DB,
       SITE_URL: 'https://show.test',
+      SPONSOR_ENABLED: 'true',
       SPONSOR_MEDIA_URL: 'https://media.test',
       SPONSOR_MEDIA_TOKEN: 'a'.repeat(32),
       SPONSOR_ASSETS: {
@@ -171,6 +172,30 @@ void test('a desk answer that does not hash to what it says is refused', async (
   assert.equal(objects.size, 0);
   assert.equal(DB.sql.prepare('SELECT count(*) n FROM sponsor_assets').get().n, 0);
 });
+// Production has an armed desk long before it sells anything. Until checkout is on, an upload
+// is refused before it can write a rate-limit row, an asset row or an object, or call the desk.
+void test('while checkout is off an upload stores nothing and never reaches the desk', async (t) => {
+  const { DB, objects, v } = siteVars();
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    calls.push(String(url));
+    return Response.json({});
+  });
+  for (const [i, enabled] of [undefined, 'false', ''].entries()) {
+    const r = await uploadSponsorAsset(request({ ip: `closed-${i}` }), { ...v, SPONSOR_ENABLED: enabled });
+    assert.equal(r.status, 503);
+    assert.match((await r.json()).error, /checkout is not enabled/);
+  }
+  assert.equal(calls.length, 0, 'the desk was called');
+  assert.equal(objects.size, 0, 'an object was stored');
+  const tables = DB.sql
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'sponsor_%'")
+    .all()
+    .map((row) => String(row.name));
+  for (const table of tables)
+    assert.equal(DB.sql.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0, `${table} was written`);
+});
+
 void test('cross-origin artwork requests fail before storage or worker calls', async () => {
   const response = await uploadSponsorAsset(
     request({ ip: 'other', origin: 'https://attacker.test' }),
