@@ -104,15 +104,16 @@ export function createServices(): Services {
   }
   return {
     sponsors: createSponsorServices(),
-    async write(recent, start, cue, topic, from, sponsorship) {
+    async write(recent, start, cue, topic, from, sponsorship, house) {
       const key = JSON.stringify([
-        `${show.slug}-write-v3`,
+        `${show.slug}-write-v4`,
         recent,
         start,
         cue,
         topic,
         from,
         sponsorship,
+        house,
       ]);
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
@@ -124,6 +125,7 @@ export function createServices(): Services {
             topic,
             from,
             sponsorship,
+            house,
           });
           if (!result.lines) throw new DialogueError('No dialogue returned');
           return result.lines;

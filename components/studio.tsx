@@ -29,6 +29,7 @@ import { createServices } from '@/lib/services';
 import { videoFrames } from '@/lib/video-frames';
 import { Player } from '@/components/player';
 import { Ticker } from '@/components/ticker';
+import { siteHostDefault } from '@/lib/house';
 import { CoinCard } from '@/components/coin-card';
 import { CoinBug } from '@/components/coin-bug';
 import { PumpChatSource } from '@/lib/pumpchat';
@@ -343,6 +344,11 @@ export function Studio() {
                     ? `${bufferedSeconds} of ${bufferConfig.startupSeconds} seconds ready. Building a reserve before we go live.`
                     : `${cast.host.name} and ${cast.guest.name} react to the news as it breaks. None of it is advice.`}
                 </p>
+                {state.coinLaunched === true && (
+                  <small className="opening-coin">
+                    {show.ticker} is live on pump.fun · {siteHostDefault}
+                  </small>
+                )}
                 {/*
                   A hosted box is already streaming when the show rebuilds its reserve after a
                   reload, so this card is what the audience sees. It stays a title slate: no
@@ -395,7 +401,12 @@ export function Studio() {
             {state.coin && <CoinBug coin={state.coin} />}
             <SponsorOnAir sponsor={state.current?.sponsorship} />
             {state.current && (
-              <Ticker topics={state.topics} requests={state.requests} />
+              <Ticker
+                topics={state.topics}
+                requests={state.requests}
+                coinLive={state.coinLaunched === true}
+                paidOnAir={!!state.current?.sponsorship}
+              />
             )}
             {state.phase === 'waiting' && (
               <div className="loading">

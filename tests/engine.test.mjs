@@ -81,9 +81,9 @@ function harness(
         new Promise((resolve, reject) =>
           jobs.set(line.id, { line, resolve, reject }),
         ),
-      write: (recent, start, cue, topic, from) =>
+      write: (recent, start, cue, topic, from, sponsorship, house) =>
         new Promise((resolve) =>
-          writes.push({ recent, start, cue, topic, from, resolve }),
+          writes.push({ recent, start, cue, topic, from, sponsorship, house, resolve }),
         ),
       release: (url) => released.push(url),
       ...extra,
@@ -1235,5 +1235,25 @@ void test('a failed shot at the head of the queue is skipped at once while on ai
   await tick();
   assert.ok(!h.engine.getSnapshot().slots.some((s) => s.id === head.id), 'the head left the queue at once');
   assert.match(h.engine.getSnapshot().error, /skipped/);
+  h.engine.dispose();
+});
+
+void test('the show plugs itself about ninety seconds in, then not again for four minutes of air', async () => {
+  const h = harness();
+  h.engine.start();
+  for (let i = 0; i < 20 && !h.writes.some((w) => w.house); i++) {
+    await settle(h, () => h.writes.length > i, 80);
+    if (h.writes.length <= i) break;
+    await h.reply(i, h.writes[i].start);
+  }
+  const at = h.writes.findIndex((w) => w.house);
+  assert.ok(at >= 0, 'a house cue was issued');
+  assert.deepEqual(h.writes[at].house, { coinLive: false }, 'no coin service, so only the site half');
+  assert.ok(h.writes.slice(0, at).every((w) => !w.house), 'nothing before the first ninety seconds');
+  assert.ok(h.engine.getSnapshot().aired >= 10, `enough air had passed: ${h.engine.getSnapshot().aired} clips`);
+  await h.reply(at, h.writes[at].start);
+  await settle(h, () => h.writes.length > at + 1, 80);
+  assert.ok(h.writes.length > at + 1, 'the show kept writing');
+  assert.equal(h.writes[at + 1].house, undefined, 'the next exchange is plain');
   h.engine.dispose();
 });

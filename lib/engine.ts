@@ -1,5 +1,6 @@
 import { isBeat, opening, runsOk, shotDuration, type Line, airedSeconds } from './show';
 import { GestureSchedule } from './gestures';
+import { houseConfig, type HouseCue } from './house';
 import { SpeechError } from './speech';
 import {
   SponsorProgram,
@@ -85,6 +86,7 @@ export type Services = {
     topic?: TopicBrief,
     from?: string,
     sponsorship?: SponsorCue,
+    house?: HouseCue,
   ) => Promise<Line[]>;
   render: (line: Line) => Promise<Clip>;
   release: (url: string) => void;
@@ -192,6 +194,8 @@ export class Podcast {
   private playbackEpoch = 0;
   private paidBuffered = false;
   private lastPaidAt = -Infinity;
+  /** Aired seconds at the last house plug, so the show never plugs itself twice in a row. */
+  private lastHouseAt = -Infinity;
   private active = 0;
   private ended = false;
   private playedSeconds = 0;
@@ -259,6 +263,7 @@ export class Podcast {
     this.playedSeconds = 0;
     this.lastPaidAt = Number.isFinite(this.lastPaidAt) ? 0 : -Infinity;
     this.paidBuffered = false;
+    this.lastHouseAt = -Infinity;
     this.sponsorProgram?.beginRun();
     this.gestures = new GestureSchedule();
     this.set({ phase: 'buffering', ...this.queuePatch() });
@@ -962,6 +967,19 @@ export class Podcast {
         : undefined;
     const topic = request || sponsorship ? undefined : pickTopic(this.queue);
     if (topic) this.queue = markTopic(this.queue, topic.id, 'writing');
+    // The show plugs itself on the playback clock: an ordinary exchange, never a paid one, a
+    // chat answer or the chart, about ninety seconds in and then every four minutes of air.
+    // Reserved on issue, so a rejected house batch is retried plain and the next plug waits.
+    const house: HouseCue | undefined =
+      !request &&
+      !sponsorship &&
+      topic?.source !== 'coin' &&
+      topic?.source !== 'chat' &&
+      this.playedSeconds >= houseConfig.firstAfterSeconds &&
+      this.playedSeconds - this.lastHouseAt >= houseConfig.everySeconds
+        ? { coinLive: this.state.coinLaunched === true }
+        : undefined;
+    if (house) this.lastHouseAt = this.playedSeconds;
     this.inflightRequestId = request?.id;
     this.inflightSponsorId = sponsorship?.orderId;
     const recent: Line[] = [...this.state.history, ...this.state.slots]
@@ -983,6 +1001,7 @@ export class Podcast {
         topic && briefOf(topic),
         request?.from,
         sponsorship,
+        house,
       );
       if (run !== this.run) return;
       if (epoch !== this.writingEpoch) {
