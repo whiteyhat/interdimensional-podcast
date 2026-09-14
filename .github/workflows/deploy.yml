@@ -92,6 +92,53 @@ jobs:
           fi
           npx wrangler deploy --config dist/server/wrangler.json
 
+      # The site's half of the two sponsorship services (node scripts/media.mjs setup production
+      # prints the values). Only the addresses and the shared tokens: this step never touches
+      # SPONSOR_ENABLED, which is Carlos's decision alone, and never a price. A missing value
+      # leaves the cap off sale, which is the state production is in anyway, so it warns; a
+      # value that is present but unusable is a mistake to fix, so it fails.
+      - name: Publish the sponsorship service settings
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SPONSOR_MEDIA_URL: ${{ vars.SPONSOR_MEDIA_URL }}
+          SPONSOR_MEDIA_TOKEN: ${{ secrets.SPONSOR_MEDIA_TOKEN }}
+          SPONSOR_RECONCILE_TOKEN: ${{ secrets.SPONSOR_RECONCILE_TOKEN }}
+        run: |
+          put() { printf '%s' "$2" | npx wrangler secret put "$1" --config dist/server/wrangler.json; }
+          if [ -n "$SPONSOR_MEDIA_URL" ]; then
+            case "$SPONSOR_MEDIA_URL" in
+              https://*) ;;
+              *) echo "::error::SPONSOR_MEDIA_URL must be an https address."; exit 1 ;;
+            esac
+            # A rehearsal desk prices nothing, but it tailors against the rehearsal site and
+            # holds the rehearsal token: production must never be pointed at one.
+            case "$SPONSOR_MEDIA_URL" in
+              *devnet*|*staging*) echo "::error::SPONSOR_MEDIA_URL names a rehearsal desk."; exit 1 ;;
+            esac
+            put SPONSOR_MEDIA_URL "$SPONSOR_MEDIA_URL"
+          else
+            echo "::warning::SPONSOR_MEDIA_URL is not set; the cap stays off sale."
+          fi
+          if [ -n "$SPONSOR_MEDIA_TOKEN" ]; then
+            if [ "${#SPONSOR_MEDIA_TOKEN}" -lt 24 ]; then
+              echo "::error::SPONSOR_MEDIA_TOKEN is shorter than the 24 characters the worker requires."
+              exit 1
+            fi
+            put SPONSOR_MEDIA_TOKEN "$SPONSOR_MEDIA_TOKEN"
+          else
+            echo "::warning::SPONSOR_MEDIA_TOKEN is not set; the cap stays off sale."
+          fi
+          if [ -n "$SPONSOR_RECONCILE_TOKEN" ]; then
+            if [ "${#SPONSOR_RECONCILE_TOKEN}" -lt 16 ]; then
+              echo "::error::SPONSOR_RECONCILE_TOKEN is shorter than the 16 characters the worker requires."
+              exit 1
+            fi
+            put SPONSOR_RECONCILE_TOKEN "$SPONSOR_RECONCILE_TOKEN"
+          else
+            echo "::warning::SPONSOR_RECONCILE_TOKEN is not set; payment recovery is left to each buyer's receipt."
+          fi
+
       - name: Check the site answers
         run: |
           for i in 1 2 3 4 5; do
