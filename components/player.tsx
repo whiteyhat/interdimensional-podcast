@@ -6,6 +6,8 @@ import { cast } from '@/lib/show';
 import { PlaybackAudio } from '@/lib/playback-audio';
 import { PlaybackHealth } from '@/lib/playback-health';
 import { assignLayers } from '@/lib/video-layers';
+/** How long the sound runs past the aligned end of the last word before it closes. */
+const audioTailSeconds = 0.2;
 export function Player({
   state,
   muted,
@@ -33,6 +35,12 @@ export function Player({
   useLayoutEffect(() => {
     failureCallback.current = onPlaybackFailure;
   }, [onPlaybackFailure]);
+  // The cut inside the playback effect ends the clip; a fresh callback identity must not
+  // restart the clip on air, so it reads the latest one through a ref.
+  const endedCallback = useRef(onEnded);
+  useLayoutEffect(() => {
+    endedCallback.current = onEnded;
+  }, [onEnded]);
   useEffect(() => {
     mounted.current = true;
     const media = elements.current;
@@ -148,8 +156,16 @@ export function Player({
       let bus: PlaybackAudio;
       try {
         bus = audio.current ??= new PlaybackAudio();
-        // Older buffered clips lack an audit boundary. Regenerate them before airing.
-        bus.attach(video, current.speechEnd ?? 0);
+        // Older buffered clips lack an audit boundary. Regenerate them before airing. The
+        // aligner's endpoint runs a little early on real takes, so the sound closes a beat
+        // after it rather than on it: the last word arrives whole.
+        bus.attach(
+          video,
+          Math.min(
+            current.playbackEnd ?? Infinity,
+            (current.speechEnd ?? 0) + audioTailSeconds,
+          ),
+        );
         void bus
           .resume()
           .catch(() => fail('The browser could not start the verified audio.'));
@@ -210,13 +226,40 @@ export function Player({
         )
           fail('Playback stopped making progress for eight seconds.');
       }, 500);
+      // The take ends where the render said, not where the media does: past that point the
+      // mouth may move with nothing verified to say. Checked on every time update and on a
+      // timer aimed at the cut, so the cut lands within a frame or two either way.
+      let done = false;
+      let cut: ReturnType<typeof setTimeout> | undefined;
+      const finish = () => {
+        if (cancelled || done || revoked.current.has(current.url)) return;
+        done = true;
+        bus.silence(video);
+        video.pause();
+        endedCallback.current(current.id);
+      };
+      const stopAt = current.playbackEnd;
+      const reachedCut = () => {
+        if (stopAt === undefined || stopAt >= video.duration) return;
+        if (video.currentTime >= stopAt) finish();
+        else if (cut === undefined && !video.paused)
+          cut = setTimeout(() => {
+            cut = undefined;
+            reachedCut();
+          }, Math.max(20, ((stopAt - video.currentTime) / video.playbackRate) * 1000));
+      };
+      video.addEventListener('timeupdate', reachedCut);
+      video.addEventListener('playing', reachedCut);
       return () => {
         cancelled = true;
         bus.silence(video);
         video.pause();
         if (frame !== undefined) video.cancelVideoFrameCallback(frame);
         if (paint !== undefined) cancelAnimationFrame(paint);
+        if (cut !== undefined) clearTimeout(cut);
         video.removeEventListener('playing', fallback);
+        video.removeEventListener('timeupdate', reachedCut);
+        video.removeEventListener('playing', reachedCut);
         clearInterval(watchdog);
       };
     }
