@@ -317,6 +317,11 @@ export async function uploadSponsorAsset(
     const origin = request.headers.get('origin');
     if (origin && origin !== new URL(request.url).origin)
       throw new SponsorError(403, 'Origin not allowed.');
+    // A logo is artwork for a placement someone is buying. While checkout is off nothing can be
+    // bought, so nothing is stored: no rate-limit row, no asset row, no object, no desk call.
+    // The desk being armed must never turn the site into free image storage.
+    if (v.SPONSOR_ENABLED !== 'true')
+      throw new SponsorError(503, 'Sponsorship checkout is not enabled.');
     const ip = request.headers.get('cf-connecting-ip') || 'local';
     if (tooMany(`sponsor-art:${ip}`, 6, Date.now()))
       throw new SponsorError(
