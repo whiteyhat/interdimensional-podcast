@@ -6,8 +6,6 @@ import { cast } from '@/lib/show';
 import { PlaybackAudio } from '@/lib/playback-audio';
 import { PlaybackHealth } from '@/lib/playback-health';
 import { assignLayers } from '@/lib/video-layers';
-/** How long the sound runs past the aligned end of the last word before it closes. */
-const audioTailSeconds = 0.2;
 export function Player({
   state,
   muted,
@@ -156,16 +154,8 @@ export function Player({
       let bus: PlaybackAudio;
       try {
         bus = audio.current ??= new PlaybackAudio();
-        // Older buffered clips lack an audit boundary. Regenerate them before airing. The
-        // aligner's endpoint runs a little early on real takes, so the sound closes a beat
-        // after it rather than on it: the last word arrives whole.
-        bus.attach(
-          video,
-          Math.min(
-            current.playbackEnd ?? Infinity,
-            (current.speechEnd ?? 0) + audioTailSeconds,
-          ),
-        );
+        // Older buffered clips lack an audit boundary. Regenerate them before airing.
+        bus.attach(video, current.speechEnd ?? 0);
         void bus
           .resume()
           .catch(() => fail('The browser could not start the verified audio.'));
