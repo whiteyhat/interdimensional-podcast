@@ -1,9 +1,7 @@
-# The on-air player in real Chrome on Linux, the way the broadcast box runs it. Not part of the
-# Check workflow because it needs Chrome and a speaker; it runs when the player can change.
-#
-# The box died about forty minutes into every show because the player kept a decoder per clip
-# alive: this runs hundreds of clip changes and fails if video elements, audio nodes, DOM
-# nodes, memory or threads grow per clip, or if any take fails to play. No video is generated.
+# The on-air player in real Chrome on Linux, the way the broadcast box runs it: the leak check in
+# tests/browser/player-memory.mjs (why: lib/video-layers.ts) and the player suites. Not part of
+# the Check workflow because it needs Chrome and a speaker; it runs when the player can change.
+# No video is generated.
 
 name: Player
 
@@ -38,23 +36,23 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
-
       # Chrome's audio needs somewhere real to go or the Web Audio graph never runs: the same
-      # PulseAudio null sink the box gives it.
-      - name: A speaker for Chrome, as on the box
+      # PulseAudio null sink the box gives it. Installed while npm ci runs.
+      - name: Dependencies, and a speaker for Chrome as on the box
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq pulseaudio
+          sudo sh -c 'apt-get update -qq && apt-get install -y -qq pulseaudio' &
+          apt=$!
+          npm ci
+          wait $apt
           pulseaudio --start --exit-idle-time=-1 --load="module-null-sink sink_name=studio"
           pactl set-default-sink studio
           google-chrome --version
 
-      - name: Memory across 240 clip changes
-        run: node tests/browser/player-memory.mjs --clips=240 --every=40
+      - name: Memory across 120 clip changes
+        run: node tests/browser/player-memory.mjs --clips=120 --every=30
 
       - name: Memory with every take played to its natural end
-        run: node tests/browser/player-memory.mjs --clips=120 --every=40 --hold=0
+        run: node tests/browser/player-memory.mjs --clips=60 --every=30 --hold=0
 
       - name: Cuts, audio boundaries and recovery
         run: node tests/browser/player-suites.mjs

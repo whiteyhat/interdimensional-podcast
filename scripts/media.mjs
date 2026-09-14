@@ -263,19 +263,17 @@ async function nextSteps(env) {
     console.log(`  gh variable set DEVNET_ORIGIN --body '${origin}'`);
     console.log('  gh workflow run deploy-devnet.yml --ref main');
   } else {
-    const put = (name) =>
-      `npx wrangler secret put ${name} --config dist/server/wrangler.json`;
     console.log(
-      '\nPut them on the production worker from a production build (npm run build first):',
+      '\nThe "Deploy" workflow ships them with the code on every push to main. Store them in GitHub once:',
     );
-    console.log(`  printf '%s' '${url}' | ${put('SPONSOR_MEDIA_URL')}`);
+    console.log(`  gh variable set SPONSOR_MEDIA_URL --body '${url}'`);
     console.log(
-      `  printf '%s' ${from('SPONSOR_MEDIA_TOKEN')} | ${put('SPONSOR_MEDIA_TOKEN')}`,
+      `  printf '%s' ${from('SPONSOR_MEDIA_TOKEN')} | gh secret set SPONSOR_MEDIA_TOKEN`,
     );
     console.log(
-      `  printf '%s' ${from('SPONSOR_RECONCILE_TOKEN')} | ${put('SPONSOR_RECONCILE_TOKEN')}`,
+      `  printf '%s' ${from('SPONSOR_RECONCILE_TOKEN')} | gh secret set SPONSOR_RECONCILE_TOKEN`,
     );
-    console.log(`  printf '%s' '${origin}' | ${put('SITE_URL')}`);
+    console.log('  gh workflow run deploy.yml --ref main');
   }
 }
 

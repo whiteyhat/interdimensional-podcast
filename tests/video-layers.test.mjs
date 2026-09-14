@@ -5,9 +5,8 @@ import { build } from './build.mjs';
 await build(['video-layers']);
 const { assignLayers } = await import('../work/tests/video-layers.js');
 
-// The on-air player hands clips to a fixed pool of <video> elements. Every element the audio
-// bus has routed stays alive until the page's AudioContext closes, so the pool must be bounded
-// by the clips held at once, never by the clips aired. These pin that contract.
+// The pool must be bounded by the clips held at once, never by the clips aired (why: the
+// comment on assignLayers). These pin that contract.
 
 void test('each new clip takes a layer, and a clip keeps its layer while the others move', () => {
   let layers = assignLayers([], ['a']);
