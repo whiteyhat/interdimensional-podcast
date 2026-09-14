@@ -63,7 +63,8 @@ void test('a larger hole, a late start on a later word, or a hole a different sp
 // same line; a take that dropped its last word, or said a different line, is not.
 void test('tolerates a small transcription difference and keeps the aligned end of the last word', () => {
   const script = 'I told you, anon, the chart never lies.';
-  assert.equal(transcriptTolerance('itoldyouanonthechartneverlies'), 2);
+  assert.equal(transcriptTolerance('itoldyouanonthechartneverlies'), 3);
+  assert.equal(transcriptTolerance('a'.repeat(105)), 13, 'one misheard name on a long line passes');
   assert.equal(speechEndFor(script, result([
     chunk('I', 0, .2), chunk('told', .2, .4), chunk('you,', .4, .6), chunk('and on,', .6, 1.0),
     chunk('the', 1.0, 1.1), chunk('chart', 1.1, 1.4), chunk('never', 1.4, 1.7), chunk('lies.', 1.7, 2.1), chunk('Right?', 2.3, 2.6),

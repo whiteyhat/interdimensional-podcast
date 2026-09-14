@@ -37,12 +37,14 @@ function distance(a: string, b: string): number {
   return previous[b.length]!;
 }
 /**
- * How far the transcript may stray from the script and still count as the same line: a tenth of
- * its characters, at least two and at most twelve. Whisper mishears a name or a contraction on
- * real takes; refusing those cost a retake each and, on air, a frozen frame while it rendered.
+ * How far the transcript may stray from the script and still count as the same line: an eighth
+ * of its characters, at least three and at most fourteen. Whisper mishears a name or a
+ * contraction on real takes; refusing those cost a retake each and, on air, a frozen frame
+ * while it rendered. On air a tenth refused takes eleven characters off on a 105-character
+ * line, one misheard name, so the allowance is an eighth.
  */
 export function transcriptTolerance(expected: string): number {
-  return Math.min(12, Math.max(2, Math.floor(expected.length / 10)));
+  return Math.min(14, Math.max(3, Math.floor(expected.length / 8)));
 }
 /** Refuse an uncertain take; never air the unverified full soundtrack as a fallback. */
 export function speechEndFor(script: string, raw: unknown): number {
