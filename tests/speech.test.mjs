@@ -37,3 +37,24 @@ void test('incomplete speaker coverage cannot certify the utterance', () => {
 void test('excluded speech cannot overlap the verified final word', () => {
   assert.throws(() => speechEndFor('Neither.', result([chunk('Neither',0,1),chunk('hello',.8,1.5)])), /overlap/i);
 });
+// The diarizer's own grid: it leaves same-speaker holes inside a line and starts late on the
+// first word (measured on real takes: holes of 84-236 ms, onsets of 100-190 ms). The audit
+// bridges those and still refuses a hole a listener would notice or an unlabelled word.
+void test('bridges the diarizer\'s same-speaker holes and its late start on the first word', () => {
+  const chunks = [chunk('Of', .03, .35), chunk('course', .35, .8), chunk('not.', .8, 1.15)];
+  assert.equal(speechEndFor('Of course not.', { chunks, diarization_segments: [
+    { timestamp: [.22, .5], speaker: 'SPEAKER_00' },
+    { timestamp: [.736, 1.4], speaker: 'SPEAKER_00' }, // a 236 ms hole under "course"
+  ] }), 1.15);
+  assert.equal(speechEndFor('Of course not.', { chunks, diarization_segments: [
+    { timestamp: [.4, 1.1], speaker: 'SPEAKER_00' }, // 370 ms after "Of" begins; 50 ms before "not." ends
+  ] }), 1.15);
+});
+void test('a larger hole, a late start on a later word, or a hole a different speaker fills still refuses', () => {
+  const chunks = [chunk('Of', .03, .35), chunk('course', .35, .8), chunk('not.', .8, 1.15)];
+  for (const diarization_segments of [
+    [{ timestamp: [0, .4], speaker: 'SPEAKER_00' }, { timestamp: [1.0, 1.4], speaker: 'SPEAKER_00' }], // 600 ms hole
+    [{ timestamp: [.7, 1.4], speaker: 'SPEAKER_00' }], // 670 ms after the first word begins
+    [{ timestamp: [0, .4], speaker: 'SPEAKER_00' }, { timestamp: [.6, 1.4], speaker: 'SPEAKER_01' }],
+  ]) assert.throws(() => speechEndFor('Of course not.', { chunks, diarization_segments }), /speaker/i);
+});
