@@ -33,6 +33,12 @@ export function Player({
   useLayoutEffect(() => {
     failureCallback.current = onPlaybackFailure;
   }, [onPlaybackFailure]);
+  // The cut inside the playback effect ends the clip; a fresh callback identity must not
+  // restart the clip on air, so it reads the latest one through a ref.
+  const endedCallback = useRef(onEnded);
+  useLayoutEffect(() => {
+    endedCallback.current = onEnded;
+  }, [onEnded]);
   useEffect(() => {
     mounted.current = true;
     const media = elements.current;
@@ -210,13 +216,40 @@ export function Player({
         )
           fail('Playback stopped making progress for eight seconds.');
       }, 500);
+      // The take ends where the render said, not where the media does: past that point the
+      // mouth may move with nothing verified to say. Checked on every time update and on a
+      // timer aimed at the cut, so the cut lands within a frame or two either way.
+      let done = false;
+      let cut: ReturnType<typeof setTimeout> | undefined;
+      const finish = () => {
+        if (cancelled || done || revoked.current.has(current.url)) return;
+        done = true;
+        bus.silence(video);
+        video.pause();
+        endedCallback.current(current.id);
+      };
+      const stopAt = current.playbackEnd;
+      const reachedCut = () => {
+        if (stopAt === undefined || stopAt >= video.duration) return;
+        if (video.currentTime >= stopAt) finish();
+        else if (cut === undefined && !video.paused)
+          cut = setTimeout(() => {
+            cut = undefined;
+            reachedCut();
+          }, Math.max(20, ((stopAt - video.currentTime) / video.playbackRate) * 1000));
+      };
+      video.addEventListener('timeupdate', reachedCut);
+      video.addEventListener('playing', reachedCut);
       return () => {
         cancelled = true;
         bus.silence(video);
         video.pause();
         if (frame !== undefined) video.cancelVideoFrameCallback(frame);
         if (paint !== undefined) cancelAnimationFrame(paint);
+        if (cut !== undefined) clearTimeout(cut);
         video.removeEventListener('playing', fallback);
+        video.removeEventListener('timeupdate', reachedCut);
+        video.removeEventListener('playing', reachedCut);
         clearInterval(watchdog);
       };
     }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { build } from './build.mjs';
 
 await build(['services']);
-const { createServices } = await import('../work/tests/services.js');
+const { createServices, pictureTailSeconds } = await import('../work/tests/services.js');
 
 // A dressed shot used to skip fal's scaler and go to the media desk to have a cap composited
 // onto the take, per clip, behind a tracker that refused two takes in three. The look is now
@@ -107,7 +107,10 @@ void test('a dressed clip is scaled and audited like any other clip, and nothing
     'the clip still carries the look it was made with',
   );
   assert.equal(clip.speechEnd, 0.8);
-  assert.equal(clip.duration, 10, 'a clean dressed take keeps its complete native ending');
+  // Playback ends shortly after the verified speech, dressed or not: the model's babble after
+  // the line would otherwise air as a moving mouth with no voice.
+  assert.equal(clip.playbackEnd, 0.8 + pictureTailSeconds);
+  assert.equal(clip.duration, clip.playbackEnd, 'airtime is the cut length, not the media length');
   services.release(clip.url);
 });
 

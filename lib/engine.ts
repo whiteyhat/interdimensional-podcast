@@ -59,6 +59,8 @@ export type Clip = Line & {
   /** Verified end of the scripted utterance; the remaining picture plays silently. */
   speechEnd?: number;
   duration: number;
+  /** Where playback stops: shortly after the verified speech, so a silent mouth never airs. */
+  playbackEnd?: number;
   renderMs: number;
 };
 export type Slot = Line & {
@@ -134,7 +136,7 @@ export const bufferConfig: BufferPolicy = {
   startupSeconds: 40,
   targetSeconds: 60,
   recoverySeconds: 30,
-  concurrency: 6,
+  concurrency: 8,
   maxSlots: 8,
   retakeLimit: 3,
   writerCooldownMs: 30000,

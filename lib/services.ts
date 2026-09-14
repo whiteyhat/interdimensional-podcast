@@ -81,6 +81,8 @@ async function topics(body: unknown, forceSource?: TopicSource) {
     .filter((draft): draft is TopicDraft => !!draft);
   return { topics: drafts, cost: data.cost };
 }
+/** How long the picture runs past the verified speech: the last word rings, the mouth closes. */
+export const pictureTailSeconds = 0.4;
 export function createServices(): Services {
   const jobs = new Map<string, string>();
   const speechRetries = new Map<string, number>();
@@ -217,11 +219,16 @@ export function createServices(): Services {
         });
         if (speech.speechEnd > duration)
           throw new SpeechError('Speech boundary exceeds clip duration');
+        // The model keeps the mouth moving past the verified words often enough that airing
+        // the whole take shows a silent mouth. Playback stops shortly after the speech ends:
+        // long enough for the last word to ring and the mouth to close, no longer.
+        const playbackEnd = Math.min(duration, speech.speechEnd + pictureTailSeconds);
         return {
           ...line,
           url,
           rawUrl: finalUrl,
-          duration,
+          duration: playbackEnd,
+          playbackEnd,
           speechEnd: speech.speechEnd,
           renderMs: Date.now() - start,
         } satisfies Clip;

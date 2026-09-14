@@ -25,6 +25,25 @@ function timing(value: unknown): [number, number] {
     throw new SpeechError('Invalid speech timestamps');
   return value as [number, number];
 }
+/** Edit distance between two short strings; the transcript and the script are under a few hundred characters. */
+function distance(a: string, b: string): number {
+  let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j++)
+      current[j] = Math.min(previous[j]! + 1, current[j - 1]! + 1, previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+    previous = current;
+  }
+  return previous[b.length]!;
+}
+/**
+ * How far the transcript may stray from the script and still count as the same line: a tenth of
+ * its characters, at least two and at most twelve. Whisper mishears a name or a contraction on
+ * real takes; refusing those cost a retake each and, on air, a frozen frame while it rendered.
+ */
+export function transcriptTolerance(expected: string): number {
+  return Math.min(12, Math.max(2, Math.floor(expected.length / 10)));
+}
 /** Refuse an uncertain take; never air the unverified full soundtrack as a fallback. */
 export function speechEndFor(script: string, raw: unknown): number {
   const result = raw as { chunks?: { text?: unknown; timestamp?: unknown; speaker?: unknown }[]; diarization_segments?: { timestamp?: unknown; speaker?: unknown }[] } | null;
@@ -32,27 +51,43 @@ export function speechEndFor(script: string, raw: unknown): number {
     throw new SpeechError('Missing speech alignment or speaker analysis');
   const expected = normalized(script);
   if (!expected) throw new SpeechError('Missing scripted speech');
+  const lastWord = normalized(script.trim().split(/\s+/).at(-1) ?? '');
+  const tolerance = transcriptTolerance(expected);
   let heard = '';
   let end = 0;
-  let found = false;
   const speakers = new Set<string>();
-  const accepted: [number, number][] = [];
-  let consumed = 0;
-  for (const chunk of result.chunks) {
+  const timings: [number, number][] = [];
+  // The closest prefix of the transcript to the script, by edit distance. An exact match wins at
+  // once; otherwise the best prefix must be within tolerance and still end on the script's last
+  // word, so a take that dropped its final word is never certified by a near miss before it.
+  let best: { distance: number; consumed: number; end: number } | undefined;
+  for (const [index, chunk] of result.chunks.entries()) {
     if (typeof chunk.text !== 'string') throw new SpeechError('Invalid speech transcript');
     const [start, stop] = timing(chunk.timestamp);
     if (start < end - 0.02) throw new SpeechError('Overlapping speech timestamps');
-    accepted.push([start, stop]);
-    consumed++;
+    timings.push([start, stop]);
     heard += normalized(chunk.text);
     end = stop;
     if (typeof chunk.speaker === 'string' && chunk.speaker.trim()) speakers.add(chunk.speaker);
-    if (heard === expected) { found = true; break; }
+    const d = heard === expected ? 0 : distance(heard, expected);
+    if (!best || d < best.distance) best = { distance: d, consumed: index + 1, end };
+    if (d === 0) break;
     // Numeric words can temporarily differ until their complete number is assembled.
+    if (heard.length > expected.length + tolerance) break;
   }
-  if (!found) throw new SpeechError('Generated speech does not match the scripted line');
+  if (!best || best.distance > tolerance)
+    throw new SpeechError(`Generated speech does not match the scripted line${best ? ` (closest prefix differs by ${best.distance} of ${expected.length} characters)` : ''}`);
+  const kept = result.chunks.slice(0, best.consumed).map((c) => normalized(String(c.text))).join('');
+  if (best.distance > 0 && lastWord && !kept.endsWith(lastWord))
+    throw new SpeechError(`Generated speech does not end on the scripted last word (closest prefix differs by ${best.distance} of ${expected.length} characters)`);
+  const consumed = best.consumed;
+  end = best.end;
+  const accepted = timings.slice(0, consumed);
+  // Only the excluded chunks' starts matter, and Whisper leaves the end of a final chunk null now
+  // and then; that alone must not refuse an otherwise verified take.
   for (const extra of result.chunks.slice(consumed)) {
-    const [start] = timing(extra.timestamp);
+    const start = Array.isArray(extra.timestamp) ? extra.timestamp[0] : undefined;
+    if (typeof start !== 'number' || !Number.isFinite(start) || start < 0) throw new SpeechError('Invalid speech timestamps');
     if (start < end) throw new SpeechError('Excluded speech overlaps the scripted line');
   }
   const segments = result.diarization_segments.map(segment => {

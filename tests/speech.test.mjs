@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from './build.mjs';
 await build(['speech']);
-const { speechEndFor } = await import('../work/tests/speech.js');
+const { speechEndFor, transcriptTolerance } = await import('../work/tests/speech.js');
 const chunk = (text, start, end, speaker = 'SPEAKER_00') => ({ text, timestamp: [start, end], speaker });
 const result = chunks => ({ chunks, diarization_segments: [{ timestamp: [0, 10], speaker: 'SPEAKER_00' }] });
 void test('keeps only the scripted prefix of a real contaminated continuity take', () => {
@@ -57,4 +57,32 @@ void test('a larger hole, a late start on a later word, or a hole a different sp
     [{ timestamp: [.7, 1.4], speaker: 'SPEAKER_00' }], // 670 ms after the first word begins
     [{ timestamp: [0, .4], speaker: 'SPEAKER_00' }, { timestamp: [.6, 1.4], speaker: 'SPEAKER_01' }],
   ]) assert.throws(() => speechEndFor('Of course not.', { chunks, diarization_segments }), /speaker/i);
+});
+
+// Whisper mishears a name or a contraction on real takes. A near miss within tolerance is the
+// same line; a take that dropped its last word, or said a different line, is not.
+void test('tolerates a small transcription difference and keeps the aligned end of the last word', () => {
+  const script = 'I told you, anon, the chart never lies.';
+  assert.equal(transcriptTolerance('itoldyouanonthechartneverlies'), 2);
+  assert.equal(speechEndFor(script, result([
+    chunk('I', 0, .2), chunk('told', .2, .4), chunk('you,', .4, .6), chunk('and on,', .6, 1.0),
+    chunk('the', 1.0, 1.1), chunk('chart', 1.1, 1.4), chunk('never', 1.4, 1.7), chunk('lies.', 1.7, 2.1), chunk('Right?', 2.3, 2.6),
+  ])), 2.1);
+});
+void test('refuses a near miss that dropped the scripted last word, and a different line', () => {
+  const script = 'The chart is bleeding and nobody is buying it.';
+  assert.throws(() => speechEndFor(script, result([
+    chunk('The chart is bleeding', 0, 1.2), chunk('and nobody is buying.', 1.2, 2.4),
+  ])), /last word/i);
+  assert.throws(() => speechEndFor(script, result([
+    chunk('The chart is pumping', 0, 1.2), chunk('and everybody is buying it.', 1.2, 2.4),
+  ])), /does not match/i);
+});
+void test('an excluded trailing chunk with no end time does not refuse a verified take', () => {
+  assert.equal(speechEndFor('Of course.', result([
+    chunk('Of', .03, .35), chunk('course.', .35, 1.15), { text: 'and', timestamp: [1.4, null], speaker: 'SPEAKER_00' },
+  ])), 1.15);
+  assert.throws(() => speechEndFor('Of course.', result([
+    chunk('Of', .03, .35), chunk('course.', .35, 1.15), { text: 'and', timestamp: [null, null], speaker: 'SPEAKER_00' },
+  ])), /timestamps/i);
 });
