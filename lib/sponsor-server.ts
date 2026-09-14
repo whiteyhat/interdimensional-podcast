@@ -28,6 +28,7 @@ import {
   randomPayReference,
   fetchSponsorPrice,
   tokenInfo,
+  TOKEN_PROGRAM,
   spendable,
   buildSponsorTransaction,
   inspectSponsorSigned,
@@ -313,7 +314,9 @@ async function assetState(
   // all; every other asset still has to be priced for real.
   const { solUsd } = devnetPricing(v);
   const [info, price] = await Promise.all([
-    mint ? tokenInfo(c, mint) : Promise.resolve({ decimals: 9 }),
+    mint
+      ? tokenInfo(c, mint)
+      : Promise.resolve({ decimals: 9, program: TOKEN_PROGRAM }),
     asset === 'USDC'
       ? Promise.resolve('1')
       : asset === 'SOL' && solUsd
@@ -325,7 +328,7 @@ async function assetState(
             now,
           ),
   ]);
-  const recipient = await spendable(c, treasury, mint);
+  const recipient = await spendable(c, treasury, mint, info.program);
   if (mint && !recipient.hasAta)
     throw new SponsorError(
       503,
