@@ -1,0 +1,60 @@
+# The on-air player in real Chrome on Linux, the way the broadcast box runs it. Not part of the
+# Check workflow because it needs Chrome and a speaker; it runs when the player can change.
+#
+# The box died about forty minutes into every show because the player kept a decoder per clip
+# alive: this runs hundreds of clip changes and fails if video elements, audio nodes, DOM
+# nodes, memory or threads grow per clip, or if any take fails to play. No video is generated.
+
+name: Player
+
+on:
+  pull_request:
+    paths:
+      - 'components/player.tsx'
+      - 'lib/playback-audio.ts'
+      - 'lib/playback-health.ts'
+      - 'lib/video-layers.ts'
+      - 'lib/engine.ts'
+      - 'tests/browser/player-*'
+      - 'tests/browser/bars.mp4'
+      - '.github/workflows/player.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: player-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  player:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Chrome's audio needs somewhere real to go or the Web Audio graph never runs: the same
+      # PulseAudio null sink the box gives it.
+      - name: A speaker for Chrome, as on the box
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq pulseaudio
+          pulseaudio --start --exit-idle-time=-1 --load="module-null-sink sink_name=studio"
+          pactl set-default-sink studio
+          google-chrome --version
+
+      - name: Memory across 240 clip changes
+        run: node tests/browser/player-memory.mjs --clips=240 --every=40
+
+      - name: Memory with every take played to its natural end
+        run: node tests/browser/player-memory.mjs --clips=120 --every=40 --hold=0
+
+      - name: Cuts, audio boundaries and recovery
+        run: node tests/browser/player-suites.mjs

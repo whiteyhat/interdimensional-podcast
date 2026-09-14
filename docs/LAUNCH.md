@@ -135,6 +135,7 @@ budget), so long-running behaviour is proven for free, and the paid check is sho
 # Free: the real Player and engine in Chrome through 600 clip changes (~100 minutes of show),
 # no generation. Fails if video elements, audio nodes, DOM nodes, memory or threads grow per clip.
 node tests/browser/player-memory.mjs --clips=600 --every=100
+node tests/browser/player-memory.mjs --clips=120 --hold=0   # every take to its natural end
 node tests/browser/player-suites.mjs   # cuts, audio boundaries and recovery in real Chrome
 
 # Paid, 3-5 minutes, on the rehearsal input (AIR_RTMP_INPUT) so nothing reaches X or pump.fun:
@@ -147,8 +148,9 @@ The box used to die about forty minutes into a broadcast: the player mounted a f
 per clip, and Chromium keeps every element the audio bus has routed alive until the page's
 AudioContext closes, so each take left a decoder and its threads behind until the container
 could not create another thread and the studio worker died. The player now hands clips to a
-fixed pool of layers (`lib/video-layers.ts`), and `player-memory.mjs` is the regression check:
-run it after any change to `components/player.tsx` or `lib/playback-audio.ts`.
+fixed pool of layers (`lib/video-layers.ts`), and `player-memory.mjs` is the regression check.
+The Player workflow (`.github/workflows/player.yml`) runs it and the player suites in Chrome on
+Linux, with the box's PulseAudio sink, on every pull request that can change the player.
 
 Then, per broadcast:
 

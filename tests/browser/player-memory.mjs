@@ -258,6 +258,11 @@ try {
     report.perClip.sources > 0.5 ||
     report.perClip.rendererMB > 1 ||
     report.perClip.threads > 0.25;
+  // A pooled layer is reused for the next clip: a stall, a decode error or a blocked audio start
+  // on any take, a stale event from the layer's previous clip included, is reported by the
+  // Player as a playback failure, and one is enough to fail the run.
+  const failures = samples.at(-1)?.stats.failures ?? 0;
+  if (failures) console.log(`FAILED: the Player reported ${failures} playback failure(s).`);
   console.log(leaking ? 'LEAK: memory grows with every clip.' : 'OK: memory is flat across clips.');
-  process.exit(leaking ? 1 : 0);
+  process.exit(leaking || failures || process.exitCode ? 1 : 0);
 }
