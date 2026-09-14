@@ -1,5 +1,6 @@
 import { isBeat, opening, runsOk, shotDuration, type Line } from './show';
 import { GestureSchedule } from './gestures';
+import { SpeechError } from './speech';
 import {
   SponsorProgram,
   type SponsorCue,
@@ -64,6 +65,8 @@ export type Slot = Line & {
   status: 'rendering' | 'ready' | 'failed';
   clip?: Clip;
   error?: string;
+  /** A failed shot is made again once this time has passed and a pipeline is free. */
+  retryAt?: number;
 };
 /** The site hands paid requests to the studio and hears back when one reaches the air. */
 export type RequestServices = {
@@ -118,6 +121,10 @@ export type BufferPolicy = {
   recoverySeconds: number;
   concurrency: number;
   maxSlots: number;
+  /** How many times one shot may fail before the line is skipped. */
+  retakeLimit?: number;
+  /** How long the writer rests after a run of failures before writing again on its own. */
+  writerCooldownMs?: number;
 };
 export const bufferConfig: BufferPolicy = {
   startupSeconds: 40,
@@ -125,7 +132,11 @@ export const bufferConfig: BufferPolicy = {
   recoverySeconds: 30,
   concurrency: 3,
   maxSlots: 8,
+  retakeLimit: 3,
+  writerCooldownMs: 30000,
 };
+/** A refused take is made again at once; a provider or network failure waits this long first. */
+const retakeDelaysMs = [5000, 15000];
 /** Only uninterrupted, decoded footage can protect the next cut. */
 export function readySeconds(slots: Slot[]) {
   let seconds = 0;
@@ -181,6 +192,12 @@ export class Podcast {
   private gestures = new GestureSchedule();
   private writingEpoch = 0;
   private writeFailures = 0;
+  /** How many times each queued shot has failed, so a bad line is skipped rather than retaken forever. */
+  private attempts = new Map<number, number>();
+  /** Timers that belong to the run: a retake's wait and the writer's cool-down. */
+  private timers = new Set<ReturnType<typeof setTimeout>>();
+  /** After a run of writer failures, no exchange is written until this time. */
+  private writeHoldUntil = 0;
   /** When each polling lane last called out, and whether that call is still open. */
   private lanes = new Map<string, { at: number; inflight: boolean }>();
   /** The last shot of each request's written batch, so airing never assumes a batch length. */
@@ -256,6 +273,10 @@ export class Podcast {
     this.advancing = false;
     clearInterval(this.sponsorTimer);
     this.sponsorTimer = undefined;
+    for (const timer of this.timers) clearTimeout(timer);
+    this.timers.clear();
+    this.attempts.clear();
+    this.writeHoldUntil = 0;
     void this.sponsorProgram?.stop();
     this.queue = resetRuntime(this.queue);
     this.set({ phase: 'stopped', writing: false, ...this.queuePatch() });
@@ -497,20 +518,13 @@ export class Podcast {
   }
   retry() {
     this.writeFailures = 0;
+    this.writeHoldUntil = 0;
+    this.attempts.clear();
     this.set({ error: '' });
     for (const slot of this.state.slots
       .filter((s) => s.status === 'failed')
       .slice(0, Math.max(0, this.policy.concurrency - this.active)))
-      if (slot.status === 'failed') {
-        this.set({
-          slots: this.state.slots.map((s) =>
-            s.id === slot.id
-              ? { ...s, status: 'rendering', error: undefined }
-              : s,
-          ),
-        });
-        this.launch(slot, this.run);
-      }
+      if (slot.status === 'failed') this.relaunch(slot, this.run);
     this.pump();
   }
   setFeed(enabled: boolean) {
@@ -720,6 +734,17 @@ export class Podcast {
     this.pumpCoin(run);
     this.pumpFeed(run);
     this.pumpNews();
+    // Retakes first: a failed shot is already in the queue, so it is nearer the air than
+    // anything still unwritten.
+    for (const slot of this.state.slots) {
+      if (this.active >= this.policy.concurrency) break;
+      if (
+        slot.status === 'failed' &&
+        slot.retryAt !== undefined &&
+        slot.retryAt <= Date.now()
+      )
+        this.relaunch(slot, run);
+    }
     while (
       this.active < this.policy.concurrency &&
       this.needsFootage() &&
@@ -789,7 +814,7 @@ export class Podcast {
       this.draft.length === 0 &&
       this.needsFootage() &&
       !this.writing &&
-      !this.state.error
+      Date.now() >= this.writeHoldUntil
     ) {
       void this.writeNext(run);
     }
@@ -821,10 +846,16 @@ export class Podcast {
             return;
           }
           this.gestures.rendered(line.id, clip.duration);
+          this.attempts.delete(line.id);
           this.set({
             slots: this.state.slots.map((s) =>
               s.id === line.id ? { ...s, status: 'ready', clip } : s,
             ),
+            // A shot's note is stale once a shot lands; the writer's stays for its cool-down.
+            ...(Date.now() < this.writeHoldUntil ||
+            this.state.slots.some((s) => s.status === 'failed' && s.id !== line.id)
+              ? {}
+              : { error: '' }),
           });
         },
         async (e) => {
@@ -835,17 +866,7 @@ export class Podcast {
               this.rejectPlacement({ ...line, status: 'failed' });
             return;
           }
-          this.set({
-            slots: this.state.slots.map((s) =>
-              s.id === line.id
-                ? { ...s, status: 'failed', error: String(e) }
-                : s,
-            ),
-            error:
-              e instanceof Error
-                ? e.message
-                : 'A shot failed. Retry keeps the existing job where possible.',
-          });
+          this.retake(line, e, run);
         },
       )
       .finally(() => {
@@ -853,6 +874,60 @@ export class Podcast {
         this.active--;
         this.pump();
       });
+  }
+  /**
+   * Nobody watches the box, so a failed shot is made again on its own: at once when the take
+   * was refused (the services layer already advanced the seed), after a short wait when the
+   * provider or the network failed. A line that keeps failing is skipped: holding the air on
+   * one shot is worse than losing one line of the conversation.
+   */
+  private retake(line: Line, e: unknown, run: number) {
+    const attempt = (this.attempts.get(line.id) ?? 0) + 1;
+    this.attempts.set(line.id, attempt);
+    const message = e instanceof Error ? e.message : 'A shot failed.';
+    if (attempt >= (this.policy.retakeLimit ?? bufferConfig.retakeLimit ?? 3)) {
+      this.attempts.delete(line.id);
+      this.set({
+        slots: this.state.slots.filter((s) => s.id !== line.id),
+        error: `${message} Shot ${line.id + 1} was skipped so the show can go on.`,
+      });
+      return;
+    }
+    const delay =
+      e instanceof SpeechError
+        ? 0
+        : (retakeDelaysMs[Math.min(attempt - 1, retakeDelaysMs.length - 1)] ?? 0);
+    this.set({
+      slots: this.state.slots.map((s) =>
+        s.id === line.id
+          ? { ...s, status: 'failed', error: message, retryAt: Date.now() + delay }
+          : s,
+      ),
+      error: `${message} Shot ${line.id + 1} is being made again.`,
+    });
+    // pump() launches the retake once it is due and a pipeline is free; the pipeline this
+    // failure held is released right after this handler. The timer covers the wait.
+    if (delay)
+      this.later(delay, () => {
+        if (run === this.run) this.pump();
+      });
+  }
+  private relaunch(slot: Slot, run: number) {
+    this.set({
+      slots: this.state.slots.map((s) =>
+        s.id === slot.id
+          ? { ...s, status: 'rendering', error: undefined, retryAt: undefined }
+          : s,
+      ),
+    });
+    this.launch(slot, run);
+  }
+  private later(ms: number, fn: () => void) {
+    const timer = setTimeout(() => {
+      this.timers.delete(timer);
+      fn();
+    }, ms);
+    this.timers.add(timer);
   }
   private async writeNext(run: number) {
     this.writing = true;
@@ -952,6 +1027,17 @@ export class Podcast {
           await this.sponsorProgram?.failedExchange(sponsorship, next, e);
           if (run !== this.run) return;
           this.writeFailures = 0;
+        }
+        if (giveUp && !sponsorship) {
+          // Nobody is at the console to press retry: rest, then write again on its own. The
+          // message stays up meanwhile so the box and the operator can see what happened.
+          const cooldown =
+            this.policy.writerCooldownMs ?? bufferConfig.writerCooldownMs ?? 30000;
+          this.writeHoldUntil = Date.now() + cooldown;
+          this.writeFailures = 0;
+          this.later(cooldown, () => {
+            if (run === this.run) this.pump();
+          });
         }
         this.set({
           error:

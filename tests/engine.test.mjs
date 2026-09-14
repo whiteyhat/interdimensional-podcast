@@ -15,8 +15,10 @@ await build([
   'sponsor-delivery-client',
   'engine',
   'services',
+  'speech',
 ]);
 const { Podcast, bufferConfig } = await import('../work/tests/engine.js');
+const { SpeechError } = await import('../work/tests/speech.js');
 const { GestureSchedule, gestureConfig, gestureNames } =
   await import('../work/tests/gestures.js');
 const {
@@ -1003,6 +1005,93 @@ void test('the show gives up and asks for help after repeated writer failures', 
   await tick();
   assert.equal(h.engine.getSnapshot().error, '');
   assert.ok(h.writes.length > stalled, 'retry resumes writing');
+  h.engine.dispose();
+});
+
+// The box has no operator. What used to wait for a click now happens on its own: a failed
+// shot is made again, a hopeless one is skipped, and the writer rests and continues.
+// A job whose shot is still being rendered: the opening's jobs stay in the map after they land.
+const pendingJob = (h) =>
+  [...h.jobs.values()].find((j) =>
+    h.engine.getSnapshot().slots.some((s) => s.id === j.line.id && s.status === 'rendering'),
+  );
+void test('a refused take is made again at once and the show goes on', async () => {
+  const h = harness();
+  h.engine.start();
+  await settle(h, () => h.writes.length > 0);
+  await h.reply(0, 0);
+  const first = pendingJob(h);
+  first.reject(new SpeechError('Incomplete speaker coverage for scripted speech: "then?" at 5.27-6.51s'));
+  await tick();
+  const slot = h.engine.getSnapshot().slots.find((s) => s.id === first.line.id);
+  assert.equal(slot.status, 'rendering', 'the take is being made again without anyone pressing retry');
+  assert.match(h.engine.getSnapshot().error, /made again/);
+  assert.notEqual(h.jobs.get(first.line.id), first, 'a fresh render was asked for');
+  await settle(h, () =>
+    h.engine.getSnapshot().slots.some((s) => s.id === first.line.id && s.status === 'ready'),
+  );
+  assert.equal(h.engine.getSnapshot().error, '', 'a landed shot clears the note');
+  await settle(h, () => h.engine.getSnapshot().phase === 'playing');
+  assert.equal(h.engine.getSnapshot().phase, 'playing');
+  h.engine.dispose();
+});
+
+void test('a shot that fails three times is skipped so the show can go on', async () => {
+  const h = harness();
+  h.engine.start();
+  await settle(h, () => h.writes.length > 0);
+  await h.reply(0, 0);
+  const doomed = pendingJob(h).line.id;
+  for (let i = 0; i < 3; i++) {
+    h.jobs.get(doomed).reject(new SpeechError('Generated speech does not match the scripted line'));
+    await tick();
+  }
+  assert.ok(!h.engine.getSnapshot().slots.some((s) => s.id === doomed), 'the line left the queue');
+  assert.match(h.engine.getSnapshot().error, /skipped/);
+  await settle(h, () => h.engine.getSnapshot().phase === 'playing');
+  assert.equal(h.engine.getSnapshot().phase, 'playing', 'the rest of the exchange airs');
+  h.engine.dispose();
+});
+
+void test('a provider failure is made again after a wait, and retry does not double it', async () => {
+  const h = harness();
+  h.engine.start();
+  await settle(h, () => h.writes.length > 0);
+  await h.reply(0, 0);
+  const first = pendingJob(h);
+  first.reject(Error('temporary render failure'));
+  await tick();
+  const slot = h.engine.getSnapshot().slots.find((s) => s.id === first.line.id);
+  assert.equal(slot.status, 'failed', 'a provider failure waits before the retake');
+  assert.ok(slot.retryAt > Date.now(), 'and says when');
+  h.engine.retry();
+  await tick();
+  const again = h.engine.getSnapshot().slots.find((s) => s.id === first.line.id);
+  assert.equal(again.status, 'rendering');
+  assert.equal(again.retryAt, undefined, 'the operator\'s retry cancels the scheduled one');
+  h.engine.dispose();
+});
+
+void test('after a run of writer failures the show rests and writes again on its own', async () => {
+  const h = harness({}, {
+    startupSeconds: 24,
+    targetSeconds: 32,
+    recoverySeconds: 8,
+    concurrency: 2,
+    maxSlots: 4,
+    writerCooldownMs: 0,
+  });
+  h.engine.start();
+  await settle(h, () => h.writes.length > 0);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const index = h.writes.length - 1;
+    h.writes[index].resolve(Promise.reject(Error('The writer failed.')));
+    await tick();
+    await tick();
+  }
+  assert.notEqual(h.engine.getSnapshot().error, '', 'the failure is still surfaced');
+  await settle(h, () => h.writes.length > 3);
+  assert.ok(h.writes.length > 3, 'and writing resumed without anyone pressing retry');
   h.engine.dispose();
 });
 

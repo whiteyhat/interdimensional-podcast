@@ -50,9 +50,11 @@ async function api(body: unknown, path = '/api/podcast', signal?: AbortSignal) {
   }
   return data;
 }
+/** The provider sat on a job for minutes: the pipeline gives it up rather than the air. */
+class JobTimeoutError extends Error {}
 async function poll(token: string) {
   let failures = 0;
-  const deadline = Date.now() + 600000;
+  const deadline = Date.now() + 240000;
   while (Date.now() < deadline) {
     try {
       const result = await api({ action: 'poll', token });
@@ -68,8 +70,8 @@ async function poll(token: string) {
     }
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw Error(
-    'The job is taking too long. Retry will poll the existing request.',
+  throw new JobTimeoutError(
+    'The provider took more than four minutes on this job; the retake starts fresh.',
   );
 }
 async function topics(body: unknown, forceSource?: TopicSource) {
@@ -90,7 +92,14 @@ export function createServices(): Services {
       token = request.token;
       jobs.set(key, token);
     }
-    return poll(token);
+    try {
+      return await poll(token);
+    } catch (e) {
+      // A job the provider has sat on for four minutes is not worth polling again: drop it so
+      // the retake submits a fresh one instead of waiting out the same queue.
+      if (e instanceof JobTimeoutError) jobs.delete(key);
+      throw e;
+    }
   }
   return {
     sponsors: createSponsorServices(),
