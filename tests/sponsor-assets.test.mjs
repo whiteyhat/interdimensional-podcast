@@ -36,6 +36,7 @@ function request({
   bytes = PNG,
   kind = 'cap',
   target = 'host',
+  receipt,
 } = {}) {
   const form = new FormData();
   form.set('image', new File([bytes], 'logo.png', { type: 'image/png' }));
@@ -43,7 +44,7 @@ function request({
   form.set('target', target);
   return new Request('https://show.test/api/sponsorship/assets', {
     method: 'POST',
-    headers: { origin, 'cf-connecting-ip': ip },
+    headers: { origin, 'cf-connecting-ip': ip, ...(receipt ? { 'x-sponsor-receipt': receipt } : {}) },
     body: form,
   });
 }
@@ -194,6 +195,54 @@ void test('while checkout is off an upload stores nothing and never reaches the 
     .map((row) => String(row.name));
   for (const table of tables)
     assert.equal(DB.sql.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0, `${table} was written`);
+});
+
+// The one upload that is not a new purchase: a buyer who paid, whose look was refused or fell
+// back, changing the logo of the placement they already own. It has to work whatever the shop is
+// doing, so it carries their receipt and is let through a closed checkout. Nobody else's is.
+void test('a paid buyer may still change the logo of the cap they own while checkout is off', async (t) => {
+  const { DB, objects, v } = siteVars();
+  await ensureSponsorSchema(DB);
+  const closed = { ...v, SPONSOR_ENABLED: 'false' };
+  t.mock.method(globalThis, 'fetch', async () =>
+    Response.json({
+      logo: normalised.toString('base64'),
+      logoSha256: hash(normalised),
+      width: 640,
+      height: 200,
+      palette: PALETTE,
+    }),
+  );
+  const order = async (id, status, product = 'cap') => {
+    const token = createHash('sha256').update(id).digest('hex');
+    DB.sql
+      .prepare(
+        "INSERT INTO sponsor_orders (id,token_hash,draft,product,target,status,created_at,updated_at) VALUES (?,?,?,?,'host',?,100,100)",
+      )
+      .run(id, hash(token), JSON.stringify({ product, name: '', message: 'gm', target: 'host' }), product, status);
+    return token;
+  };
+  const paid = await order('paid-cap', 'paid');
+  const unpaid = await order('draft-cap', 'draft');
+  const spotlight = await order('paid-spotlight', 'paid', 'spotlight');
+  const refused = async (receipt, why) => {
+    const r = await uploadSponsorAsset(request({ ip: `closed-${why}`, receipt }), closed);
+    assert.equal(r.status, 503, why);
+    assert.match((await r.json()).error, /checkout is not enabled/, why);
+  };
+  await refused(undefined, 'no receipt');
+  await refused('f'.repeat(64), 'a receipt nobody holds');
+  await refused('not-a-token', 'a malformed receipt');
+  await refused(unpaid, 'an order that never paid');
+  await refused(spotlight, 'a paid order that is not a cap');
+  assert.equal(objects.size, 0, 'a refused upload stored an object');
+  const allowed = await uploadSponsorAsset(request({ ip: 'paid-buyer', receipt: paid }), closed);
+  const body = await allowed.json();
+  assert.equal(allowed.status, 200, JSON.stringify(body));
+  assert.equal(body.status, 'logo');
+  assert.equal(objects.size, 1, 'the replacement logo was stored');
+  // The buyer's own receipt, not a way in for anyone else: the same request without it is refused.
+  await refused(undefined, 'the same upload without the receipt');
 });
 
 void test('cross-origin artwork requests fail before storage or worker calls', async () => {
