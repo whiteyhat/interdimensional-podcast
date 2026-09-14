@@ -143,6 +143,10 @@ const JUNK = [
   /\bbuy(ing)? now\b/i,
   /\bhere's (why|how)\b/i,
   /\bpage \d+\b/i,
+  /\bcurrent price of\b/i,
+  /\bprice (holds|eyes|targets?|nears?)\b/i,
+  /\|\s*(editorial|opinion)\b/i,
+  /\bbreakout\b/i,
 ];
 const DENY = [
   'Robinhood',

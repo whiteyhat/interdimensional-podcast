@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { speechEndFor } from '@/lib/speech';
+import { houseRequest, houseSaid, noSale, saleFromCatalog, type HouseCue, type Sale } from '@/lib/house';
 import { readBrand } from '@/lib/interact';
 import { resolveTrustedSponsor } from '@/lib/sponsor-context';
 import { SponsorError } from '@/lib/sponsorship';
@@ -13,21 +14,7 @@ import {
 } from '@/lib/sponsor-writer';
 import type { SponsorVars } from '@/lib/sponsor-server';
 import type { SponsorCue } from '@/lib/sponsor-program';
-import {
-  cast,
-  lintVoices,
-  parseLines,
-  planPrompt,
-  shotInput,
-  scaleInput,
-  spokenTicker,
-  turnPlan,
-  writerSystemFor,
-  type CoinBrand,
-  type Line,
-  type Previous,
-  type Speaker,
-} from '@/lib/show';
+import { cast, lintVoices, parseLines, planPrompt, shotInput, scaleInput, spokenTicker, turnPlan, writerSystemFor, type CoinBrand, type Line, type Previous, type Speaker, houseBrief } from '@/lib/show';
 import { checkName, requestConfig, spokenName } from '@/lib/requests';
 import {
   sanitizeBrief,
@@ -120,11 +107,48 @@ async function provider(
     );
   return data;
 }
+/** The house cue as the studio sent it; anything else is no cue. */
+function readHouse(raw: unknown): HouseCue | undefined {
+  const cue = raw as { coinLive?: unknown } | null;
+  return cue && typeof cue === 'object' && typeof cue.coinLive === 'boolean' ? { coinLive: cue.coinLive } : undefined;
+}
+/** The site the hosts send people to: the producer's site, or the show's own by default. */
+function siteHost(v: { INTERACT_ORIGIN?: string }): string {
+  try {
+    return new URL(v.INTERACT_ORIGIN || 'https://frogclench.fun').hostname;
+  } catch {
+    return 'frogclench.fun';
+  }
+}
+/**
+ * What the site is selling right now, from its public catalog, remembered for a minute and
+ * failing closed: a plug never offers what cannot be bought.
+ */
+let saleMemo: { at: number; sale: Sale } | undefined;
+async function saleNow(v: { INTERACT_ORIGIN?: string }): Promise<Sale> {
+  if (saleMemo && Date.now() - saleMemo.at < 60000) return saleMemo.sale;
+  let sale: Sale = noSale;
+  if (v.INTERACT_ORIGIN) {
+    try {
+      const upstream = await fetch(`${new URL(v.INTERACT_ORIGIN).origin}/api/sponsorship?action=catalog`, {
+        cache: 'no-store',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(8000),
+      });
+      if (upstream.ok) sale = saleFromCatalog(await upstream.json());
+    } catch {
+      // Nothing on sale is the safe answer.
+    }
+  }
+  saleMemo = { at: Date.now(), sale };
+  return sale;
+}
 function writerRequest(
   cue: string | undefined,
   topic: TopicBrief | undefined,
   from: string | undefined,
   coin: CoinBrand,
+  start = 0,
 ) {
   const spoken = spokenTicker(coin.ticker);
   if (cue) {
@@ -142,7 +166,7 @@ function writerRequest(
       return `THE CHART: ${topic.title}\nWHAT THE CHART SAYS: ${topic.brief}\nMOOD: ${topic.angle}\nThis is the show's own coin, ${spoken}. Use only the numbers given, rounded and spoken plainly with no dollar signs, and follow THE SHOW'S OWN COIN rules: react in character to the move, and if anyone says buy, undercut it at once with a fresh not-financial-advice joke.`;
     return `LIVE TOPIC: ${topic.title}\nWHAT'S HAPPENING: ${topic.brief}\nANGLE: ${topic.angle}\nSOURCE: ${sourceLabel(topic)}`;
   }
-  return 'Audience request: None. Keep riffing on the current subject with a fresh concrete angle.';
+  return houseBrief(start, spoken, new Date().toISOString().slice(0, 10));
 }
 /**
  * A paid exchange airs only once it holds up: the deterministic checks, then a different model
@@ -206,6 +230,7 @@ export async function POST(request: Request) {
       from?: unknown;
       topic?: unknown;
       sponsorship?: SponsorCue;
+      house?: unknown;
     };
     if (body.action === 'poll') {
       const job = await unpack(body.token, secret);
@@ -228,6 +253,13 @@ export async function POST(request: Request) {
             console.warn('[writer] voice lint', slips);
             if (vars().WRITER_STRICT_VOICE === '1')
               throw Error('Out-of-character dialogue');
+          }
+          if (job.house) {
+            const problems = houseSaid(lines, readBrand(vars()), siteHost(vars()), job.house.sale, job.house.coinLive);
+            if (problems.length) {
+              console.warn('[writer] house plug incomplete', problems);
+              throw Error(`House message incomplete: ${problems.join('; ')}`);
+            }
           }
           // Last, because it is the one check that costs a model call.
           if (job.sponsorBrief)
@@ -278,6 +310,7 @@ export async function POST(request: Request) {
     let prevSpeaker: Speaker | undefined;
     let previous: Previous | undefined;
     let sponsor: SponsorBrief | undefined;
+    let house: { coinLive: boolean; sale: Sale } | undefined;
     if (body.action === 'shot') {
       if (!body.line || !['host', 'guest'].includes(body.line.speaker))
         return reply({ error: 'Invalid speaker' }, 400);
@@ -360,6 +393,11 @@ export async function POST(request: Request) {
         sponsor = sponsorBrief(order, body.sponsorship);
       }
       const coin = readBrand(vars());
+      // A house plug never rides a paid exchange or an audience request.
+      house =
+        !sponsor && !body.cue && readHouse(body.house)
+          ? { coinLive: readHouse(body.house)!.coinLive, sale: await saleNow(vars()) }
+          : undefined;
       topic = brief;
       const last = body.recent.at(-1);
       prevSpeaker = last?.speaker;
@@ -391,7 +429,7 @@ export async function POST(request: Request) {
         : {
             model: 'google/gemini-2.5-flash',
             system_prompt: writerSystemFor(coin),
-            prompt: `${transcript}\n${writerRequest(body.cue, topic, from, coin)}\nWrite the next four turns, each on its own line and each prefixed with "Pepe:" or "GigaChad:", exactly as the TURN PLAN below sets out. Move onto the new subject immediately: name it in the FIRST turn with one supplied fact, connected to whatever was just said. For sourced stories, build the next turns around what happened, a community consequence and a disagreement grounded in another supplied detail when available. Keep the actual event central through turn four. Historical stories must be introduced as memories with their year or period, never as breaking news. For audience and chat requests, answer the requested subject directly. If there is no new topic, deepen the current conversation without inventing news. Use ANGLE as a direction, never as a line to read. Keep the delivery casual and the connection understandable.\n${planPrompt(turnPlan(body.start!, prevSpeaker))}`,
+            prompt: `${transcript}\n${writerRequest(body.cue, topic, from, coin, body.start!)}${house ? `\n${houseRequest(coin, siteHost(vars()), house.sale, house.coinLive)}` : ''}\nWrite the next four turns, each on its own line and each prefixed with "Pepe:" or "GigaChad:", exactly as the TURN PLAN below sets out. Move onto the new subject immediately: name it in the FIRST turn with one supplied fact, connected to whatever was just said. For sourced stories, build the next turns around what happened, a community consequence and a disagreement grounded in another supplied detail when available. Keep the actual event central through turn four. Historical stories must be introduced as memories with their year or period, never as breaking news. For audience and chat requests, answer the requested subject directly. A HOUSE SEGMENT brief is a new subject too: move onto its ANGLE at once, without inventing news. Use ANGLE as a direction, never as a line to read. Keep the delivery casual and the connection understandable.\n${planPrompt(turnPlan(body.start!, prevSpeaker))}`,
             temperature: 0.95,
           };
       input = { ...writer, max_tokens: 700 };
@@ -412,6 +450,7 @@ export async function POST(request: Request) {
           start: body.start,
           prev: previous,
           cue: body.cue,
+          ...(house ? { house } : {}),
           topic: topic && tagOf(topic),
           status_url: job.status_url,
           response_url: job.response_url,

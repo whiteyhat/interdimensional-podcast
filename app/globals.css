@@ -620,6 +620,20 @@ html {
     transform: translateX(-8px);
   }
 }
+/* The house slot borrows the coin bug's accent; same entrance, same motion. */
+.ticker-house {
+  border-top-color: #f1b48a;
+}
+.ticker-house .ticker-title {
+  color: #f1b48a;
+}
+.opening-coin {
+  display: block;
+  margin-top: 10px;
+  color: #f1b48a;
+  font: 12px monospace;
+  letter-spacing: 0.06em;
+}
 .ticker-source {
   flex: none;
   color: #9aab88;

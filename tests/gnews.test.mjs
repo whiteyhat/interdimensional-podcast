@@ -181,3 +181,10 @@ test('search feeds get their corroboration rebuilt from matching headlines', asy
   assert.ok(drafts.length > 0, 'the crypto lane produces topics');
   assert.ok(drafts.every((d) => d.category === 'crypto'));
 });
+
+void test('price-watch and opinion headlines are junk', async () => {
+  const G = await import('../work/tests/gnews.js');
+  const item = (title) => ({ title, link: 'https://example.com/a', pubDate: new Date().toUTCString(), source: 'Example', description: '' });
+  for (const title of ['Current price of Ethereum for September 14', 'Solana price holds $100 as it nears a breakout', 'Why memecoins matter | EDITORIAL'])
+    assert.equal(G.toDrafts([item(title)], Date.now(), 'crypto', 1).length, 0, title);
+});

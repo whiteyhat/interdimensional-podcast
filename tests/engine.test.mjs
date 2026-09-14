@@ -81,9 +81,9 @@ function harness(
         new Promise((resolve, reject) =>
           jobs.set(line.id, { line, resolve, reject }),
         ),
-      write: (recent, start, cue, topic, from) =>
+      write: (recent, start, cue, topic, from, sponsorship, house) =>
         new Promise((resolve) =>
-          writes.push({ recent, start, cue, topic, from, resolve }),
+          writes.push({ recent, start, cue, topic, from, sponsorship, house, resolve }),
         ),
       release: (url) => released.push(url),
       ...extra,
@@ -1203,4 +1203,57 @@ void test('the chart lane owns the coin snapshot, and a chart failure is only a 
   } finally {
     broken.engine.dispose();
   }
+});
+
+void test('a failed shot at the head of the queue is skipped at once while on air, retaken while buffering', async () => {
+  const h = harness();
+  h.engine.start();
+  await tick();
+  // Still buffering: the opening's first shot fails and is made again, not skipped.
+  const early = pendingJob(h);
+  assert.equal(h.engine.getSnapshot().phase, 'buffering');
+  assert.equal(h.engine.getSnapshot().slots[0]?.id, early.line.id, 'it is the head of the queue');
+  early.reject(new SpeechError('Generated speech does not match the scripted line'));
+  await tick();
+  assert.equal(
+    h.engine.getSnapshot().slots.find((s) => s.id === early.line.id)?.status,
+    'rendering',
+    'retaken while buffering',
+  );
+  await settle(h, () => h.writes.length > 0);
+  await h.reply(0, 0);
+  await settle(h, () => h.engine.getSnapshot().phase === 'playing');
+  // On air: drain the finished shots until the next line to air is one still being made.
+  for (let i = 0; i < 12 && h.engine.getSnapshot().slots[0]?.status === 'ready'; i++) {
+    const current = h.engine.getSnapshot().current;
+    if (current) h.engine.clipEnded(current.id);
+    await tick();
+  }
+  const head = h.engine.getSnapshot().slots[0];
+  assert.ok(head && head.status === 'rendering', `the head is still being made: ${JSON.stringify(head)}`);
+  h.jobs.get(head.id).reject(new SpeechError('Incomplete speaker coverage for scripted speech'));
+  await tick();
+  assert.ok(!h.engine.getSnapshot().slots.some((s) => s.id === head.id), 'the head left the queue at once');
+  assert.match(h.engine.getSnapshot().error, /skipped/);
+  h.engine.dispose();
+});
+
+void test('the show plugs itself about ninety seconds in, then not again for four minutes of air', async () => {
+  const h = harness();
+  h.engine.start();
+  for (let i = 0; i < 20 && !h.writes.some((w) => w.house); i++) {
+    await settle(h, () => h.writes.length > i, 80);
+    if (h.writes.length <= i) break;
+    await h.reply(i, h.writes[i].start);
+  }
+  const at = h.writes.findIndex((w) => w.house);
+  assert.ok(at >= 0, 'a house cue was issued');
+  assert.deepEqual(h.writes[at].house, { coinLive: false }, 'no coin service, so only the site half');
+  assert.ok(h.writes.slice(0, at).every((w) => !w.house), 'nothing before the first ninety seconds');
+  assert.ok(h.engine.getSnapshot().aired >= 10, `enough air had passed: ${h.engine.getSnapshot().aired} clips`);
+  await h.reply(at, h.writes[at].start);
+  await settle(h, () => h.writes.length > at + 1, 80);
+  assert.ok(h.writes.length > at + 1, 'the show kept writing');
+  assert.equal(h.writes[at + 1].house, undefined, 'the next exchange is plain');
+  h.engine.dispose();
 });

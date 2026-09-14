@@ -33,13 +33,18 @@ export const storyTopics: TopicDraft[] = [
   },
 ];
 
-/** Fresh reporting leads; history fills quiet periods, with one callback on a busy wire. */
+/**
+ * Fresh reporting leads; one history callback only when the wire has nothing fresh at all. On
+ * launch night the padding of every poll with the same three memories, on a wire the news
+ * lane rarely fed, had the hosts narrating 2022 for minutes.
+ */
 export function withHistory(live: TopicDraft[], avoid: string[], rotation: number): TopicDraft[] {
   const covered = (title: string) => avoid.some(a => similar(a, title));
   const fresh = live.filter(t => !covered(t.title));
+  if (fresh.length) return fresh;
   const offset = ((Math.trunc(rotation) % storyTopics.length) + storyTopics.length) % storyTopics.length;
-  const history = [...storyTopics.slice(offset), ...storyTopics.slice(0, offset)]
-    .filter(t => !covered(t.title) && !fresh.some(f => similar(f.title, t.title)))
-    .slice(0, Math.max(1, 3 - fresh.length));
-  return [...fresh, ...history];
+  return [...storyTopics.slice(offset), ...storyTopics.slice(0, offset)]
+    .filter(t => !covered(t.title))
+    .slice(0, 1)
+    .map(t => ({ ...t, angle: `${t.angle} Keep it to this one memory; do not list other events from that year.` }));
 }

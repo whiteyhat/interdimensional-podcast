@@ -37,12 +37,14 @@ function distance(a: string, b: string): number {
   return previous[b.length]!;
 }
 /**
- * How far the transcript may stray from the script and still count as the same line: a tenth of
- * its characters, at least two and at most twelve. Whisper mishears a name or a contraction on
- * real takes; refusing those cost a retake each and, on air, a frozen frame while it rendered.
+ * How far the transcript may stray from the script and still count as the same line: an eighth
+ * of its characters, at least three and at most fourteen. Whisper mishears a name or a
+ * contraction on real takes; refusing those cost a retake each and, on air, a frozen frame
+ * while it rendered. On air a tenth refused takes eleven characters off on a 105-character
+ * line, one misheard name, so the allowance is an eighth.
  */
 export function transcriptTolerance(expected: string): number {
-  return Math.min(12, Math.max(2, Math.floor(expected.length / 10)));
+  return Math.min(14, Math.max(3, Math.floor(expected.length / 8)));
 }
 /** Refuse an uncertain take; never air the unverified full soundtrack as a fallback. */
 export function speechEndFor(script: string, raw: unknown): number {
@@ -77,8 +79,10 @@ export function speechEndFor(script: string, raw: unknown): number {
   }
   if (!best || best.distance > tolerance)
     throw new SpeechError(`Generated speech does not match the scripted line${best ? ` (closest prefix differs by ${best.distance} of ${expected.length} characters)` : ''}`);
+  // A near miss that is a whole word short at the end dropped the last word; a slip of a letter
+  // or two on that word (on air: one character off in a hundred and twelve) is the same word.
   const kept = result.chunks.slice(0, best.consumed).map((c) => normalized(String(c.text))).join('');
-  if (best.distance > 0 && lastWord && !kept.endsWith(lastWord))
+  if (best.distance > 0 && lastWord && !kept.endsWith(lastWord) && best.distance >= Math.max(2, lastWord.length - 1))
     throw new SpeechError(`Generated speech does not end on the scripted last word (closest prefix differs by ${best.distance} of ${expected.length} characters)`);
   const consumed = best.consumed;
   end = best.end;
