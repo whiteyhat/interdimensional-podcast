@@ -70,6 +70,11 @@ void test('tolerates a small transcription difference and keeps the aligned end 
     chunk('the', 1.0, 1.1), chunk('chart', 1.1, 1.4), chunk('never', 1.4, 1.7), chunk('lies.', 1.7, 2.1), chunk('Right?', 2.3, 2.6),
   ])), 2.1);
 });
+void test('a slip of a letter on the last word is still the last word', () => {
+  assert.equal(speechEndFor('My bags are getting crushed.', result([
+    chunk('My bags', 0, .5), chunk('are getting', .5, 1.0), chunk('crushe.', 1.0, 1.6), chunk('So', 1.9, 2.1),
+  ])), 1.6);
+});
 void test('refuses a near miss that dropped the scripted last word, and a different line', () => {
   const script = 'The chart is bleeding and nobody is buying it.';
   assert.throws(() => speechEndFor(script, result([

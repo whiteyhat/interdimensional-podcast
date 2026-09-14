@@ -79,8 +79,10 @@ export function speechEndFor(script: string, raw: unknown): number {
   }
   if (!best || best.distance > tolerance)
     throw new SpeechError(`Generated speech does not match the scripted line${best ? ` (closest prefix differs by ${best.distance} of ${expected.length} characters)` : ''}`);
+  // A near miss that is a whole word short at the end dropped the last word; a slip of a letter
+  // or two on that word (on air: one character off in a hundred and twelve) is the same word.
   const kept = result.chunks.slice(0, best.consumed).map((c) => normalized(String(c.text))).join('');
-  if (best.distance > 0 && lastWord && !kept.endsWith(lastWord))
+  if (best.distance > 0 && lastWord && !kept.endsWith(lastWord) && best.distance >= Math.max(2, lastWord.length - 1))
     throw new SpeechError(`Generated speech does not end on the scripted last word (closest prefix differs by ${best.distance} of ${expected.length} characters)`);
   const consumed = best.consumed;
   end = best.end;

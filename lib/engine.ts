@@ -891,7 +891,18 @@ export class Podcast {
     const attempt = (this.attempts.get(line.id) ?? 0) + 1;
     this.attempts.set(line.id, attempt);
     const message = e instanceof Error ? e.message : 'A shot failed.';
-    if (attempt >= (this.policy.retakeLimit ?? bufferConfig.retakeLimit ?? 3)) {
+    // A retake takes a minute or more. Behind the air it is absorbed by the reserve; at the
+    // head of the queue, once the show is on air, it is a frozen frame for that whole minute
+    // while finished shots wait behind it. So the head is skipped at once and the conversation
+    // loses one line; only while the show is still buffering is the head worth retaking.
+    const holdsTheAir =
+      this.state.slots[0]?.id === line.id &&
+      this.state.phase !== 'buffering' &&
+      this.state.phase !== 'stopped';
+    if (
+      holdsTheAir ||
+      attempt >= (this.policy.retakeLimit ?? bufferConfig.retakeLimit ?? 3)
+    ) {
       this.attempts.delete(line.id);
       this.set({
         slots: this.state.slots.filter((s) => s.id !== line.id),

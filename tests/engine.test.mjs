@@ -1204,3 +1204,36 @@ void test('the chart lane owns the coin snapshot, and a chart failure is only a 
     broken.engine.dispose();
   }
 });
+
+void test('a failed shot at the head of the queue is skipped at once while on air, retaken while buffering', async () => {
+  const h = harness();
+  h.engine.start();
+  await tick();
+  // Still buffering: the opening's first shot fails and is made again, not skipped.
+  const early = pendingJob(h);
+  assert.equal(h.engine.getSnapshot().phase, 'buffering');
+  assert.equal(h.engine.getSnapshot().slots[0]?.id, early.line.id, 'it is the head of the queue');
+  early.reject(new SpeechError('Generated speech does not match the scripted line'));
+  await tick();
+  assert.equal(
+    h.engine.getSnapshot().slots.find((s) => s.id === early.line.id)?.status,
+    'rendering',
+    'retaken while buffering',
+  );
+  await settle(h, () => h.writes.length > 0);
+  await h.reply(0, 0);
+  await settle(h, () => h.engine.getSnapshot().phase === 'playing');
+  // On air: drain the finished shots until the next line to air is one still being made.
+  for (let i = 0; i < 12 && h.engine.getSnapshot().slots[0]?.status === 'ready'; i++) {
+    const current = h.engine.getSnapshot().current;
+    if (current) h.engine.clipEnded(current.id);
+    await tick();
+  }
+  const head = h.engine.getSnapshot().slots[0];
+  assert.ok(head && head.status === 'rendering', `the head is still being made: ${JSON.stringify(head)}`);
+  h.jobs.get(head.id).reject(new SpeechError('Incomplete speaker coverage for scripted speech'));
+  await tick();
+  assert.ok(!h.engine.getSnapshot().slots.some((s) => s.id === head.id), 'the head left the queue at once');
+  assert.match(h.engine.getSnapshot().error, /skipped/);
+  h.engine.dispose();
+});
