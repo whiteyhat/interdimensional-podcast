@@ -1257,3 +1257,18 @@ void test('the show plugs itself about ninety seconds in, then not again for fou
   assert.equal(h.writes[at + 1].house, undefined, 'the next exchange is plain');
   h.engine.dispose();
 });
+
+void test('a full queue of finished shots starts the show even when it is short of the startup target', async () => {
+  // Four slots of eight-second clips hold thirty-two seconds; the target asks for forty.
+  const h = harness({}, { startupSeconds: 40, targetSeconds: 60, recoverySeconds: 30, concurrency: 2, maxSlots: 4 });
+  h.engine.start();
+  for (let i = 0; i < 40 && h.engine.getSnapshot().phase === 'buffering'; i++) {
+    for (const slot of h.engine.getSnapshot().slots) if (slot.status === 'rendering') await h.finish(slot.id);
+    const w = h.writes.length - 1;
+    if (w >= 0 && !h.writes[w].done) { h.writes[w].done = true; await h.reply(w, h.writes[w].start); }
+    await tick();
+  }
+  const s = h.engine.getSnapshot();
+  assert.equal(s.phase, 'playing', `the show started: ${JSON.stringify({ phase: s.phase, slots: s.slots.map((x) => x.status) })}`);
+  h.engine.dispose();
+});

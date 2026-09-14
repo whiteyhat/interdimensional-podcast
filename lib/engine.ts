@@ -809,16 +809,22 @@ export class Podcast {
       this.draftRequestId = undefined;
       this.draftSponsorId = undefined;
     }
+    // A full queue of finished shots is as much reserve as there will ever be: with takes cut
+    // after their speech, eight slots can hold a second less than the startup target, and the
+    // show sat dark with thirty-nine seconds ready on launch night. Start on either.
+    const reserveFull =
+      this.state.slots.length >= this.policy.maxSlots &&
+      this.state.slots.every((slot) => slot.status === 'ready');
     if (
       this.state.phase === 'buffering' &&
-      readySeconds(this.state.slots) >= this.policy.startupSeconds
+      (readySeconds(this.state.slots) >= this.policy.startupSeconds || reserveFull)
     ) {
       this.advance();
       return;
     }
     if (
       this.state.phase === 'waiting' &&
-      readySeconds(this.state.slots) >= this.policy.recoverySeconds
+      (readySeconds(this.state.slots) >= this.policy.recoverySeconds || reserveFull)
     ) {
       this.advance();
       return;
