@@ -126,11 +126,15 @@ export type BufferPolicy = {
   /** How long the writer rests after a run of failures before writing again on its own. */
   writerCooldownMs?: number;
 };
+// A shot takes sixty to ninety seconds to make and about ten to air, so three pipelines fill
+// the reserve at half the speed the show drains it: measured on air on 2026-09-14, the show
+// held its last frame about half the time. Six keep up. Each clip is paid once whatever the
+// count, so this changes how often the picture moves, not what a minute costs.
 export const bufferConfig: BufferPolicy = {
   startupSeconds: 40,
   targetSeconds: 60,
   recoverySeconds: 30,
-  concurrency: 3,
+  concurrency: 6,
   maxSlots: 8,
   retakeLimit: 3,
   writerCooldownMs: 30000,

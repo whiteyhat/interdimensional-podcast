@@ -12,7 +12,7 @@ await build([
   'sponsor-program',
   'engine',
 ]);
-const { Podcast, readySeconds } = await import('../work/tests/engine.js');
+const { Podcast, readySeconds, bufferConfig } = await import('../work/tests/engine.js');
 const { shotDuration } = await import('../work/tests/show.js');
 const { gestureConfig, gestureNames } =
   await import('../work/tests/gestures.js');
@@ -235,7 +235,7 @@ void test('the playable reserve absorbs variable render times and an occasional 
   });
   assert.ok(result.aired > 50, JSON.stringify(result));
   assert.equal(result.stalls, 0, JSON.stringify(result));
-  assert.ok(result.peak <= 3, 'provider work stays bounded');
+  assert.ok(result.peak <= bufferConfig.concurrency, 'provider work stays bounded');
 });
 
 void test('reserve survives writer latency and clips decoding shorter than requested', async (t) => {
