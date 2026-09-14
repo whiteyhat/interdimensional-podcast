@@ -64,11 +64,27 @@ export function speechEndFor(script: string, raw: unknown): number {
     }
     return { start, stop, speaker };
   });
-  // Diarization and word alignment use different frame grids. Allow at most 80ms
-  // of boundary drift, but never accept an unlabelled word or a large coverage gap.
-  for (const [start, stop] of accepted)
-    if (!segments.some(s => s.speaker && s.start <= start + 0.08 && s.stop >= stop - 0.08))
-      throw new SpeechError('Incomplete speaker coverage for scripted speech');
+  // Diarization boundaries sit on a coarser grid than word alignment, and the diarizer does
+  // not smooth its own output: real takes carry same-speaker holes of 84-236 ms mid-line, and
+  // the first block starts 100-190 ms after Whisper's first word, whose start is snapped to
+  // the clip origin. Bridge same-speaker holes up to half a second, allow half a second before
+  // the first word and a quarter-second collar at every other edge. An unlabelled word or a
+  // larger hole still refuses the take, and the message says which word so a refusal on air
+  // can be read from the box.
+  const COLLAR = 0.25;
+  const BRIDGE = 0.5;
+  const ONSET = 0.5;
+  const blocks: { start: number; stop: number; speaker: string }[] = [];
+  for (const s of segments.filter(s => s.speaker).sort((a, b) => a.start - b.start)) {
+    const previous = blocks.at(-1);
+    if (previous && previous.speaker === s.speaker && s.start <= previous.stop + BRIDGE) previous.stop = Math.max(previous.stop, s.stop);
+    else blocks.push({ start: s.start, stop: s.stop, speaker: s.speaker });
+  }
+  for (const [i, [start, stop]] of accepted.entries())
+    if (!blocks.some(b => b.start <= start + (i === 0 ? ONSET : COLLAR) && b.stop >= stop - COLLAR)) {
+      const word = String(result.chunks[i].text).trim();
+      throw new SpeechError(`Incomplete speaker coverage for scripted speech: "${word}" at ${start.toFixed(2)}-${stop.toFixed(2)}s`);
+    }
   if (speakers.size !== 1) throw new SpeechError('Speech contains multiple or unknown speakers');
   return end;
 }
