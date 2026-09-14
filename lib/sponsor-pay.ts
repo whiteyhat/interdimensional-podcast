@@ -17,6 +17,43 @@ export const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 export const TOKEN_PROGRAM = new PublicKey(
   'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
 );
+export const TOKEN_2022_PROGRAM = new PublicKey(
+  'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',
+);
+// Token-2022 extensions a mint may carry and still be paid directly: they describe the token,
+// they do not touch what a transfer moves. Everything else -- a transfer fee, a transfer hook,
+// a permanent delegate, a pause switch, a scaled UI amount, confidential transfers -- can make
+// the treasury receive something other than the quoted amount, or stop the transfer landing at
+// all, so a mint carrying one stays closed rather than being charged a different net.
+const SAFE_MINT_EXTENSIONS = new Set([
+  18, // MetadataPointer
+  19, // TokenMetadata
+  20, // GroupPointer
+  21, // TokenGroup
+  22, // GroupMemberPointer
+  23, // TokenGroupMember
+]);
+// A mint or account carrying extensions is padded to the 165-byte account size, then one byte
+// saying which it is, then type/length/value entries. A plain Token-2022 mint has none of this
+// and is the classic 82 bytes, exactly like a Token program mint.
+const TLV_START = 166;
+const TYPE_MINT = 1;
+const TYPE_ACCOUNT = 2;
+
+/** The extension types declared after the base record, or null if the bytes do not parse. */
+function extensionTypes(data: Buffer, kind: number): number[] | null {
+  if (data.length < TLV_START || data[TLV_START - 1] !== kind) return null;
+  const types: number[] = [];
+  for (let at = TLV_START; at + 4 <= data.length; ) {
+    const type = data.readUInt16LE(at);
+    // Type 0 is the uninitialized tail of a record sized for extensions it does not have yet.
+    if (type === 0) break;
+    at += 4 + data.readUInt16LE(at + 2);
+    if (at > data.length) return null;
+    types.push(type);
+  }
+  return types;
+}
 const ATA_PROGRAM = new PublicKey(
   'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',
 );
@@ -46,11 +83,20 @@ export function validWallet(raw: unknown): raw is string {
     return false;
   }
 }
-export function ata(owner: string, mint: string): PublicKey {
+/**
+ * The associated token account. The owning token program is one of the seeds, so the same
+ * wallet and mint under Token-2022 address a different account than under the Token program:
+ * passing the wrong one reads an empty balance and would pay into an account nobody owns.
+ */
+export function ata(
+  owner: string,
+  mint: string,
+  program: PublicKey = TOKEN_PROGRAM,
+): PublicKey {
   return PublicKey.findProgramAddressSync(
     [
       new PublicKey(owner).toBuffer(),
-      TOKEN_PROGRAM.toBuffer(),
+      program.toBuffer(),
       new PublicKey(mint).toBuffer(),
     ],
     ATA_PROGRAM,
@@ -86,14 +132,14 @@ export async function fetchSponsorPrice(
 export async function tokenInfo(
   c: Connection,
   mint: string,
-): Promise<{ decimals: number }> {
+): Promise<{ decimals: number; program: PublicKey }> {
   const data = await c.getAccountInfo(new PublicKey(mint), 'confirmed');
-  // Extension-bearing Token-2022 mints need transfer-fee/hook-specific pricing and are closed,
-  // per asset, rather than silently charging a different net amount.
+  const classic = !!data && data.owner.equals(TOKEN_PROGRAM);
+  const extended = !!data && data.owner.equals(TOKEN_2022_PROGRAM);
   if (
     !data ||
-    !data.owner.equals(TOKEN_PROGRAM) ||
-    data.data.length !== 82 ||
+    (!classic && !extended) ||
+    data.data.length < 82 ||
     data.data[45] !== 1
   )
     throw new SponsorError(
@@ -101,23 +147,40 @@ export async function tokenInfo(
       'This mint is not supported for direct sponsorship payments.',
       'MINT',
     );
+  // 82 bytes is a mint with no extensions under either program. Anything longer must be a
+  // Token-2022 mint whose extensions all leave a transfer's amount and outcome alone.
+  if (data.data.length !== 82) {
+    const types = extended ? extensionTypes(data.data, TYPE_MINT) : null;
+    if (!types || types.some((t) => !SAFE_MINT_EXTENSIONS.has(t)))
+      throw new SponsorError(
+        503,
+        'This mint is not supported for direct sponsorship payments.',
+        'MINT',
+      );
+  }
   const decimals = data.data[44];
   if (decimals > 12)
     throw new SponsorError(503, 'This mint has unsupported precision.', 'MINT');
-  return { decimals };
+  return { decimals, program: classic ? TOKEN_PROGRAM : TOKEN_2022_PROGRAM };
 }
 export async function spendable(
   c: Connection,
   owner: string,
   mint: string | null,
+  program: PublicKey = TOKEN_PROGRAM,
 ): Promise<{ sol: bigint; tokens: bigint; hasAta: boolean }> {
   const sol = BigInt(await c.getBalance(new PublicKey(owner), 'confirmed'));
   if (!mint) return { sol, tokens: sol, hasAta: true };
-  const account = await c.getAccountInfo(ata(owner, mint), 'confirmed');
+  const account = await c.getAccountInfo(ata(owner, mint, program), 'confirmed');
   if (!account) return { sol, tokens: BigInt(0), hasAta: false };
+  // A token account's own extensions cannot change what a transfer moves -- the ones that
+  // could only exist on a mint this code already refuses -- so the bytes only have to parse.
+  const extended =
+    account.data.length !== 165 &&
+    extensionTypes(account.data, TYPE_ACCOUNT) !== null;
   if (
-    !account.owner.equals(TOKEN_PROGRAM) ||
-    account.data.length !== 165 ||
+    !account.owner.equals(program) ||
+    (account.data.length !== 165 && !extended) ||
     account.data[108] !== 1 ||
     !account.data.subarray(0, 32).equals(new PublicKey(mint).toBuffer()) ||
     !account.data.subarray(32, 64).equals(new PublicKey(owner).toBuffer())
@@ -136,17 +199,19 @@ function tokenTransfer(
   amount: bigint,
   decimals: number,
   reference: string,
+  program: PublicKey,
 ) {
   const data = Buffer.alloc(10);
   data[0] = 12;
   data.writeBigUInt64LE(amount, 1);
   data[9] = decimals;
+  // transferChecked is instruction 12 in both programs, and both take the same accounts.
   return new TransactionInstruction({
-    programId: TOKEN_PROGRAM,
+    programId: program,
     keys: [
-      { pubkey: ata(from, mint), isSigner: false, isWritable: true },
+      { pubkey: ata(from, mint, program), isSigner: false, isWritable: true },
       { pubkey: new PublicKey(mint), isSigner: false, isWritable: false },
-      { pubkey: ata(to, mint), isSigner: false, isWritable: true },
+      { pubkey: ata(to, mint, program), isSigner: false, isWritable: true },
       { pubkey: new PublicKey(from), isSigner: true, isWritable: false },
       { pubkey: new PublicKey(reference), isSigner: false, isWritable: false },
     ],
@@ -178,9 +243,20 @@ export async function buildSponsorTransaction(
       'Choose a different valid payment wallet.',
       'WALLET',
     );
+  // The quote stored a mint and its decimals; which program owns it is read fresh here rather
+  // than carried in the row, and the decimals are checked against the chain, because they are
+  // what the transfer is denominated in.
+  const token = v.mint ? await tokenInfo(c, v.mint) : null;
+  if (token && token.decimals !== v.decimals)
+    throw new SponsorError(
+      409,
+      'This mint changed since the quote was issued. Ask for a new one.',
+      'MINT',
+    );
+  const program = token?.program ?? TOKEN_PROGRAM;
   const [balance, destination, latest] = await Promise.all([
-    spendable(c, v.wallet, v.mint),
-    spendable(c, v.recipient, v.mint),
+    spendable(c, v.wallet, v.mint, program),
+    spendable(c, v.recipient, v.mint, program),
     c.getLatestBlockhash('confirmed'),
   ]);
   const amount = BigInt(v.amountBase);
@@ -214,6 +290,7 @@ export async function buildSponsorTransaction(
         amount,
         v.decimals,
         v.reference,
+        program,
       ),
     );
   } else {
@@ -392,19 +469,28 @@ export function checkSponsorTransfer(
       )
         return { payer, blockTime: tx.blockTime };
     }
+    // A mint belongs to exactly one program, so the instruction's own program is what the
+    // pair of accounts must be derived with; a transferChecked naming this mint under the
+    // other program could not have executed.
+    const program =
+      String(ix.programId) === TOKEN_PROGRAM.toBase58()
+        ? TOKEN_PROGRAM
+        : String(ix.programId) === TOKEN_2022_PROGRAM.toBase58()
+          ? TOKEN_2022_PROGRAM
+          : null;
     if (
       e.mint &&
-      String(ix.programId) === TOKEN_PROGRAM.toBase58() &&
+      program &&
       ix.parsed.type === 'transferChecked' &&
       info.authority === payer &&
       info.mint === e.mint
     ) {
       const amount = info.tokenAmount as { amount?: string } | undefined;
       if (amount?.amount !== e.amount_base) continue;
-      const destination = ata(e.recipient, e.mint).toBase58();
+      const destination = ata(e.recipient, e.mint, program).toBase58();
       if (
         info.destination !== destination ||
-        info.source !== ata(payer, e.mint).toBase58()
+        info.source !== ata(payer, e.mint, program).toBase58()
       )
         continue;
       const i = keys.findIndex((k) => k.key === destination);
