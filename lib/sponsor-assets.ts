@@ -1,5 +1,6 @@
 import {
   assertCheckoutOpen,
+  paidCapOrder,
   sameSponsorToken,
   sponsorDatabase,
   sponsorFailure,
@@ -318,10 +319,6 @@ export async function uploadSponsorAsset(
     const origin = request.headers.get('origin');
     if (origin && origin !== new URL(request.url).origin)
       throw new SponsorError(403, 'Origin not allowed.');
-    // A logo is artwork for a placement someone is buying. While checkout is off nothing can be
-    // bought, so nothing is stored: no rate-limit row, no asset row, no object, no desk call.
-    // The desk being armed must never turn the site into free image storage.
-    assertCheckoutOpen(v);
     const ip = request.headers.get('cf-connecting-ip') || 'local';
     if (tooMany(`sponsor-art:${ip}`, 6, Date.now()))
       throw new SponsorError(
@@ -335,6 +332,13 @@ export async function uploadSponsorAsset(
         'ASSETS',
       );
     const d = await sponsorDatabase(v);
+    // A logo is artwork for a placement someone is buying. While checkout is off nothing can be
+    // bought, so nothing is stored: no rate-limit row, no asset row, no object, no desk call.
+    // The desk being armed must never turn the site into free image storage. A buyer who has
+    // already paid is the exception: their receipt token comes with the upload, and changing the
+    // logo of a placement they own has to keep working whatever the shop is doing.
+    if (!(await paidCapOrder(d, request.headers.get('x-sponsor-receipt'))))
+      assertCheckoutOpen(v);
     if (!(await db.allowSponsorRequest(d, `artwork:${ip}`, 6, Date.now())))
       throw new SponsorError(
         429,

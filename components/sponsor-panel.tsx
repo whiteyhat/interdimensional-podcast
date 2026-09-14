@@ -286,6 +286,8 @@ export function SponsorPanel() {
   async function uploadLogo(
     selected: File,
     target: SponsorDraft['target'],
+    /** A paid order's receipt: changing its logo works even when checkout is closed. */
+    receiptToken?: string,
   ): Promise<{ id: string; logoUrl: string }> {
     if (
       !['image/png', 'image/jpeg', 'image/webp'].includes(selected.type) ||
@@ -299,6 +301,7 @@ export function SponsorPanel() {
     const response = await fetch('/api/sponsorship/assets', {
       method: 'POST',
       body: data,
+      ...(receiptToken ? { headers: { 'x-sponsor-receipt': receiptToken } } : {}),
       signal: AbortSignal.timeout(45000),
     });
     const result = (await response.json()) as {
@@ -432,7 +435,11 @@ export function SponsorPanel() {
     setBusy(true);
     setError('');
     try {
-      const uploaded = await uploadLogo(selected, receipt.draft.target);
+      const uploaded = await uploadLogo(
+        selected,
+        receipt.draft.target,
+        receipt.token,
+      );
       const result = await sponsorAction({
         action: 'replaceLogo',
         orderId: receipt.id,

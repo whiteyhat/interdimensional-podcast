@@ -519,13 +519,25 @@ async function authenticateReceipt(d: D1Database, raw: unknown) {
   return { token, order };
 }
 /**
+ * The paid cap order a request carries the receipt token of, if any. Replacing a logo belongs to
+ * a purchase that already happened, so it is allowed while checkout is closed; every other
+ * upload starts a new purchase and is refused. Never throws: an unknown or malformed token is
+ * simply not a paid order.
+ */
+export async function paidCapOrder(d: D1Database, raw: unknown) {
+  const token = typeof raw === 'string' ? raw.trim() : '';
+  if (!/^[a-f0-9]{64}$/.test(token)) return null;
+  const order = await db.getOrderByToken(d, await hashSponsorToken(token));
+  return order?.product === 'cap' && order.status === 'paid' ? order : null;
+}
+/**
  * Ask the desk for the look of the asset an order names. Called the one time a payment
  * settles an order, by the reconciler for a round that went unanswered, and by replaceLogo.
  * The look is made once per asset: a `qualified` asset is reused as it is (a later order for
  * the same logo shows the existing look at once), except one wearing the fallback print,
  * which gets its single upgrade fit at round 2. Never throws: the confirm response and the
- * reconciler's counters are the same whatever the desk does. A request the desk refuses
- * outright (a non-409 4xx) is a verdict on the logo and refuses the asset at once.
+ * reconciler's counters are the same whatever the desk does. An answer that refuses the request
+ * hands the round back: only the desk's callback is a verdict on the logo.
  */
 export async function requestTailor(
   d: D1Database,
