@@ -9,8 +9,9 @@
 //   node scripts/media.mjs health <devnet|production>   ask the media service whether it can
 //                                                       sell a cap
 //
-// sponsor-media-<env> normalizes logos, previews caps and composites the paid take; the site
-// calls it with a shared token and stores what it returns. sponsor-reconcile-<env> asks the site
+// sponsor-media-<env> normalizes logos and, once an order is paid, tailors the host's look with
+// fal (it alone holds FAL_KEY; the Worker never does); the site calls it with a shared token and
+// stores what it sends back. sponsor-reconcile-<env> asks the site
 // to recover payments and reschedule paused placements every minute, so neither job waits on
 // a studio being on air. Neither service holds a payment key.
 //
@@ -208,11 +209,13 @@ async function secret(name) {
 }
 
 /** What the media service is told. MEDIA_CONCURRENCY and MEDIA_QUEUE bound its render desk. */
-export function mediaVariables(env, token) {
+export function mediaVariables(env, token, falKey) {
   const port = String(MEDIA_PORT);
   return {
     SPONSOR_MEDIA_TOKEN: token,
     SPONSOR_SITE_ORIGIN: SITES[checkEnv(env)].origin,
+    // The tailor's key: the desk dresses the host with fal. Only the desk holds it.
+    FAL_KEY: falKey,
     MEDIA_CONCURRENCY: '2',
     MEDIA_QUEUE: '6',
     // Railway's healthcheck and the public address both go to PORT. The image has always read
@@ -295,9 +298,15 @@ export async function setup(env, ...flags) {
   const rotate = flags.includes('--rotate');
   const key = env.toUpperCase();
   // Secrets first: a bad value in .dev.vars stops setup before Railway has anything half-made.
+  const falKey = await devVar('FAL_KEY');
+  if (!falKey)
+    throw Error(
+      `FAL_KEY is missing from ${VARS}. The media desk tailors looks with it; add the studio's key and run setup again.`,
+    );
   const mediaVars = mediaVariables(
     env,
     await secret(`SPONSOR_MEDIA_TOKEN_${key}`),
+    falKey,
   );
   const reconcileVars = {
     SPONSOR_ORIGIN: SITES[env].origin,
@@ -451,6 +460,10 @@ export async function status(env) {
             : `differs from ${saved} in ${VARS}: run setup again`
       }`,
     );
+    if (role === 'media')
+      console.log(
+        `  tailor     ${vars.FAL_KEY ? 'FAL_KEY set' : 'FAL_KEY not set: run setup'}`,
+      );
   }
   await nextSteps(env);
 }
@@ -489,11 +502,11 @@ export async function health(env, { reconciler = true } = {}) {
     console.error(
       '\nNot ready: the site will keep the cap off sale. Check its token and runtime with status.',
     );
-  else if (report.capQualified !== true)
+  else if (report.tailor !== true)
     console.error(
-      '\nUp, but no cap has passed qualification, so the cap stays off sale.',
+      '\nUp, but FAL_KEY is missing or fal did not answer, so the cap stays off sale.',
     );
-  else console.log('\nReady to sell caps.');
+  else console.log('\nReady to tailor looks.');
 
   if (reconciler) {
     const ids = await railway.target({

@@ -1,15 +1,26 @@
 'use client';
-import { Check, ExternalLink, Radio, RotateCcw } from 'lucide-react';
+import { useRef } from 'react';
+import {
+  Check,
+  ExternalLink,
+  Radio,
+  RotateCcw,
+  Shirt,
+  Upload,
+} from 'lucide-react';
 import type { SponsorReceipt as Receipt } from '@/lib/sponsorship';
 import {
+  LOOK_COPY,
   capAheadCopy,
   deliveryProgress,
   dollars,
   productCopy,
   receiptStage,
+  type LookView,
 } from '@/lib/sponsor-client';
 const labels = {
   payment: 'Confirming payment',
+  tailoring: 'Your tee and cap are being tailored',
   queued: 'You’re in the queue',
   preparing: 'Your moment is being prepared',
   'on-air': 'Your sponsorship is on air',
@@ -19,14 +30,20 @@ const labels = {
 export function SponsorReceipt({
   receipt,
   busy,
+  look,
   onAction,
+  onReplaceLogo,
   onNew,
 }: {
   receipt: Receipt;
   busy: boolean;
+  /** The wardrobe state of a paid cap order; null for every other order. */
+  look: LookView | null;
   onAction: (action: 'reschedule') => void;
+  onReplaceLogo: (file: File) => void;
   onNew: () => void;
 }) {
+  const replaceFile = useRef<HTMLInputElement>(null);
   const stage = receiptStage(receipt);
   const attempt =
     receipt.attempts.find((a) => a.status === 'verified') ??
@@ -37,7 +54,7 @@ export function SponsorReceipt({
       ? 3
       : stage === 'on-air'
         ? 2
-        : stage === 'queued' || stage === 'preparing' || stage === 'paused'
+        : ['tailoring', 'queued', 'preparing', 'paused'].includes(stage)
           ? 1
           : 0;
   return (
@@ -50,20 +67,24 @@ export function SponsorReceipt({
           <Check size={24} />
         ) : stage === 'paused' ? (
           <RotateCcw size={22} />
+        ) : stage === 'tailoring' ? (
+          <Shirt size={22} />
         ) : (
           <Radio size={22} />
         )}
       </div>
-      <p className="sponsor-kicker">YOUR ON-AIR PASS</p>
+      <p className="sponsor-kicker">{look?.label ?? 'YOUR ON-AIR PASS'}</p>
       <h3 aria-live="polite" aria-atomic="true">
-        {labels[stage]}
+        {look?.kind === 'refused' ? 'Your logo needs a change' : labels[stage]}
       </h3>
       <p>
-        {stage === 'paused'
-          ? 'Your remaining placement is safe. It resumes in the next live slot.'
-          : stage === 'delivered'
-            ? 'From your wallet to the conversation. Thanks for being part of the show.'
-            : 'Keep watching. This receipt follows your placement through the studio.'}
+        {(stage === 'tailoring' || look?.kind === 'refused') && look?.line
+          ? look.line
+          : stage === 'paused'
+            ? 'Your remaining placement is safe. It resumes in the next live slot.'
+            : stage === 'delivered'
+              ? 'From your wallet to the conversation. Thanks for being part of the show.'
+              : 'Keep watching. This receipt follows your placement through the studio.'}
       </p>
       <div className="sponsor-receipt-details">
         <span>{productCopy[receipt.draft.product].title}</span>
@@ -85,6 +106,34 @@ export function SponsorReceipt({
         <p className="sponsor-cap-ahead">
           {capAheadCopy(receipt.capAhead, receipt.draft.target)}
         </p>
+      ) : null}
+      {/* A slow, fallback or refused fit offers a way out: a different logo goes through the
+          same check and the order keeps its place. The order is never lost. */}
+      {look?.replace ? (
+        <div className="sponsor-look-replace">
+          {look.kind === 'ready' && look.line ? <p>{look.line}</p> : null}
+          <input
+            className="sr-only"
+            ref={replaceFile}
+            id="sponsor-replace-logo"
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            onChange={(e) => {
+              const chosen = e.target.files?.[0];
+              e.target.value = '';
+              if (chosen) onReplaceLogo(chosen);
+            }}
+          />
+          <button
+            type="button"
+            className="sponsor-button secondary"
+            disabled={busy}
+            onClick={() => replaceFile.current?.click()}
+          >
+            <Upload size={15} />
+            {LOOK_COPY.replace}
+          </button>
+        </div>
       ) : null}
       {receipt.draft.product === 'cap' && (
         <div className="sponsor-delivery-progress">

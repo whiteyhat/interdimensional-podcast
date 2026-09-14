@@ -5,7 +5,6 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
-  MessageCircle,
   ScanLine,
   Shirt,
   Sparkles,
@@ -13,7 +12,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import {
-  sponsorProducts,
+  sponsorOffers,
   validateSponsorDraft,
   type SponsorAsset,
   type SponsorCatalog,
@@ -28,6 +27,7 @@ import {
   dollars,
   emptyDraft,
   hostName,
+  lookView,
   productCopy,
   readCheckout,
 } from '@/lib/sponsor-client';
@@ -56,7 +56,11 @@ const SponsorQR = dynamic(
     loading: () => <p className="sponsor-working">Preparing your QR…</p>,
   },
 );
-const ICONS = { message: MessageCircle, spotlight: Sparkles, cap: Shirt };
+const ICONS = { spotlight: Sparkles, cap: Shirt };
+const LINES = {
+  spotlight: 'Four turns. Your project.',
+  cap: productCopy.cap.short,
+};
 const BADGES: Partial<Record<SponsorDraft['product'], string>> = {
   spotlight: 'Top seller',
   cap: 'Most value',
@@ -79,7 +83,12 @@ export function SponsorPanel() {
   const [signing, setSigning] = useState(false);
   const [error, setError] = useState('');
   const [connectionError, setConnectionError] = useState('');
-  const [artwork, setArtwork] = useState<string | null>(null);
+  // The clock the tailoring copy reads. It moves with every receipt poll (4 s while an
+  // order is live), which is as often as the copy needs to advance.
+  const [clock, setClock] = useState(() => Date.now());
+  // When the customer swaps the logo after paying, tailoring starts again from now, not
+  // from the payment; the receipt has no field for that, so the page keeps the moment.
+  const [replacedAt, setReplacedAt] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const form = useRef<HTMLFormElement>(null);
@@ -94,6 +103,7 @@ export function SponsorPanel() {
     receiptRef.current = next;
     setReceipt(next);
     setToken(next.token);
+    setClock(Date.now());
     try {
       const url = new URL(window.location.href);
       url.searchParams.set('receipt', next.token);
@@ -139,11 +149,6 @@ export function SponsorPanel() {
       );
       setDraft(saved.draft);
       setAsset(saved.asset);
-      setArtwork(
-        saved.draft.assetId
-          ? `/api/sponsorship/assets/${encodeURIComponent(saved.draft.assetId)}`
-          : null,
-      );
       setToken(
         explicit && /^[a-zA-Z0-9_-]{32,180}$/.test(explicit)
           ? explicit
@@ -199,7 +204,7 @@ export function SponsorPanel() {
         updateReceipt(next);
         if (touchedToken.current !== token) {
           setDraft(next.draft);
-          setArtwork(next.assetUrl);
+          setReplacedAt(null);
           setStep(3);
           const attempt =
             next.attempts.find((a) => a.status === 'verified') ||
@@ -241,6 +246,7 @@ export function SponsorPanel() {
   }, [token, updateReceipt]);
   const received =
     !!receipt && !['draft', 'payment-pending'].includes(receipt.status);
+  const look = receipt ? lookView(receipt, clock, replacedAt) : null;
   // Celebrate the payment the viewer watched confirm, once, and only that: a receipt that
   // was already paid when the page opened is a return visit, not a moment.
   const seenStatus = useRef<{ id: string; status: string } | null>(null);
@@ -266,53 +272,59 @@ export function SponsorPanel() {
     if (locked) return;
     if (patch.product || patch.target) {
       assetEpoch.current++;
-      setArtwork(null);
       patch.assetId = undefined;
     }
     setDraft((d) => ({ ...d, ...patch }));
     setFieldErrors({});
     setError('');
   }
-  async function upload(selected: File | undefined) {
-    if (!selected || uploading || locked) return;
+  /**
+   * The desk normalises the logo and refuses one it could never print (empty, hair-thin,
+   * undecodable) before any money moves; its reason comes back verbatim. Nothing is
+   * generated here: the tee and cap are tailored after payment, from the stored logo.
+   */
+  async function uploadLogo(
+    selected: File,
+    target: SponsorDraft['target'],
+  ): Promise<{ id: string; logoUrl: string }> {
     if (
       !['image/png', 'image/jpeg', 'image/webp'].includes(selected.type) ||
       selected.size > 4 * 1024 * 1024
-    ) {
-      setFieldErrors({ assetId: 'Use a PNG, JPG, or WebP image under 4 MB.' });
-      return;
-    }
+    )
+      throw Error('Use a PNG, JPG, or WebP image under 4 MB.');
+    const data = new FormData();
+    data.set('image', selected);
+    data.set('kind', 'cap');
+    data.set('target', target || 'host');
+    const response = await fetch('/api/sponsorship/assets', {
+      method: 'POST',
+      body: data,
+      signal: AbortSignal.timeout(45000),
+    });
+    const result = (await response.json()) as {
+      id?: string;
+      logoUrl?: string;
+      error?: string;
+    };
+    if (!response.ok || !result.id || !result.logoUrl)
+      throw Error(result.error || 'Your logo could not be prepared.');
+    return { id: result.id, logoUrl: result.logoUrl };
+  }
+  async function upload(selected: File | undefined) {
+    if (!selected || uploading || locked) return;
     setUploading(true);
     setError('');
     const epoch = ++assetEpoch.current;
     try {
-      const data = new FormData();
-      data.set('image', selected);
-      data.set('kind', draft.product === 'cap' ? 'cap' : 'logo');
-      data.set('target', draft.target || 'host');
-      const response = await fetch('/api/sponsorship/assets', {
-        method: 'POST',
-        body: data,
-        signal: AbortSignal.timeout(45000),
-      });
-      const result = (await response.json()) as {
-        id?: string;
-        url?: string;
-        error?: string;
-      };
-      if (!response.ok || !result.id || !result.url)
-        throw Error(result.error || 'Your artwork could not be prepared.');
+      const uploaded = await uploadLogo(selected, draft.target);
       if (epoch !== assetEpoch.current) return;
-      setDraft((d) => ({ ...d, assetId: result.id }));
-      setArtwork(result.url);
+      setDraft((d) => ({ ...d, assetId: uploaded.id }));
       setFieldErrors({});
     } catch (e) {
       if (epoch === assetEpoch.current)
         setFieldErrors({
           assetId:
-            e instanceof Error
-              ? e.message
-              : 'Your artwork could not be prepared.',
+            e instanceof Error ? e.message : 'Your logo could not be prepared.',
         });
     } finally {
       setUploading(false);
@@ -323,12 +335,12 @@ export function SponsorPanel() {
     e.preventDefault();
     if (operation.current) return;
     const fields: Record<string, string> = {};
-    if (draft.product !== 'message' && !draft.projectName?.trim())
+    if (!draft.projectName?.trim())
       fields.projectName = 'Give your project a name.';
     if (draft.message.trim().length < 3)
       fields.message = 'Give the hosts a little more to work with.';
     if (draft.product === 'cap' && !draft.assetId)
-      fields.assetId = 'Add your logo to preview the cap.';
+      fields.assetId = 'Add your logo first.';
     if (Object.keys(fields).length) {
       setFieldErrors(fields);
       document.getElementById(`sponsor-${Object.keys(fields)[0]}`)?.focus();
@@ -409,6 +421,39 @@ export function SponsorPanel() {
       setBusy(false);
     }
   }
+  /**
+   * After payment the order keeps its place; only its logo changes. The new logo goes
+   * through the same desk check, then the order is pointed at it and tailoring starts
+   * again. The desk's refusal, or the site's, lands in the panel's alert.
+   */
+  async function replaceLogo(selected: File) {
+    if (!receipt || operation.current) return;
+    operation.current = true;
+    setBusy(true);
+    setError('');
+    try {
+      const uploaded = await uploadLogo(selected, receipt.draft.target);
+      const result = await sponsorAction({
+        action: 'replaceLogo',
+        orderId: receipt.id,
+        token: receipt.token,
+        assetId: uploaded.id,
+      });
+      setReplacedAt(Date.now());
+      if (result.receipt) {
+        updateReceipt(result.receipt);
+        // The card's swatch reads the draft, so the new logo shows at once, not at the next poll.
+        setDraft(result.receipt.draft);
+      }
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : 'Your logo could not be replaced.',
+      );
+    } finally {
+      operation.current = false;
+      setBusy(false);
+    }
+  }
   function goStep(next: 1 | 2 | 3) {
     navigated.current = true;
     setStep(next);
@@ -422,10 +467,17 @@ export function SponsorPanel() {
   }
   function newOrder(back: 1 | 2 = 1) {
     if (signing) return;
+    // A pass for a placement that came off sale is edited under an offer that is on sale.
+    setDraft((d) =>
+      sponsorOffers.some((p) => p.id === d.product)
+        ? d
+        : { ...d, product: emptyDraft.product },
+    );
     setReceipt(null);
     receiptRef.current = null;
     setToken(null);
     setQr('');
+    setReplacedAt(null);
     navigated.current = true;
     setStep(back);
     setMethod('wallet');
@@ -448,7 +500,10 @@ export function SponsorPanel() {
       </legend>
       <div>
         {ASSETS.map((a) => (
-          <label key={a} className={asset === a ? 'selected' : ''}>
+          <label
+            key={a}
+            className={`${a === 'FROGCLENCH' ? 'frog' : 'alt'}${asset === a ? ' selected' : ''}`}
+          >
             <input
               type="radio"
               name="sponsor-asset"
@@ -476,13 +531,15 @@ export function SponsorPanel() {
       </div>
       <h2 id="sponsor-title">Be part of the show.</h2>
       <p className="sponsor-lead">
-        A thought. A project. A cap with your name on it.
+        A project. A tee and cap with your name on it.
       </p>
       {received && receipt ? (
         <SponsorReceipt
           receipt={receipt}
           busy={busy}
+          look={look}
           onAction={act}
+          onReplaceLogo={(chosen) => void replaceLogo(chosen)}
           onNew={() => newOrder(1)}
         />
       ) : (
@@ -498,7 +555,7 @@ export function SponsorPanel() {
               <>
                 <fieldset className="sponsor-products" disabled={locked}>
                   <legend className="sr-only">Choose your sponsorship</legend>
-                  {sponsorProducts.map((p, i) => {
+                  {sponsorOffers.map((p) => {
                     const Icon = ICONS[p.id];
                     const selected = draft.product === p.id;
                     return (
@@ -525,19 +582,13 @@ export function SponsorPanel() {
                               </span>
                             )}
                           </span>
-                          <small>
-                            {i === 0
-                              ? 'A message, answered on air'
-                              : i === 1
-                                ? 'Four turns. Your project.'
-                                : 'Your logo on Pepe or Chad'}
-                          </small>
+                          <small>{LINES[p.id]}</small>
                         </span>
-                        <span className="sponsor-product-price">
+                        <span
+                          className={`sponsor-product-price${asset === 'FROGCLENCH' ? ' discounted' : ''}`}
+                        >
                           {dollars(catalogPriceCents(catalog, p.id, asset))}
-                          <small>
-                            {asset === 'FROGCLENCH' ? 'with FROGCLENCH' : 'USD'}
-                          </small>
+                          <small>{asset === 'FROGCLENCH' ? '−30%' : 'USD'}</small>
                         </span>
                         <span className="sponsor-radio" aria-hidden="true">
                           {selected && <Check size={10} />}
@@ -588,29 +639,24 @@ export function SponsorPanel() {
                     ))}
                   </fieldset>
                 )}
-                {draft.product !== 'message' && (
-                  <label
-                    className="sponsor-field"
-                    htmlFor="sponsor-projectName"
-                  >
-                    <span>Project or token name</span>
-                    <input
-                      id="sponsor-projectName"
-                      name="projectName"
-                      value={draft.projectName || ''}
-                      maxLength={20}
-                      placeholder="Your project, in plain words"
-                      onChange={(e) => change({ projectName: e.target.value })}
-                      aria-invalid={!!fieldErrors.projectName}
-                      aria-describedby={
-                        fieldErrors.projectName
-                          ? 'sponsor-projectName-error'
-                          : undefined
-                      }
-                    />
-                    {errorFor('projectName')}
-                  </label>
-                )}
+                <label className="sponsor-field" htmlFor="sponsor-projectName">
+                  <span>Project or token name</span>
+                  <input
+                    id="sponsor-projectName"
+                    name="projectName"
+                    value={draft.projectName || ''}
+                    maxLength={20}
+                    placeholder="Your project, in plain words"
+                    onChange={(e) => change({ projectName: e.target.value })}
+                    aria-invalid={!!fieldErrors.projectName}
+                    aria-describedby={
+                      fieldErrors.projectName
+                        ? 'sponsor-projectName-error'
+                        : undefined
+                    }
+                  />
+                  {errorFor('projectName')}
+                </label>
                 {draft.product === 'cap' && (
                   <div className="sponsor-upload">
                     <input
@@ -640,7 +686,7 @@ export function SponsorPanel() {
                           : draft.assetId
                             ? 'Change your logo'
                             : 'Add your logo'}
-                        <small>Preview it on the actual cap</small>
+                        <small>Tailored onto the tee and cap after payment</small>
                       </span>
                       {draft.assetId && <Check size={16} />}
                     </button>
@@ -652,9 +698,7 @@ export function SponsorPanel() {
                 )}
                 <label className="sponsor-field" htmlFor="sponsor-message">
                   <span>
-                    {draft.product === 'message'
-                      ? 'Give them something to talk about'
-                      : 'What should they know?'}
+                    What should they know?
                     <small>{draft.message.length}/240</small>
                   </span>
                   <textarea
@@ -663,11 +707,7 @@ export function SponsorPanel() {
                     value={draft.message}
                     maxLength={240}
                     rows={4}
-                    placeholder={
-                      draft.product === 'message'
-                        ? 'A question, a hot take, a story from the trenches…'
-                        : 'Tell us what you’re building. Keep claims specific and accurate.'
-                    }
+                    placeholder="Tell us what you’re building. Keep claims specific and accurate."
                     onChange={(e) => change({ message: e.target.value })}
                     aria-invalid={!!fieldErrors.message}
                     aria-describedby={
@@ -790,10 +830,15 @@ export function SponsorPanel() {
           </div>
         </form>
       )}
+      {/* A cap's stored asset is the logo until the look lands, so it is never the card
+          image; only a spotlight's stored logo is artwork for the card. */}
       <SponsorPreview
         draft={draft}
-        artwork={artwork || receipt?.assetUrl}
+        artwork={
+          draft.product === 'spotlight' ? (receipt?.assetUrl ?? null) : null
+        }
         paid={received}
+        look={look}
       />
       <p className="sponsor-error" role="alert">
         {error}

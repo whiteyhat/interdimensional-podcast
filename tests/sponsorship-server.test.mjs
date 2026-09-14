@@ -45,7 +45,14 @@ function database() {
       sql.exec('BEGIN');
       try {
         const out = [];
-        for (const s of statements) out.push(await s.all());
+        for (const s of statements) {
+          const result = await s.all();
+          // D1 reports the rows each statement changed; settlePayment reads it.
+          out.push({
+            ...result,
+            meta: { changes: sql.prepare('SELECT changes() AS n').get().n },
+          });
+        }
         sql.exec('COMMIT');
         return out;
       } catch (e) {
@@ -55,6 +62,14 @@ function database() {
     },
   };
 }
+/** A placement on sale, for the tests that only need some order to pay for. */
+const DRAFT = {
+  product: 'spotlight',
+  projectName: 'Game',
+  style: 'intro',
+  name: 'Joe',
+  message: 'Hello everyone',
+};
 const post = (v, body, headers = {}) =>
   server.handleSponsorship(
     new Request('https://show.test/api/sponsorship', {
@@ -107,7 +122,7 @@ void test('private receipt capability is separate from the Solana Pay capability
     const draft = await (
       await post(f.v, {
         action: 'draft',
-        draft: { product: 'message', name: 'Joe', message: 'Hello everyone' },
+        draft: DRAFT,
       })
     ).json();
     const quote = await (
@@ -151,7 +166,7 @@ void test('ambiguous broadcasts persist deterministic signature and cannot issue
     const { receipt } = await (
       await post(f.v, {
         action: 'draft',
-        draft: { product: 'message', name: 'Joe', message: 'Hello everyone' },
+        draft: DRAFT,
       })
     ).json();
     const quote = await (
@@ -327,7 +342,7 @@ void test('expiry requires a reference sweep begun after blockhash finality, not
     const { receipt } = await (
       await post(f.v, {
         action: 'draft',
-        draft: { product: 'message', name: 'Joe', message: 'Hello everyone' },
+        draft: DRAFT,
       })
     ).json();
     await (
@@ -362,7 +377,7 @@ void test('wallet requests carry a server cosignature that fixes their blockhash
     const { receipt } = await (
       await post(f.v, {
         action: 'draft',
-        draft: { product: 'message', name: 'Joe', message: 'Hello everyone' },
+        draft: DRAFT,
       })
     ).json();
     const q = await (
@@ -404,7 +419,7 @@ void test('Solana Pay preflight permits the official helper cache-control header
     f.restore();
   }
 });
-void test('USDC remains exactly five tokens without a Jupiter service', async () => {
+void test('USDC stays one token per dollar without a Jupiter service', async () => {
   const f = await fixture();
   try {
     f.v.JUPITER_API_KEY = undefined;
@@ -435,7 +450,7 @@ void test('USDC remains exactly five tokens without a Jupiter service', async ()
     const { receipt } = await (
       await post(f.v, {
         action: 'draft',
-        draft: { product: 'message', name: 'Joe', message: 'Hello everyone' },
+        draft: DRAFT,
       })
     ).json();
     const r = await post(f.v, {
@@ -445,7 +460,7 @@ void test('USDC remains exactly five tokens without a Jupiter service', async ()
     });
     const q = await r.json();
     assert.equal(r.status, 200, JSON.stringify(q));
-    assert.equal(q.attempt.amountBase, '5000000');
+    assert.equal(q.attempt.amountBase, '25000000');
     assert.equal(q.attempt.priceUsd, '1');
   } finally {
     f.restore();
@@ -457,7 +472,7 @@ void test('studio context resolves immutable draft and rejects relinquished leas
     const { receipt } = await (
       await post(f.v, {
         action: 'draft',
-        draft: { product: 'message', name: 'Joe', message: 'Hello everyone' },
+        draft: DRAFT,
       })
     ).json();
     const q = await (
@@ -704,7 +719,7 @@ void test('finalized cosigned payment credits its actual payer exactly once', as
     const { receipt } = await (
       await post(f.v, {
         action: 'draft',
-        draft: { product: 'message', name: 'Joe', message: 'Hello everyone' },
+        draft: DRAFT,
       })
     ).json();
     const q = await (
@@ -727,9 +742,9 @@ void test('finalized cosigned payment credits its actual payer exactly once', as
       index = keys.findIndex((k) => k.pubkey === f.v.TREASURY_WALLET),
       pre = keys.map(() => 0),
       after = keys.map(() => 0);
-    pre[0] = 100000000;
+    pre[0] = 300000000;
     after[0] = 49000000;
-    after[index] = 50000000;
+    after[index] = 250000000;
     f.c.getParsedTransaction = async () => ({
       blockTime: Math.floor(Date.now() / 1000),
       meta: { err: null, preBalances: pre, postBalances: after },
@@ -747,7 +762,7 @@ void test('finalized cosigned payment credits its actual payer exactly once', as
                 info: {
                   source: f.wallet.publicKey.toBase58(),
                   destination: f.v.TREASURY_WALLET,
-                  lamports: 50000000,
+                  lamports: 250000000,
                 },
               },
             },
@@ -790,7 +805,7 @@ void test('a held builder lock prevents recovery from expiring its in-flight att
     const { receipt } = await (
       await post(f.v, {
         action: 'draft',
-        draft: { product: 'message', name: 'Joe', message: 'Hello everyone' },
+        draft: DRAFT,
       })
     ).json();
     const q = await (
@@ -820,12 +835,9 @@ void test('a held builder lock prevents recovery from expiring its in-flight att
 // thing D1 bills against a daily allowance, and what an idle reconciler must not spend.
 const rowsWritten = (f) =>
   f.DB.sql.prepare('SELECT total_changes() AS n').get().n;
-async function quoted(f, product = 'message') {
+async function quoted(f) {
   const { receipt } = await (
-    await post(f.v, {
-      action: 'draft',
-      draft: { product, name: 'Joe', message: 'Hello everyone' },
-    })
+    await post(f.v, { action: 'draft', draft: DRAFT })
   ).json();
   const q = await (
     await post(f.v, {
@@ -1030,6 +1042,649 @@ void test('the catalog keeps caps on sale while caps are queued and counts what 
       2,
       'the overall queue position is unchanged',
     );
+  } finally {
+    f.restore();
+  }
+});
+void test('the five-dollar message is off sale: no new pass, no new charge, and paid ones still air', async () => {
+  const f = await fixture();
+  try {
+    const catalog = await (
+      await server.handleSponsorship(
+        new Request('https://show.test/api/sponsorship?action=catalog'),
+        f.v,
+      )
+    ).json();
+    assert.deepEqual(
+      catalog.products.map((p) => p.id),
+      ['spotlight', 'cap'],
+    );
+    const message = { product: 'message', name: 'Joe', message: 'Hello' };
+    const refused = await post(f.v, { action: 'draft', draft: message });
+    assert.equal(refused.status, 400);
+    // A pass saved before the message came off sale is never charged again.
+    const token = 'a'.repeat(64);
+    await db.createOrder(f.DB, {
+      id: 'saved',
+      tokenHash: await server.hashSponsorToken(token),
+      draft: message,
+      now: 100,
+    });
+    const quote = await post(f.v, { action: 'quote', token, asset: 'SOL' });
+    assert.equal(quote.status, 409);
+    assert.match((await quote.json()).error, /no longer offered/);
+    // One already paid for still goes to the studio: every placement is final once paid.
+    await db.createOrder(f.DB, {
+      id: 'paid',
+      tokenHash: 'paid',
+      draft: message,
+      now: 100,
+    });
+    await db.insertAttempt(f.DB, {
+      id: 'paid-a',
+      order_id: 'paid',
+      pay_token: 'paid',
+      asset: 'SOL',
+      mint: null,
+      decimals: 9,
+      amount_base: '50000000',
+      price_usd: '100',
+      price_cents: 500,
+      recipient: f.v.TREASURY_WALLET,
+      reference: 'paid',
+      issued_at: 100,
+      expires_at: 200,
+    });
+    await db.settlePayment(
+      f.DB,
+      'paid-a',
+      { signature: 'sig-paid', payer: 'payer', blockTime: 150 },
+      300,
+    );
+    const [leased] = await db.leaseOrders(f.DB, 'studio', Date.now());
+    assert.equal(leased?.id, 'paid');
+  } finally {
+    f.restore();
+  }
+});
+
+// ---- looks. One sponsor_assets row per (logo, character); the order gate and the air gate.
+const ASSET = 'a'.repeat(64);
+const LOOK_SHA = 'b'.repeat(64);
+const logoUrl = `https://show.test/api/sponsorship/assets/${ASSET}?part=logo`;
+const lookUrl = `https://show.test/api/sponsorship/assets/${ASSET}?part=look&v=${LOOK_SHA}`;
+const PALETTE = {
+  clusters: [{ hex: '#112233', share: 1 }],
+  primary: '#112233',
+  secondary: '#112233',
+  accent: '#112233',
+  monochrome: false,
+};
+const capMeta = (extra = {}) => ({
+  kind: 'cap',
+  target: 'host',
+  templateVersion: 'looks-v1',
+  logoSha256: 'c'.repeat(64),
+  logoUrl,
+  palette: PALETTE,
+  ...extra,
+});
+const qualifiedMeta = () =>
+  capMeta({
+    sourceUrl: lookUrl,
+    sha256: LOOK_SHA,
+    look: { sha256: LOOK_SHA, model: 'm', fit: 1, round: 1, verdict: {} },
+    tailor: { round: 1, requestedAt: 100, outcome: 'look', at: 200 },
+  });
+function insertAsset(f, status, meta, id = ASSET) {
+  f.DB.sql
+    .prepare(
+      'INSERT OR REPLACE INTO sponsor_assets(id,status,url,mime,created_at,metadata) VALUES(?,?,?,?,?,?)',
+    )
+    .run(
+      id,
+      status,
+      status === 'qualified' ? lookUrl : logoUrl,
+      'image/png',
+      100,
+      JSON.stringify(meta),
+    );
+}
+const CAP_DRAFT = {
+  product: 'cap',
+  target: 'host',
+  name: 'Joe',
+  projectName: 'Canvas',
+  message: 'Builders ship',
+  assetId: ASSET,
+};
+const CAPS = {
+  message: true,
+  spotlight: true,
+  cap: true,
+  capTemplateVersion: 'looks-v1',
+};
+
+void test('the order gate takes a logo that is tailoring or done, and refuses one the tailor gave up on', async () => {
+  const f = await fixture();
+  try {
+    await db.heartbeat(f.DB, 'studio', CAPS, Date.now());
+    insertAsset(f, 'logo', capMeta());
+    const tailoring = await post(f.v, { action: 'draft', draft: CAP_DRAFT });
+    assert.equal(tailoring.status, 200, JSON.stringify(await tailoring.clone().json()));
+    insertAsset(f, 'qualified', qualifiedMeta());
+    assert.equal((await post(f.v, { action: 'draft', draft: CAP_DRAFT })).status, 200);
+    insertAsset(f, 'refused', capMeta({ reason: 'Too thin to print.' }));
+    const refused = await post(f.v, { action: 'draft', draft: CAP_DRAFT });
+    assert.equal(refused.status, 409);
+    const body = await refused.json();
+    assert.equal(body.code, 'ASSET');
+    assert.match(body.error, /Too thin to print/);
+    assert.match(body.error, /Use a different logo/);
+    // The wrong host, or a logo from an older wardrobe, is not this order's.
+    insertAsset(f, 'logo', capMeta({ target: 'guest' }));
+    assert.equal((await post(f.v, { action: 'draft', draft: CAP_DRAFT })).status, 409);
+    insertAsset(f, 'logo', capMeta({ templateVersion: 'caps-v1' }));
+    assert.equal((await post(f.v, { action: 'draft', draft: CAP_DRAFT })).status, 409);
+    // A studio still heartbeating the old wardrobe cannot be quoted a cap; the new one can.
+    insertAsset(f, 'logo', capMeta());
+    const { receipt } = await (
+      await post(f.v, { action: 'draft', draft: CAP_DRAFT })
+    ).json();
+    await db.heartbeat(f.DB, 'studio', { ...CAPS, capTemplateVersion: 'caps-v1' }, Date.now());
+    const old = await post(f.v, { action: 'quote', token: receipt.token, asset: 'SOL' });
+    assert.equal(old.status, 409);
+    assert.equal((await old.json()).code, 'ASSET');
+    await db.heartbeat(f.DB, 'studio', CAPS, Date.now());
+    const quoted = await post(f.v, { action: 'quote', token: receipt.token, asset: 'SOL' });
+    assert.equal(quoted.status, 200, JSON.stringify(await quoted.clone().json()));
+  } finally {
+    f.restore();
+  }
+});
+
+/** A paid cap order leased to the heartbeating studio by hand, whatever its asset says; then the studio asks for its context. */
+async function leasedCapContext(f, status, meta) {
+  const now = Date.now();
+  await db.heartbeat(f.DB, 'studio', CAPS, now);
+  insertAsset(f, status, meta);
+  await db.createOrder(f.DB, { id: 'cap-order', tokenHash: 'cap-order', draft: CAP_DRAFT, now });
+  f.DB.sql
+    .prepare(
+      "UPDATE sponsor_orders SET status='leased',paid_attempt_id='paid',paid_at=?,lease_owner='studio',lease_token='lease',lease_until=? WHERE id='cap-order'",
+    )
+    .run(now, now + 45000);
+  return post(
+    f.v,
+    { action: 'context', orderId: 'cap-order', leaseToken: 'lease' },
+    { 'x-studio-id': 'studio', 'x-studio-token': f.v.STUDIO_TOKEN },
+  );
+}
+// Moved from tests/sponsor-render.test.mjs, where a take was refused 409 ASSET when the design
+// was not what the lease promised. The air gate makes the same refusal before any clip is made.
+void test('the air gate refuses a cap whose look is not in place, even when the order is leased by hand', async (t) => {
+  const without = (key) => {
+    const m = qualifiedMeta();
+    delete m[key];
+    return m;
+  };
+  for (const [name, status, meta] of [
+    ['still tailoring', 'logo', capMeta({ tailor: { round: 1, requestedAt: 100 } })],
+    ['refused by the tailor', 'refused', capMeta({ reason: 'Too thin.' })],
+    ['qualified without a wardrobe version', 'qualified', without('templateVersion')],
+    ['qualified but the look and the source disagree', 'qualified', { ...qualifiedMeta(), sha256: 'f'.repeat(64) }],
+    ['qualified without a source image', 'qualified', without('sourceUrl')],
+  ]) {
+    await t.test(name, async () => {
+      const f = await fixture();
+      try {
+        const r = await leasedCapContext(f, status, meta);
+        assert.equal(r.status, 409);
+        assert.equal((await r.json()).code, 'ASSET');
+      } finally {
+        f.restore();
+      }
+    });
+  }
+  await t.test('a finished look is handed to the studio with what the route pins', async () => {
+    const f = await fixture();
+    try {
+      const r = await leasedCapContext(f, 'qualified', qualifiedMeta());
+      assert.equal(r.status, 200, JSON.stringify(await r.clone().json()));
+      const { order } = await r.json();
+      assert.equal(order.assetUrl, lookUrl);
+      assert.equal(order.assetMetadata.sourceUrl, lookUrl);
+      assert.equal(order.assetMetadata.sha256, LOOK_SHA);
+      assert.equal(order.assetMetadata.templateVersion, 'looks-v1');
+    } finally {
+      f.restore();
+    }
+  });
+});
+
+void test('a cap receipt says where its look stands', async () => {
+  const f = await fixture();
+  try {
+    const site = { origin: 'https://show.test', cluster: 'devnet' };
+    await db.createOrder(f.DB, { id: 'cap-look', tokenHash: 'cap-look', draft: CAP_DRAFT, now: 100 });
+    const receipt = async () =>
+      server.sponsorReceipt(f.DB, await db.getOrder(f.DB, 'cap-look'), 't', site);
+    insertAsset(f, 'logo', capMeta({ tailor: { round: 2, requestedAt: 100 } }));
+    let r = await receipt();
+    assert.deepEqual(r.look, { status: 'tailoring', round: 2 });
+    assert.equal(r.assetUrl, logoUrl, 'the swatch until the look lands');
+    insertAsset(f, 'logo', capMeta());
+    assert.deepEqual((await receipt()).look, { status: 'tailoring' }, 'paid, not yet requested');
+    const fallback = qualifiedMeta();
+    fallback.look.fallback = 'cap-v1';
+    insertAsset(f, 'qualified', fallback);
+    r = await receipt();
+    assert.deepEqual(r.look, { status: 'ready', url: lookUrl, round: 1, fallback: 'cap-v1' });
+    assert.equal(r.assetUrl, lookUrl);
+    insertAsset(f, 'qualified', qualifiedMeta());
+    assert.deepEqual((await receipt()).look, { status: 'ready', url: lookUrl, round: 1 });
+    insertAsset(
+      f,
+      'refused',
+      capMeta({
+        reason: 'Too thin.',
+        tailor: { round: 3, requestedAt: 100, outcome: 'refused', at: 200, reasons: ['Too thin.'] },
+      }),
+    );
+    assert.deepEqual((await receipt()).look, { status: 'refused', reason: 'Too thin.', round: 3 });
+    // A paid cap carries the clock the panel's waiting copy reads: the payment, or the later
+    // swap for a different logo (replaceLogo moves updated_at), whichever is later.
+    await f.DB.prepare("UPDATE sponsor_orders SET status='paid',paid_at=?,updated_at=? WHERE id=?")
+      .bind(500, 700, 'cap-look')
+      .run();
+    insertAsset(f, 'logo', capMeta());
+    assert.deepEqual((await receipt()).look, { status: 'tailoring', since: 700 });
+    // A spotlight has no look.
+    const { receipt: spotlight } = await (
+      await post(f.v, {
+        action: 'draft',
+        draft: { product: 'spotlight', projectName: 'Game', style: 'intro', name: 'Joe', message: 'Hello everyone' },
+      })
+    ).json();
+    assert.equal(spotlight.look, undefined);
+  } finally {
+    f.restore();
+  }
+});
+
+// ---- paying starts the tailor.
+/** Pay a quote on the fixture's fake chain the way a wallet does, then confirm it: the real settle path. */
+async function payOnChain(f, v, receipt, q) {
+  const tx = Transaction.from(Buffer.from(q.transaction, 'base64'));
+  tx.partialSign(f.wallet);
+  const { getBase58Decoder } = await import('@solana/kit');
+  const sig = getBase58Decoder().decode(tx.signature),
+    msg = tx.compileMessage();
+  const keys = msg.accountKeys.map((pubkey, i) => ({
+      pubkey: pubkey.toBase58(),
+      signer: i < msg.header.numRequiredSignatures,
+    })),
+    index = keys.findIndex((k) => k.pubkey === f.v.TREASURY_WALLET),
+    lamports = Number(q.attempt.amountBase),
+    pre = keys.map(() => 0),
+    after = keys.map(() => 0);
+  pre[0] = 3000000000;
+  after[0] = pre[0] - lamports - 5000;
+  after[index] = lamports;
+  f.c.getParsedTransaction = async () => ({
+    blockTime: Math.floor(Date.now() / 1000),
+    meta: { err: null, preBalances: pre, postBalances: after },
+    transaction: {
+      signatures: tx.signatures.map((s) => getBase58Decoder().decode(s.signature)),
+      message: {
+        accountKeys: keys,
+        instructions: [
+          {
+            programId: '11111111111111111111111111111111',
+            parsed: {
+              type: 'transfer',
+              info: {
+                source: f.wallet.publicKey.toBase58(),
+                destination: f.v.TREASURY_WALLET,
+                lamports,
+              },
+            },
+          },
+        ],
+      },
+    },
+  });
+  return (
+    await post(v, { action: 'confirm', token: receipt.token, attemptId: q.attempt.id, signature: sig })
+  ).json();
+}
+/** The fixture with a wardrobe desk: /tailor answers are scripted, everything else is the price oracle. */
+function withDesk(f, answer = () => Response.json({ key: 'k', queued: true }, { status: 202 })) {
+  const tailors = [];
+  const oracle = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const target = url instanceof URL ? url.href : url instanceof Request ? url.url : url;
+    if (target.endsWith('/tailor')) {
+      tailors.push({ url: target, init, body: JSON.parse(init.body) });
+      return answer();
+    }
+    return oracle(url, init);
+  };
+  return {
+    tailors,
+    v: {
+      ...f.v,
+      SPONSOR_MEDIA_URL: 'https://media.test',
+      SPONSOR_MEDIA_TOKEN: 'm'.repeat(32),
+      SITE_URL: 'https://show.test',
+    },
+  };
+}
+/** Draft a cap on the asset, quote it for the fixture wallet, pay it: the paid receipt. */
+async function buyCap(f, v) {
+  await db.heartbeat(f.DB, 'studio', CAPS, Date.now());
+  const { receipt } = await (await post(v, { action: 'draft', draft: CAP_DRAFT })).json();
+  const q = await (
+    await post(v, { action: 'quote', token: receipt.token, asset: 'SOL', wallet: f.wallet.publicKey.toBase58() })
+  ).json();
+  assert.ok(q.attempt, JSON.stringify(q));
+  const paid = await payOnChain(f, v, receipt, q);
+  assert.equal(paid.receipt.status, 'paid', JSON.stringify(paid));
+  return { receipt, q, paid };
+}
+const assetMeta = (f) =>
+  JSON.parse(f.DB.sql.prepare('SELECT metadata FROM sponsor_assets WHERE id=?').get(ASSET).metadata);
+
+void test('the first proof that pays a cap asks the desk for its look exactly once', async () => {
+  const f = await fixture();
+  try {
+    const desk = withDesk(f);
+    insertAsset(f, 'logo', capMeta());
+    const { receipt, q, paid } = await buyCap(f, desk.v);
+    assert.equal(desk.tailors.length, 1);
+    assert.equal(desk.tailors[0].url, 'https://media.test/tailor');
+    assert.equal(desk.tailors[0].init.headers.authorization, `Bearer ${'m'.repeat(32)}`);
+    assert.deepEqual(desk.tailors[0].body, {
+      assetId: ASSET,
+      round: 1,
+      target: 'host',
+      logoUrl,
+      logoSha256: 'c'.repeat(64),
+      palette: PALETTE,
+      projectName: 'Canvas',
+    });
+    const meta = assetMeta(f);
+    assert.equal(meta.tailor.round, 1);
+    assert.equal(typeof meta.tailor.requestedAt, 'number');
+    // The look carries the clock the panel reads (the payment, moved by a logo swap).
+    assert.ok(typeof paid.receipt.look.since === 'number' && paid.receipt.look.since > 0, 'since');
+    assert.deepEqual(paid.receipt.look, { status: 'tailoring', round: 1, since: paid.receipt.look.since });
+    // Confirming again, and a late second transfer, ask for nothing.
+    await post(desk.v, { action: 'confirm', token: receipt.token, attemptId: q.attempt.id });
+    await db.settlePayment(f.DB, q.attempt.id, { signature: 'late', payer: 'payer', blockTime: 150 }, Date.now());
+    await post(desk.v, { action: 'confirm', token: receipt.token });
+    assert.equal(desk.tailors.length, 1);
+  } finally {
+    f.restore();
+  }
+});
+
+void test('a site without a desk still takes the payment, and warns', async (t) => {
+  const f = await fixture();
+  try {
+    const warned = t.mock.method(console, 'warn', () => {});
+    insertAsset(f, 'logo', capMeta());
+    await buyCap(f, f.v);
+    assert.ok(
+      warned.mock.calls.some((c) => c.arguments[0] === '[sponsorship] tailor deferred'),
+      'the deferral is logged',
+    );
+    assert.equal(assetMeta(f).tailor.round, 0, 'no round was spent: no desk took the job');
+  } finally {
+    f.restore();
+  }
+});
+
+void test('a second order for a logo whose look exists asks the desk for nothing and reads ready', async () => {
+  const f = await fixture();
+  try {
+    const desk = withDesk(f);
+    insertAsset(f, 'qualified', qualifiedMeta());
+    const { paid } = await buyCap(f, desk.v);
+    assert.equal(desk.tailors.length, 0);
+    assert.equal(paid.receipt.look.status, 'ready');
+    assert.equal(paid.receipt.look.url, lookUrl);
+  } finally {
+    f.restore();
+  }
+});
+
+// Only the desk's callback refuses a logo. An answer to the request refuses the request: a
+// malformed body, a stale token, a desk that is full, unconfigured or down. None of them looked
+// at the logo, so none of them may spend the buyer's round or end their order.
+void test('an answer that refuses the request never refuses the logo, and spends no round', async (t) => {
+  const warned = t.mock.method(console, 'warn', () => {});
+  const cried = t.mock.method(console, 'error', () => {});
+  for (const [name, answer, loud] of [
+    [
+      'the site sent a malformed request',
+      () => Response.json({ code: 'LOGO_HASH', error: 'The logo does not match its hash.' }, { status: 400 }),
+      true,
+    ],
+    ['a stale token', () => Response.json({ code: 'AUTH' }, { status: 401 }), true],
+    ['a desk with no fal key', () => Response.json({ code: 'TAILOR_UNAVAILABLE' }, { status: 503 }), false],
+    ['busy', () => Response.json({ code: 'BUSY', retryAfterMs: 5000 }, { status: 409 }), false],
+    ['down', () => Promise.reject(new TypeError('fetch failed')), false],
+  ]) {
+    await t.test(name, async () => {
+      const f = await fixture();
+      try {
+        warned.mock.resetCalls();
+        cried.mock.resetCalls();
+        const desk = withDesk(f, answer);
+        insertAsset(f, 'logo', capMeta());
+        await buyCap(f, desk.v);
+        const row = f.DB.sql.prepare('SELECT status,metadata FROM sponsor_assets WHERE id=?').get(ASSET);
+        assert.equal(row.status, 'logo', 'the buyer keeps their logo and their place');
+        const meta = JSON.parse(row.metadata);
+        assert.equal(meta.reason, undefined, 'nothing was said about the logo');
+        assert.equal(meta.tailor.round, 0, 'the round is handed back');
+        assert.ok(meta.tailor.requestedAt > 0, 'and the reconciler waits its four minutes');
+        assert.equal(meta.tailor.outcome, undefined);
+        // A 4xx is this site's own bug: it is reported as an error, not as a passing condition.
+        assert.equal(
+          cried.mock.calls.some((c) => c.arguments[0] === '[sponsorship] the tailor refused this request'),
+          loud,
+          'a 4xx must be reported as this site\'s own fault',
+        );
+      } finally {
+        f.restore();
+      }
+    });
+  }
+});
+
+// Three rounds the desk actually took, and no look: the logo is refused and a new one offered.
+void test('only rounds the desk took are spent, so a desk that was down never refuses a logo', async (t) => {
+  const f = await fixture();
+  try {
+    t.mock.method(console, 'warn', () => {});
+    t.mock.method(console, 'error', () => {});
+    const MIN = 60000;
+    let clock = Date.now();
+    t.mock.method(Date, 'now', () => clock);
+    let up = false;
+    const desk = withDesk(f, () =>
+      up ? Response.json({ queued: true }, { status: 202 }) : Promise.reject(new TypeError('fetch failed')),
+    );
+    await db.createOrder(f.DB, { id: 'down', tokenHash: 'down', draft: CAP_DRAFT, now: clock });
+    f.DB.sql
+      .prepare("UPDATE sponsor_orders SET status='paid',paid_attempt_id='paid',paid_at=? WHERE id='down'")
+      .run(clock);
+    insertAsset(f, 'logo', capMeta());
+    // Twelve minutes with the desk down: three passes, no round spent, nothing refused.
+    for (let i = 0; i < 3; i++) {
+      clock += 4 * MIN + 1;
+      await server.reconcileSponsorships(desk.v);
+    }
+    assert.equal(desk.tailors.length, 3, 'it kept asking');
+    assert.deepEqual(desk.tailors.map((t) => t.body.round), [1, 1, 1], 'always the first round');
+    let row = f.DB.sql.prepare('SELECT status,metadata FROM sponsor_assets WHERE id=?').get(ASSET);
+    assert.equal(row.status, 'logo', 'a logo nobody looked at is never refused');
+    // The desk comes back and takes three rounds that land nothing: now the logo is refused.
+    up = true;
+    for (const round of [1, 2, 3]) {
+      clock += 4 * MIN + 1;
+      await server.reconcileSponsorships(desk.v);
+      assert.equal(desk.tailors.at(-1).body.round, round);
+    }
+    clock += 4 * MIN + 1;
+    await server.reconcileSponsorships(desk.v);
+    row = f.DB.sql.prepare('SELECT status,metadata FROM sponsor_assets WHERE id=?').get(ASSET);
+    assert.equal(row.status, 'refused');
+    assert.match(JSON.parse(row.metadata).reason, /couldn’t finish tailoring|couldn't finish tailoring/);
+  } finally {
+    f.restore();
+  }
+});
+
+void test('the reconciler re-requests a stuck look with the next round, gives up after the third, and upgrades a fallback', async (t) => {
+  const f = await fixture();
+  try {
+    t.mock.method(console, 'warn', () => {});
+    const desk = withDesk(f);
+    const MIN = 60000;
+    let clock = Date.now();
+    t.mock.method(Date, 'now', () => clock);
+    await db.createOrder(f.DB, { id: 'stuck', tokenHash: 'stuck', draft: CAP_DRAFT, now: clock });
+    f.DB.sql
+      .prepare("UPDATE sponsor_orders SET status='paid',paid_attempt_id='paid',paid_at=? WHERE id='stuck'")
+      .run(clock);
+    insertAsset(f, 'logo', capMeta({ tailor: { round: 1, requestedAt: clock } }));
+    // Inside the round's four minutes: idle, and not one row written.
+    const before = rowsWritten(f);
+    assert.deepEqual(await server.reconcileSponsorships(desk.v), { ok: true, idle: true, checked: 0, errors: 0 });
+    assert.equal(rowsWritten(f), before);
+    assert.equal(desk.tailors.length, 0);
+    clock += 4 * MIN + 1;
+    const result = await server.reconcileSponsorships(desk.v);
+    assert.equal(result.tailored, 1, JSON.stringify(result));
+    assert.equal(desk.tailors.length, 1);
+    assert.equal(desk.tailors[0].body.round, 2);
+    assert.equal(assetMeta(f).tailor.round, 2);
+    assert.equal((await server.reconcileSponsorships(desk.v)).idle, true, 'round 2 is in flight');
+    clock += 4 * MIN + 1;
+    await server.reconcileSponsorships(desk.v);
+    assert.equal(desk.tailors.length, 2);
+    assert.equal(desk.tailors[1].body.round, 3);
+    clock += 4 * MIN + 1;
+    await server.reconcileSponsorships(desk.v);
+    assert.equal(desk.tailors.length, 2, 'no fourth round');
+    const row = f.DB.sql.prepare('SELECT status,metadata FROM sponsor_assets WHERE id=?').get(ASSET);
+    assert.equal(row.status, 'refused');
+    assert.match(JSON.parse(row.metadata).reason, /couldn't finish tailoring/);
+    clock += 60 * MIN;
+    assert.equal((await server.reconcileSponsorships(desk.v)).idle, true, 'a refused logo is left alone');
+    // A first-round fallback gets one upgrade after ten minutes.
+    const fallback = qualifiedMeta();
+    fallback.look.fallback = 'cap-v1';
+    fallback.tailor = { round: 1, requestedAt: clock, outcome: 'look', at: clock };
+    insertAsset(f, 'qualified', fallback);
+    clock += 10 * MIN + 1;
+    await server.reconcileSponsorships(desk.v);
+    assert.equal(desk.tailors.length, 3);
+    assert.equal(desk.tailors[2].body.round, 2);
+    clock += 60 * MIN;
+    assert.equal((await server.reconcileSponsorships(desk.v)).idle, true, 'one upgrade only');
+  } finally {
+    f.restore();
+  }
+});
+
+void test('a paid buyer may swap the logo when the tailor gave up, stalled, or fell back', async (t) => {
+  const f = await fixture();
+  try {
+    t.mock.method(console, 'warn', () => {});
+    const desk = withDesk(f);
+    const MIN = 60000;
+    let clock = Date.now();
+    t.mock.method(Date, 'now', () => clock);
+    const OTHER = 'e'.repeat(64),
+      THIRD = 'a'.repeat(63) + 'b';
+    const metaFor = (id, extra = {}) =>
+      capMeta({
+        logoSha256: id.slice(0, 1).repeat(64),
+        logoUrl: `https://show.test/api/sponsorship/assets/${id}?part=logo`,
+        ...extra,
+      });
+    const token = 'f'.repeat(64);
+    await db.createOrder(f.DB, {
+      id: 'swap',
+      tokenHash: await server.hashSponsorToken(token),
+      draft: CAP_DRAFT,
+      now: clock,
+    });
+    const swap = (assetId) => post(desk.v, { action: 'replaceLogo', token, assetId });
+    const current = () =>
+      JSON.parse(f.DB.sql.prepare('SELECT draft FROM sponsor_orders WHERE id=?').get('swap').draft).assetId;
+    insertAsset(f, 'refused', capMeta({ reason: 'Too thin.' }));
+    insertAsset(f, 'logo', metaFor(OTHER), OTHER);
+    insertAsset(f, 'logo', metaFor(THIRD), THIRD);
+    // 1. Not before it is paid.
+    assert.equal((await swap(OTHER)).status, 409);
+    f.DB.sql
+      .prepare("UPDATE sponsor_orders SET status='paid',paid_attempt_id='paid',paid_at=?,updated_at=? WHERE id='swap'")
+      .run(clock, clock);
+    // 2. A refused logo is swapped at once; the new one starts its rounds fresh.
+    const swapped = await swap(OTHER);
+    assert.equal(swapped.status, 200, JSON.stringify(await swapped.clone().json()));
+    const { receipt } = await swapped.json();
+    assert.equal(receipt.draft.assetId, OTHER);
+    // The look carries the clock the panel reads (the payment, moved by a logo swap).
+    assert.ok(typeof receipt.look.since === 'number' && receipt.look.since > 0, 'since');
+    assert.deepEqual(receipt.look, { status: 'tailoring', round: 1, since: receipt.look.since });
+    assert.deepEqual(desk.tailors.map((c) => [c.body.assetId, c.body.round]), [[OTHER, 1]]);
+    // 3. A logo that is tailoring stays put for ten minutes, then may go.
+    const early = await swap(THIRD);
+    assert.equal(early.status, 409);
+    assert.match((await early.json()).error, /still being tailored/);
+    clock += 10 * MIN + 1;
+    assert.equal((await swap(THIRD)).status, 200);
+    assert.equal(current(), THIRD);
+    assert.equal(desk.tailors.length, 2);
+    // 4. The new logo must itself be dressable for this host: the tailor's reason comes back.
+    clock += 10 * MIN + 1;
+    const bad = await swap(ASSET);
+    assert.equal(bad.status, 409);
+    assert.match((await bad.json()).error, /Too thin/);
+    assert.equal(current(), THIRD);
+    // 5. A fallback look may be improved on; a real look may not be swapped away.
+    const fallback = { ...qualifiedMeta(), ...metaFor(THIRD) };
+    fallback.look = { ...qualifiedMeta().look, fallback: 'cap-v1' };
+    insertAsset(f, 'qualified', fallback, THIRD);
+    assert.equal((await swap(OTHER)).status, 200, 'a fallback can be improved on');
+    assert.equal(current(), OTHER);
+    assert.equal(desk.tailors.length, 3);
+    clock += 10 * MIN + 1;
+    insertAsset(f, 'qualified', { ...qualifiedMeta(), ...metaFor(THIRD) }, THIRD);
+    const ready = await swap(THIRD);
+    assert.equal(ready.status, 200, 'a finished look is taken as it is');
+    assert.equal((await ready.json()).receipt.look.status, 'ready');
+    assert.equal(desk.tailors.length, 3, 'nothing to tailor for a finished look');
+    assert.equal((await swap(OTHER)).status, 409, 'a real look is not swapped away');
+    // 6. The same logo again resets its rounds instead of changing the order.
+    insertAsset(
+      f,
+      'logo',
+      metaFor(THIRD, { tailor: { round: 3, requestedAt: clock - 30 * MIN, outcome: 'deadline', at: clock - 20 * MIN } }),
+      THIRD,
+    );
+    clock += 10 * MIN + 1;
+    assert.equal((await swap(THIRD)).status, 200);
+    assert.equal(current(), THIRD);
+    assert.equal(desk.tailors.length, 4);
+    assert.equal(desk.tailors[3].body.assetId, THIRD);
+    assert.equal(desk.tailors[3].body.round, 1);
   } finally {
     f.restore();
   }

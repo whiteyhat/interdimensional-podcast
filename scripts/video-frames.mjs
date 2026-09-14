@@ -7,13 +7,29 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { fal, falKey } from './fal.mjs';
 import { avif } from './site-images.mjs';
 
+const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const key = await falKey();
+// The uncropped originals were uploaded to fal once, when the stills were branded
+// (character-assets.json). The tailor edits that same 1376×768 still, so its URL travels
+// with the frames; the hash check proves the URL is this file and not an older cut.
+const { sources } = JSON.parse(await readFile('character-assets.json', 'utf8'));
 const frames = {};
 for (const [role, name] of [
   ['host', 'pepe'],
   ['guest', 'gigachad'],
 ]) {
   const original = `public/${name}-cartoon.png`;
+  const originalSha256 = sha256(await readFile(original));
+  const originalUrl = sources[`${name}-cartoon`];
+  if (typeof originalUrl !== 'string' || !originalUrl.startsWith('https://'))
+    throw Error(`No fal URL for ${name}-cartoon in character-assets.json`);
+  const remote = await fetch(originalUrl, { signal: AbortSignal.timeout(30000) });
+  if (!remote.ok) throw Error(`Could not fetch ${originalUrl}: ${remote.status}`);
+  const remoteSha256 = sha256(Buffer.from(await remote.arrayBuffer()));
+  if (remoteSha256 !== originalSha256)
+    throw Error(
+      `${originalUrl} is not ${original}: sha256 ${remoteSha256} vs ${originalSha256}`,
+    );
   const image = `/${name}-video.png`;
   // Fit without stretching, then center-crop. Current stills lose only 16 pixels on each side.
   execFileSync('ffmpeg', [
@@ -57,9 +73,8 @@ for (const [role, name] of [
     width: 1344,
     height: 768,
     original,
-    originalSha256: createHash('sha256')
-      .update(await readFile(original))
-      .digest('hex'),
+    originalUrl,
+    originalSha256,
   };
   console.log(`${role}: prepared and uploaded 1344×768 frame`);
 }

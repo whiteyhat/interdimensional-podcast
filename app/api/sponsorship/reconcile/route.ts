@@ -4,10 +4,10 @@ import {
   reconcileSponsorships,
   sameSponsorToken,
   sponsorFailure,
-  type SponsorVars,
+  type SponsorMediaVars,
 } from '@/lib/sponsor-server';
 export async function POST(request: Request) {
-  const v = env as unknown as SponsorVars;
+  const v = env as unknown as SponsorMediaVars;
   if (
     !sameSponsorToken(
       request.headers.get('x-reconcile-token') ?? '',

@@ -5,112 +5,147 @@ import { build } from './build.mjs';
 await build(['services']);
 const { createServices } = await import('../work/tests/services.js');
 
-// Caps were qualified on the take exactly as the model makes it. Compositing on fal's 1080p
-// rescale instead doubled the tracker's work and grew every tracking error by the scale, so
-// real paid takes lost tracking or ran out the media desk's deadline on devnet.
-function studio(
-  t,
-  refusal = {
-    status: 422,
-    code: 'INVALID_WEARABLE',
-    error: 'Tracking could not be verified.',
-  },
-) {
-  const requests = [];
-  t.mock.method(globalThis, 'fetch', async (url, options) => {
-    const body = JSON.parse(options.body);
-    requests.push({ url, body });
-    if (url === '/api/sponsorship/media')
-      return Response.json(
-        { code: refusal.code, error: refusal.error },
-        { status: refusal.status },
-      );
-    if (body.action === 'poll')
-      return Response.json({
-        status: 'COMPLETED',
-        speechEnd: 0.8,
-        hasExtraSpeech: false,
-        url: `https://fal.media/${body.token}.mp4`,
-      });
-    return Response.json({ token: `${body.action}-${body.attempt ?? 0}` });
-  });
-  return requests;
-}
+// A dressed shot used to skip fal's scaler and go to the media desk to have a cap composited
+// onto the take, per clip, behind a tracker that refused two takes in three. The look is now
+// in the frames the model is conditioned on, so a dressed clip is scaled, audited and
+// downloaded exactly like any other clip, and nothing is ever posted to a media route.
 const wardrobe = {
   orderId: 'order',
   leaseToken: 'lease',
   target: 'host',
-  assetId: 'design',
-  designHash: 'hash',
-  sourceUrl: 'https://show.test/cap.png',
-  templateVersion: 'caps-v1',
+  assetId: 'asset1',
+  designHash: 'look1',
+  sourceUrl: 'https://show.test/api/sponsorship/assets/asset1?part=look&v=look1',
+  templateVersion: 'looks-v1',
 };
-
-void test('a cap is composited on the native take, and fal never rescales a cap shot', async (t) => {
-  const requests = studio(t);
-  const services = createServices();
-  await assert.rejects(
-    services.render({
-      id: 0,
-      speaker: 'host',
-      text: 'Of course.',
-      wardrobe,
-    }),
-    /Tracking could not/,
-  );
-  const composites = requests.filter((r) => r.url === '/api/sponsorship/media');
-  assert.ok(composites.length > 0, 'the cap shot reached the compositor');
-  for (const [i, composite] of composites.entries())
-    assert.equal(
-      composite.body.videoUrl,
-      `https://fal.media/shot-${i}.mp4`,
-      'the compositor gets the take the model made',
-    );
-  assert.equal(
-    requests.filter((r) => r.body.action === 'scale').length,
-    0,
-    'no rescale is paid for a shot the media desk scales itself',
-  );
-  // The desk refused three takes; a retry from the engine must buy a fourth, never send the
-  // third back to be refused again.
-  const before = requests.length;
-  await assert.rejects(
-    services.render({
-      id: 0,
-      speaker: 'host',
-      text: 'Of course.',
-      wardrobe,
-    }),
-  );
-  const again = requests
-    .slice(before)
-    .filter((r) => r.url === '/api/sponsorship/media')
-    .map((r) => r.body.videoUrl);
-  assert.ok(again.length >= 1, 'the retry reached the compositor');
-  assert.ok(
-    again.every((url) => !composites.some((c) => c.body.videoUrl === url)),
-    `a fresh take was composited, not a refused one: ${again.join(', ')}`,
-  );
-});
-
-void test('a placement the site no longer owns is dropped at once, not retaken', async (t) => {
-  const requests = studio(t, {
-    status: 409,
-    code: 'LEASE',
-    error: 'The delivery lease ended.',
+/** A browser that decodes any blob as ten seconds of playable video. */
+function decodable(t) {
+  const originalDocument = globalThis.document;
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    writable: true,
+    value: {
+      createElement: () => ({
+        duration: 10,
+        src: '',
+        muted: false,
+        preload: '',
+        removeAttribute() {
+          this.src = '';
+        },
+        load() {
+          if (this.src) queueMicrotask(() => this.onloadeddata?.());
+        },
+      }),
+    },
   });
-  await assert.rejects(
-    createServices().render({
-      id: 0,
-      speaker: 'host',
-      text: 'Of course.',
-      wardrobe,
-    }),
-    (e) => e.code === 'LEASE' && e.constructor.name === 'PlacementLostError',
+  t.after(() => {
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+  });
+}
+
+void test('a dressed clip is scaled and audited like any other clip, and nothing is composited', async (t) => {
+  decodable(t);
+  const actions = [];
+  const downloads = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (url === '/api/podcast') {
+      const body = JSON.parse(options.body);
+      if (body.action !== 'poll') actions.push(body.action);
+      if (body.action === 'shot') {
+        assert.ok(body.line.wardrobe, 'the take is bought dressed');
+        return Response.json({ token: 'shot-job' });
+      }
+      if (body.action === 'scale') {
+        assert.equal(
+          body.url,
+          'https://fal.media/native.mp4',
+          'the scaler gets the take the model made',
+        );
+        return Response.json({ token: 'scale-job' });
+      }
+      if (body.action === 'speech')
+        return Response.json({ token: 'speech-job' });
+      if (body.action === 'poll')
+        return Response.json({
+          status: 'COMPLETED',
+          ...(body.token === 'speech-job'
+            ? { speechEnd: 0.8, hasExtraSpeech: false }
+            : {}),
+          url:
+            body.token === 'shot-job'
+              ? 'https://fal.media/native.mp4'
+              : 'https://fal.media/scaled.mp4',
+        });
+      throw Error(`unexpected action ${body.action}`);
+    }
+    assert.ok(
+      !String(url).includes('/api/sponsorship/media'),
+      'no compositor is called for a dressed clip',
+    );
+    downloads.push(url);
+    return new Response(new Blob(['video']));
+  });
+  const services = createServices();
+  const clip = await services.render({
+    id: 0,
+    speaker: 'host',
+    text: 'Of course.',
+    wardrobe,
+  });
+  assert.deepEqual(actions, ['shot', 'scale', 'speech']);
+  assert.deepEqual(
+    downloads,
+    ['/api/media?url=https%3A%2F%2Ffal.media%2Fscaled.mp4'],
+    'the scaled take is downloaded through the media proxy, like any clip',
   );
+  assert.equal(clip.rawUrl, 'https://fal.media/scaled.mp4');
   assert.equal(
-    requests.filter((r) => r.body.action === 'shot').length,
-    1,
-    'no new take is bought for a placement that is gone',
+    clip.wardrobe.designHash,
+    'look1',
+    'the clip still carries the look it was made with',
   );
+  assert.equal(clip.speechEnd, 0.8);
+  assert.equal(clip.duration, 10, 'a clean dressed take keeps its complete native ending');
+  services.release(clip.url);
 });
+
+// The route answers a lost lease or a replaced look with its own status and code; the studio
+// drops the placement at once instead of buying takes that can only be refused the same way.
+for (const code of ['LEASE', 'ASSET'])
+  void test(`a placement the site refuses with ${code} is dropped at once, not retaken`, async (t) => {
+    const shots = [];
+    t.mock.method(globalThis, 'fetch', async (url, options) => {
+      assert.equal(url, '/api/podcast');
+      const body = JSON.parse(options.body);
+      if (body.action === 'shot') {
+        shots.push(body);
+        return Response.json(
+          {
+            code,
+            error:
+              code === 'LEASE'
+                ? 'The delivery lease ended.'
+                : 'The wardrobe revision does not match this purchased cap.',
+          },
+          { status: 409 },
+        );
+      }
+      throw Error(`unexpected action ${body.action}`);
+    });
+    await assert.rejects(
+      createServices().render({
+        id: 0,
+        speaker: 'host',
+        text: 'Of course.',
+        wardrobe,
+      }),
+      (e) => e.code === code && e.constructor.name === 'PlacementLostError',
+    );
+    assert.equal(
+      shots.length,
+      1,
+      'no new take is bought for a placement that is gone',
+    );
+  });

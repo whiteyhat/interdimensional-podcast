@@ -13,14 +13,20 @@ COPY --from=node /usr/local/bin/node /usr/local/bin/node
 # machine the caps were qualified on, so the desk has ffmpeg convert each take first, and checks
 # at boot that the result matches (the "decoder" field of /health). Swapping in another ffmpeg
 # build is safe only if that check still reports "convert" or "direct".
+# A tailor job may run 210 s, longer than the drain (100 s; SHUTDOWN_MS 105 s; drainingSeconds
+# 120 in broadcast/railway.sponsor-media.json). A deploy that lands mid-fit aborts that fit, the
+# desk sends the site a `shutdown` callback, and the site asks again within a minute. At most one
+# fit (about $0.15) is lost per collision; the paid order is never lost.
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg tini libstdc++6 \
  && rm -rf /var/lib/apt/lists/* \
  && PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_ROOT_USER_ACTION=ignore \
     pip install --no-cache-dir opencv-python-headless==5.0.0.93 numpy==2.5.3 \
  && useradd --create-home --uid 10001 media
 COPY broadcast/sponsor-media.mjs broadcast/sponsor-media.mjs
-COPY scripts/wearable-render.py scripts/wearable_panel.py scripts/
+COPY scripts/wearable-render.py scripts/wearable_panel.py scripts/wardrobe.py scripts/
 COPY public/wearables public/wearables
+# The tailor judges every fit against the uncropped stills fal is shown; they ship beside the caps.
+COPY public/pepe-cartoon.png public/gigachad-cartoon.png public/
 RUN mkdir -p work/sponsor-media && chown -R media:media work
 USER media
 # No port is baked in: Railway injects PORT and the desk listens there. SPONSOR_MEDIA_PORT is

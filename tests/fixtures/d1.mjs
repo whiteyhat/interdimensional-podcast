@@ -27,7 +27,14 @@ export function d1() {
       sql.exec('BEGIN');
       try {
         const out = [];
-        for (const s of statements) out.push(await s.all());
+        for (const s of statements) {
+          const result = await s.all();
+          // D1 reports the rows each statement changed; settlePayment reads it.
+          out.push({
+            ...result,
+            meta: { changes: sql.prepare('SELECT changes() AS n').get().n },
+          });
+        }
         sql.exec('COMMIT');
         return out;
       } catch (e) {

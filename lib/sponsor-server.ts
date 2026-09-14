@@ -2,6 +2,7 @@ import { clusterOf, explorerTx, type Cluster } from './cluster';
 import { interactLimits, readStudioId } from './interact';
 import {
   SponsorError,
+  LOOK_VERSION,
   sponsorOffers,
   sponsorProducts,
   sponsorLimits,
@@ -10,9 +11,12 @@ import {
   amountBaseForCents,
   amountUi,
   validateSponsorDraft,
+  type LookAssetMetadata,
   type SponsorAsset,
+  type SponsorDraft,
   type SponsorCatalog,
   type SponsorCapabilities,
+  type SponsorLook,
   type SponsorReceipt,
   type SponsorAttempt,
   type SponsorLease,
@@ -48,6 +52,50 @@ export type SponsorVars = {
   SPONSOR_FLAT_PRICE_CENTS?: string;
   SPONSOR_SOL_USD?: string;
 };
+/** The site's media-side bindings: the asset bucket, and where the wardrobe desk is and its secret. */
+export type SponsorMediaVars = SponsorVars & {
+  SPONSOR_ASSETS?: R2Bucket;
+  SPONSOR_MEDIA_URL?: string;
+  SPONSOR_MEDIA_TOKEN?: string;
+  SITE_URL?: string;
+};
+/**
+ * Where the media desk lives and the secret its /logo and /tailor calls carry, and that its
+ * look callbacks must present. Those are all this side needs.
+ */
+export function sponsorMediaConfig(v: SponsorMediaVars) {
+  let url: URL | undefined;
+  try {
+    url = v.SPONSOR_MEDIA_URL ? new URL(v.SPONSOR_MEDIA_URL) : undefined;
+  } catch {
+    throw new SponsorError(
+      503,
+      'The wardrobe service URL is invalid.',
+      'MEDIA',
+    );
+  }
+  if (!url || !v.SPONSOR_MEDIA_TOKEN || v.SPONSOR_MEDIA_TOKEN.length < 24)
+    throw new SponsorError(
+      503,
+      'The wardrobe desk is not connected yet.',
+      'MEDIA',
+    );
+  if (
+    url.username ||
+    url.password ||
+    (url.protocol !== 'https:' &&
+      !(
+        url.protocol === 'http:' &&
+        ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
+      ))
+  )
+    throw new SponsorError(
+      503,
+      'The wardrobe service URL is invalid.',
+      'MEDIA',
+    );
+  return { url, token: v.SPONSOR_MEDIA_TOKEN };
+}
 const response = (
   body: unknown,
   status = 200,
@@ -162,20 +210,22 @@ async function producer(d: D1Database, now: number) {
     capabilities: capabilities(row ? JSON.parse(row.capabilities) : null),
   };
 }
+/**
+ * The asset an order names, checked for the stage it is at. `order` (draft, quote,
+ * replaceLogo): the logo is this host's, on the current wardrobe, and the tailor has not
+ * given up on it. `air` (context, pull, reschedule): the look is in place, so the studio
+ * gets a `sourceUrl`, `sha256` and `templateVersion` the route can pin every dressed shot to.
+ */
 export async function qualifiedSponsorAsset(
   d: D1Database,
   draft: ReturnType<typeof validateSponsorDraft>,
   caps?: SponsorCapabilities,
+  stage: 'order' | 'air' = 'order',
 ) {
   if (!draft.assetId) return null;
   const asset = await db.getAsset(d, draft.assetId);
-  if (!asset || asset.status !== 'qualified' || asset.mime !== 'image/png')
-    throw new SponsorError(
-      409,
-      'This artwork is not qualified for broadcast.',
-      'ASSET',
-    );
-  let meta: Record<string, unknown>;
+  if (!asset) throw new SponsorError(409, 'Add your logo first.', 'ASSET');
+  let meta: Omit<Partial<LookAssetMetadata>, 'kind'> & { kind?: string };
   try {
     meta = JSON.parse(asset.metadata);
   } catch {
@@ -185,27 +235,45 @@ export async function qualifiedSponsorAsset(
       'ASSET',
     );
   }
+  if (draft.product === 'spotlight') {
+    if (meta.kind !== 'logo' || asset.status !== 'qualified')
+      throw new SponsorError(
+        409,
+        'Choose a project logo for the spotlight.',
+        'ASSET',
+      );
+    return asset;
+  }
+  if (draft.product !== 'cap') return asset;
+  if (asset.status === 'refused')
+    throw new SponsorError(
+      409,
+      `This logo could not be dressed${meta.reason ? ` (${meta.reason})` : ''}. Use a different logo.`,
+      'ASSET',
+    );
   if (
-    draft.product === 'cap' &&
-    (meta.kind !== 'cap' ||
-      meta.target !== draft.target ||
-      !meta.qualificationVersion ||
-      !meta.templateVersion ||
-      (caps && meta.templateVersion !== caps.capTemplateVersion))
+    meta.kind !== 'cap' ||
+    meta.target !== draft.target ||
+    meta.templateVersion !== LOOK_VERSION ||
+    (caps && meta.templateVersion !== caps.capTemplateVersion) ||
+    !['logo', 'qualified'].includes(asset.status)
   )
     throw new SponsorError(
       409,
-      'This cap is not qualified for the current studio template.',
+      'This logo is not ready for this host on the current wardrobe.',
       'ASSET',
     );
-  if (draft.product === 'spotlight' && meta.kind !== 'logo')
-    throw new SponsorError(
-      409,
-      'Choose a project logo for the spotlight.',
-      'ASSET',
-    );
+  if (
+    stage === 'air' &&
+    (asset.status !== 'qualified' ||
+      typeof meta.sourceUrl !== 'string' ||
+      !meta.look?.sha256 ||
+      meta.look.sha256 !== meta.sha256)
+  )
+    throw new SponsorError(409, 'This look is still being tailored.', 'ASSET');
   return asset;
 }
+
 function mintFor(v: SponsorVars, asset: SponsorAsset) {
   return asset === 'SOL'
     ? null
@@ -357,6 +425,37 @@ function attemptView(a: db.AttemptRow, site: Site): SponsorAttempt {
     solanaPayUrl: `solana:${encodeURIComponent(`${site.origin}/api/solana-pay/${a.pay_token}`)}`,
   };
 }
+/** Where a cap order's look stands, for the receipt: tailoring, ready (fallback or not), or refused. */
+function lookState(asset: db.AssetRow, o: db.OrderRow): SponsorLook {
+  let meta: Partial<LookAssetMetadata> = {};
+  try {
+    meta = JSON.parse(asset.metadata);
+  } catch {}
+  // Round 0 is "no round spent yet": a request the desk never took hands its round back.
+  const spentRound = meta.look?.round ?? meta.tailor?.round;
+  const round = spentRound ? spentRound : undefined;
+  // The clock the receipt's waiting copy reads, the same one replaceLogo keeps: the payment,
+  // moved forward by a swap for a different logo. Read from the order, it survives a reload
+  // and a receipt opened on another device.
+  const withRound = {
+    ...(round === undefined ? {} : { round }),
+    ...(o.paid_at ? { since: Math.max(o.paid_at, o.updated_at) } : {}),
+  };
+  if (asset.status === 'qualified')
+    return {
+      status: 'ready',
+      url: asset.url,
+      ...withRound,
+      ...(meta.look?.fallback ? { fallback: meta.look.fallback } : {}),
+    };
+  if (asset.status === 'refused')
+    return {
+      status: 'refused',
+      ...(meta.reason ? { reason: meta.reason } : {}),
+      ...withRound,
+    };
+  return { status: 'tailoring', ...withRound };
+}
 export async function sponsorReceipt(
   d: D1Database,
   o: db.OrderRow,
@@ -403,6 +502,7 @@ export async function sponsorReceipt(
     assetUrl: asset?.url ?? null,
     queuePosition,
     capAhead,
+    ...(o.product === 'cap' && asset ? { look: lookState(asset, o) } : {}),
   };
 }
 async function authenticateReceipt(d: D1Database, raw: unknown) {
@@ -413,9 +513,105 @@ async function authenticateReceipt(d: D1Database, raw: unknown) {
   if (!order) throw new SponsorError(404, 'Receipt not found.');
   return { token, order };
 }
+/**
+ * Ask the desk for the look of the asset an order names. Called the one time a payment
+ * settles an order, by the reconciler for a round that went unanswered, and by replaceLogo.
+ * The look is made once per asset: a `qualified` asset is reused as it is (a later order for
+ * the same logo shows the existing look at once), except one wearing the fallback print,
+ * which gets its single upgrade fit at round 2. Never throws: the confirm response and the
+ * reconciler's counters are the same whatever the desk does. A request the desk refuses
+ * outright (a non-409 4xx) is a verdict on the logo and refuses the asset at once.
+ */
+export async function requestTailor(
+  d: D1Database,
+  v: SponsorMediaVars,
+  orderId: string,
+  round: number,
+): Promise<void> {
+  try {
+    const order = await db.getOrder(d, orderId);
+    if (!order || order.product !== 'cap') return;
+    const draft = JSON.parse(order.draft) as SponsorDraft;
+    if (!draft.assetId || !draft.target) return;
+    const asset = await db.getAsset(d, draft.assetId);
+    if (!asset) return;
+    const meta = JSON.parse(asset.metadata) as LookAssetMetadata;
+    const upgrade =
+      asset.status === 'qualified' && !!meta.look?.fallback && round === 2;
+    if (asset.status !== 'logo' && !upgrade) return;
+    const spent = meta.tailor?.round ?? 0;
+    await db.markTailorRequested(d, asset.id, {
+      round,
+      requestedAt: Date.now(),
+      ...(meta.tailor?.reasons ? { reasons: meta.tailor.reasons } : {}),
+    });
+    let refused: { status: number; code: string } | null = null;
+    try {
+      // A site with no desk configured is one more desk that did not take the job.
+      const { url, token } = sponsorMediaConfig(v);
+      const response = await fetch(new URL('/tailor', url), {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          assetId: asset.id,
+          round,
+          target: draft.target,
+          logoUrl: meta.logoUrl,
+          logoSha256: meta.logoSha256,
+          palette: meta.palette,
+          projectName: draft.projectName ?? '',
+        }),
+        redirect: 'manual',
+        signal: AbortSignal.timeout(5000),
+      });
+      if (response.ok) return;
+      const body = (await response.json().catch(() => ({}))) as {
+        code?: string;
+      };
+      refused = { status: response.status, code: body.code ?? '' };
+    } catch (e) {
+      refused = {
+        status: 0,
+        code: e instanceof Error ? e.message : 'request failed',
+      };
+    }
+    // Only the desk's callback refuses a logo. An answer to this request refuses the request:
+    // 503 while the desk boots, 409 while it is full, 4xx because this site's body or its
+    // configuration is wrong, 401 for a stale token, nothing at all when it is down. None of
+    // them looked at the logo, so the round is handed back and the reconciler asks again in
+    // four minutes; otherwise a desk that was down for twelve minutes would spend every round
+    // and refuse a logo nobody ever saw. An upgrade keeps its round: the paid order already
+    // wears a look and does not need another try.
+    await db.markTailorRequested(d, asset.id, {
+      round: upgrade ? round : spent,
+      requestedAt: Date.now(),
+      ...(meta.tailor?.reasons ? { reasons: meta.tailor.reasons } : {}),
+    });
+    // A 4xx is this site's own bug or configuration, not a passing condition: say so loudly.
+    const ourFault =
+      refused.status >= 400 && refused.status < 500 && refused.status !== 409;
+    (ourFault ? console.error : console.warn)(
+      ourFault
+        ? '[sponsorship] the tailor refused this request'
+        : '[sponsorship] tailor deferred',
+      asset.id,
+      refused.status,
+      refused.code,
+    );
+  } catch (e) {
+    console.warn(
+      '[sponsorship] tailor deferred',
+      orderId,
+      e instanceof Error ? e.message : 'request failed',
+    );
+  }
+}
 async function recoverAttempt(
   d: D1Database,
-  v: SponsorVars,
+  v: SponsorMediaVars,
   input: db.AttemptRow,
   offered?: string,
   deadlineAt = Date.now() + 15000,
@@ -438,16 +634,21 @@ async function recoverAttempt(
     const scanStartedHeight = a.scan_before
       ? a.scan_started_height
       : await c.getBlockHeight('finalized');
-    let broadcastAmbiguous = false;
+    let broadcastAmbiguous = false,
+      paidNow = false;
     if (offered) {
       if (!/^[1-9A-HJ-NP-Za-km-z]{80,90}$/.test(offered))
         throw new SponsorError(400, 'Invalid transaction signature.');
       const proof = await verifySponsorSignature(c, offered, a);
-      if (proof) await db.settlePayment(d, a.id, proof, now);
+      if (proof)
+        paidNow =
+          (await db.settlePayment(d, a.id, proof, now)).orderPaidNow || paidNow;
     }
     if (a.broadcast_signature) {
       const proof = await verifySponsorSignature(c, a.broadcast_signature, a);
-      if (proof) await db.settlePayment(d, a.id, proof, now);
+      if (proof)
+        paidNow =
+          (await db.settlePayment(d, a.id, proof, now)).orderPaidNow || paidNow;
       else {
         const status = (
           await c.getSignatureStatuses([a.broadcast_signature], {
@@ -459,7 +660,8 @@ async function recoverAttempt(
     }
     const scan = await scanSponsorReference(c, a, { deadlineAt });
     for (const proof of scan.payments)
-      await db.settlePayment(d, a.id, proof, now);
+      paidNow =
+        (await db.settlePayment(d, a.id, proof, now)).orderPaidNow || paidNow;
     let expired = false;
     if (now > a.expires_at && scan.complete && !broadcastAmbiguous) {
       if (a.last_valid_block_height !== null)
@@ -484,6 +686,8 @@ async function recoverAttempt(
         Date.now(),
       )
       .run();
+    // The one moment this order became paid, still under the attempt lock: ask for its look.
+    if (paidNow) await requestTailor(d, v, a.order_id, 1);
     return db.getAttempt(d, a.id);
   } finally {
     await db.releaseLock(d, `attempt:${input.id}`, lock);
@@ -584,7 +788,7 @@ async function walletTransaction(
 }
 async function quote(
   d: D1Database,
-  v: SponsorVars,
+  v: SponsorMediaVars,
   o: db.OrderRow,
   asset: SponsorAsset,
   wallet: string | undefined,
@@ -652,7 +856,7 @@ async function quote(
         'The studio cannot deliver this placement right now.',
         'OFFAIR',
       );
-    await qualifiedSponsorAsset(d, JSON.parse(o.draft), live.capabilities);
+    await qualifiedSponsorAsset(d, JSON.parse(o.draft), live.capabilities, 'order');
     const state = await assetState(d, v, asset, now),
       cents = sponsorPriceCents(o.product, asset, devnetPricing(v).flatCents),
       amount = amountBaseForCents(cents, state.priceUsd, state.decimals);
@@ -729,7 +933,7 @@ async function submit(
     /* Always reconcile this immutable signature, including ambiguous RPC errors. */
   }
 }
-export async function reconcileSponsorships(v: SponsorVars) {
+export async function reconcileSponsorships(v: SponsorMediaVars) {
   const d = await sponsorDatabase(v),
     now = Date.now();
   // The sweeps write only the rows that moved, so an idle pass costs reads. The lock is two
@@ -744,17 +948,21 @@ export async function reconcileSponsorships(v: SponsorVars) {
     .bind(now - 3600000)
     .run();
   // Open quotes always; an expired one only while a late payment could still arrive, and
-  // then no more than every few minutes; a verified one never.
-  const attempts = await d
-    .prepare(
-      `SELECT * FROM sponsor_payment_attempts WHERE status IN ('issued','submitted') OR (status='expired' AND issued_at>? AND last_checked_at<?) ORDER BY CASE WHEN status IN ('issued','submitted') THEN 0 ELSE 1 END,last_checked_at ASC LIMIT 10`,
-    )
-    .bind(
-      now - interactLimits.recoverWindowMs,
-      now - interactLimits.recoverRecheckMs,
-    )
-    .all<db.AttemptRow>();
-  if (!attempts.results.length)
+  // then no more than every few minutes; a verified one never. And the looks the tailor
+  // still owes: a round that went unanswered, a spent logo, a fallback due its upgrade.
+  const [attempts, tailoring] = await Promise.all([
+    d
+      .prepare(
+        `SELECT * FROM sponsor_payment_attempts WHERE status IN ('issued','submitted') OR (status='expired' AND issued_at>? AND last_checked_at<?) ORDER BY CASE WHEN status IN ('issued','submitted') THEN 0 ELSE 1 END,last_checked_at ASC LIMIT 10`,
+      )
+      .bind(
+        now - interactLimits.recoverWindowMs,
+        now - interactLimits.recoverRecheckMs,
+      )
+      .all<db.AttemptRow>(),
+    db.tailorProbe(d, now),
+  ]);
+  if (!attempts.results.length && !tailoring.length)
     return { ok: true, idle: true, checked: 0, errors: 0 };
   const lock = await db.acquireLock(d, 'reconcile', now, 90000);
   if (!lock) return { ok: true, busy: true };
@@ -782,7 +990,22 @@ export async function reconcileSponsorships(v: SponsorVars) {
           .run();
       }
     }
-    return { ok: true, checked, errors };
+    let tailored = 0;
+    for (const job of tailoring) {
+      if (Date.now() - now > 40000) break;
+      if (job.nextRound > 3) {
+        // Three rounds without a look: the logo is refused, and the receipt offers a new one.
+        await db.applyLook(d, job.assetId, {
+          kind: 'refused',
+          reason: "We couldn't finish tailoring this logo.",
+          round: 3,
+        });
+        continue;
+      }
+      await requestTailor(d, v, job.orderId, job.nextRound);
+      tailored++;
+    }
+    return { ok: true, checked, errors, tailored };
   } finally {
     await db.releaseLock(d, 'reconcile', lock);
   }
@@ -812,7 +1035,7 @@ export async function sponsorContext(
       'CAPABILITY',
     );
   const draft = JSON.parse(o.draft);
-  const asset = await qualifiedSponsorAsset(d, draft, caps);
+  const asset = await qualifiedSponsorAsset(d, draft, caps, 'air');
   return {
     id: o.id,
     draft,
@@ -863,9 +1086,66 @@ async function studioProxy(
   }
   return response(data, upstream.status);
 }
+/** How long a logo may keep tailoring before the buyer may swap it for another. */
+const REPLACE_AFTER_MS = 600000;
+/**
+ * A paid buyer picks a different logo when the tailor gave up on theirs, has been at it for
+ * more than ten minutes, or could only manage the fallback cap print. The new logo must pass
+ * the order gate for the same host; the order's draft then names it and round 1 starts. The
+ * same logo again resets its rounds instead.
+ */
+async function replaceLogo(
+  d: D1Database,
+  v: SponsorMediaVars,
+  order: db.OrderRow,
+  assetId: string,
+) {
+  const draft = JSON.parse(order.draft) as SponsorDraft;
+  if (order.product !== 'cap' || order.status !== 'paid')
+    throw new SponsorError(
+      409,
+      'A logo can be changed on a paid cap that is not on air yet.',
+    );
+  if (!/^[a-f0-9]{64}$/.test(assetId))
+    throw new SponsorError(400, 'Choose a logo to use instead.');
+  await qualifiedSponsorAsset(d, { ...draft, assetId }, undefined, 'order');
+  const current = draft.assetId ? await db.getAsset(d, draft.assetId) : null;
+  let meta: Partial<LookAssetMetadata> = {};
+  try {
+    meta = current ? JSON.parse(current.metadata) : {};
+  } catch {}
+  const now = Date.now();
+  const since = Math.max(order.paid_at ?? 0, order.updated_at);
+  const swappable =
+    !current ||
+    current.status === 'refused' ||
+    (current.status === 'logo' && now - since > REPLACE_AFTER_MS) ||
+    (current.status === 'qualified' && !!meta.look?.fallback);
+  if (!swappable)
+    throw new SponsorError(
+      409,
+      'This logo is still being tailored. Give it a few more minutes.',
+    );
+  const changed = await d
+    .prepare(
+      `UPDATE sponsor_orders SET draft=json_set(draft,'$.assetId',?),updated_at=? WHERE id=? AND status='paid'`,
+    )
+    .bind(assetId, now, order.id)
+    .run();
+  if (changed.meta.changes !== 1)
+    throw new SponsorError(409, 'This cap just went on air.', 'LEASE');
+  if (current && current.id === assetId)
+    await d
+      .prepare(
+        `UPDATE sponsor_assets SET metadata=json_remove(metadata,'$.tailor') WHERE id=? AND status='logo'`,
+      )
+      .bind(assetId)
+      .run();
+  await requestTailor(d, v, order.id, 1);
+}
 export async function handleSponsorship(
   request: Request,
-  v: SponsorVars,
+  v: SponsorMediaVars,
 ): Promise<Response> {
   try {
     const url = new URL(request.url),
@@ -1008,9 +1288,7 @@ export async function handleSponsorship(
         const orders: SponsorLease[] = await Promise.all(
           rows.map(async (o) => {
             const draft = JSON.parse(o.draft),
-              asset = draft.assetId
-                ? await db.getAsset(d, draft.assetId)
-                : null;
+              asset = await qualifiedSponsorAsset(d, draft, currentCaps, 'air');
             return {
               id: o.id,
               draft,
@@ -1060,7 +1338,7 @@ export async function handleSponsorship(
       );
     if (action === 'draft') {
       const draft = validateSponsorDraft(body.draft);
-      await qualifiedSponsorAsset(d, draft);
+      await qualifiedSponsorAsset(d, draft, undefined, 'order');
       const token = secretToken(),
         id = crypto.randomUUID();
       await db.createOrder(d, {
@@ -1091,7 +1369,9 @@ export async function handleSponsorship(
           token,
         ),
       );
-    if (action === 'confirm' && !body.attemptId) {
+    if (action === 'replaceLogo') {
+      await replaceLogo(d, v, order, string(body.assetId, 100));
+    } else if (action === 'confirm' && !body.attemptId) {
       const attempts = await d
         .prepare(
           'SELECT * FROM sponsor_payment_attempts WHERE order_id=? ORDER BY last_checked_at ASC LIMIT 5',
@@ -1117,6 +1397,7 @@ export async function handleSponsorship(
         d,
         JSON.parse(order.draft),
         live.capabilities,
+        'air',
       );
       await db.reschedule(d, order.id, Date.now());
     } else throw new SponsorError(400, 'Unknown action.');

@@ -453,6 +453,9 @@ void test('the media upload is exactly what its Dockerfile copies, plus its two 
     'broadcast/sponsor-media.mjs',
     'scripts/wearable-render.py',
     'scripts/wearable_panel.py',
+    'scripts/wardrobe.py',
+    'public/pepe-cartoon.png',
+    'public/gigachad-cartoon.png',
     'public/wearables/caps-v1-qualification.json',
     'public/wearables/pepe-cap-v1.json',
     'public/wearables/pepe-cap-v1.png',
@@ -490,6 +493,17 @@ void test('the media upload is exactly what its Dockerfile copies, plus its two 
     String(listed.stdout).trim().split('\n').sort(byName),
     names,
   );
+});
+
+void test('every Python script the desk spawns, and every still it judges against, is in the media upload', async () => {
+  const desk = await readFile(join(REPO, 'broadcast/sponsor-media.mjs'), 'utf8');
+  const scripts = new Set([...desk.matchAll(/'(scripts\/[\w-]+\.py)'/g)].map((m) => m[1]));
+  const stills = new Set([...desk.matchAll(/'(public\/[\w-]+\.png)'/g)].map((m) => m[1]));
+  assert.ok(scripts.has('scripts/wardrobe.py') && scripts.has('scripts/wearable-render.py'));
+  assert.ok(stills.has('public/pepe-cartoon.png') && stills.has('public/gigachad-cartoon.png'));
+  const files = await media.uploadFiles('media');
+  for (const path of [...scripts, ...stills])
+    assert.ok(files.includes(path), `${path} is named by the desk but not uploaded`);
 });
 
 void test('the reconciler upload is its Dockerfile, its config and its one script', async () => {
@@ -598,6 +612,7 @@ void test('setup gives both devnet services their own tokens, config and address
     {
       SPONSOR_MEDIA_TOKEN: 'x',
       SPONSOR_SITE_ORIGIN: STAGING,
+      FAL_KEY: 'fal-keep-me',
       MEDIA_CONCURRENCY: '2',
       MEDIA_QUEUE: '6',
       PORT: '4017',
@@ -779,26 +794,29 @@ void test('deploy refuses a service that setup has not made, and creates nothing
   assert.equal(calls.filter((c) => c.upload).length, 0);
 });
 
-void test('health reads the media service report and says whether a cap can sell', async () => {
+void test('health reads the media service report and says whether a look can be tailored', async () => {
   const vars = `${BOX_VARS}SPONSOR_MEDIA_URL_DEVNET=https://media.example\n`;
-  const report = {
-    ready: true,
-    capQualified: true,
-    templateVersion: 'caps-v1',
-  };
+  const report = { ready: true, tailor: true, templateVersion: 'looks-v1' };
   await fresh({ vars, mediaHealth: { status: 200, body: report } });
   const ok = await quietly(() => media.health('devnet', { reconciler: false }));
   assert.equal(ok.result, true);
-  assert.match(ok.printed, /Ready to sell caps/);
+  assert.match(ok.printed, /Ready to tailor looks/);
   assert.equal(calls[0].media, 'https://media.example/health');
 
-  await fresh({
-    vars,
-    mediaHealth: { status: 200, body: { ...report, ready: false } },
-  });
-  const down = await quietly(() =>
-    media.health('devnet', { reconciler: false }),
-  );
+  await fresh({ vars, mediaHealth: { status: 200, body: { ...report, tailor: false } } });
+  const noKey = await quietly(() => media.health('devnet', { reconciler: false }));
+  assert.equal(noKey.result, true, 'the desk is up; only the cap is off sale');
+  assert.match(noKey.printed, /FAL_KEY is missing or fal did not answer/);
+
+  await fresh({ vars, mediaHealth: { status: 200, body: { ...report, ready: false } } });
+  const down = await quietly(() => media.health('devnet', { reconciler: false }));
   assert.equal(down.result, false);
   assert.match(down.printed, /Not ready/);
+});
+
+void test('setup refuses to make a desk without the tailor’s key, and creates nothing', async () => {
+  await fresh({ vars: BOX_VARS.replace('FAL_KEY=fal-keep-me\n', '') });
+  await assert.rejects(quietly(() => media.setup('devnet')), /FAL_KEY is missing/);
+  assert.equal(gqlCalls(/serviceCreate/).length, 0);
+  assert.equal(gqlCalls(/variableCollectionUpsert/).length, 0);
 });

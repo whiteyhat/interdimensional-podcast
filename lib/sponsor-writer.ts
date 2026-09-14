@@ -35,6 +35,8 @@ export type SponsorBrief = {
   tone: 'intro' | 'debate' | 'gentle-roast';
   wearingHost?: string;
   mention?: 'intro' | 'callback';
+  /** The look is the fallback cap print: the tee is plain, so the hosts must not name a printed tee. */
+  capOnly?: boolean;
 };
 
 type Spoken = Pick<Line, 'speaker' | 'text'>;
@@ -60,10 +62,23 @@ export function sponsorBrief(
       ? {
           ...(draft.target ? { wearingHost: cast[draft.target].name } : {}),
           mention: cue.stage,
+          ...(isCapOnly(order.assetMetadata) ? { capOnly: true } : {}),
         }
       : {}),
   };
 }
+/** The lease's look metadata says whether the desk fell back to the cap print. */
+function isCapOnly(metadata: SponsorLease['assetMetadata']) {
+  const look = metadata?.look;
+  return (
+    typeof look === 'object' &&
+    look !== null &&
+    typeof (look as { fallback?: unknown }).fallback === 'string'
+  );
+}
+/** What the wearer has on, in the hosts' words. */
+const garmentsOf = (brief: Pick<SponsorBrief, 'capOnly'>) =>
+  brief.capOnly ? 'cap' : 'tee and cap';
 
 // The character bible tells Pepe to relay the timeline and recall the year, and tells
 // GigaChad never to repeat anyone's claims. In a paid exchange both of those are wrong, so
@@ -162,9 +177,13 @@ function placementLine(brief: SponsorBrief) {
   if (brief.product !== 'cap')
     return `This is a paid spotlight for ${project}. ${stay}`;
   const wearer = brief.wearingHost ?? 'the host';
+  const garments = garmentsOf(brief);
+  const shows = brief.capOnly
+    ? 'shows the logo on his cap'
+    : 'shows the logo printed on his T-shirt and cap';
   return brief.mention === 'callback'
-    ? `This is the callback for ${project}'s cap on ${wearer}: a natural second mention of the same sponsor, still disclosed in turn 1. ${stay}`
-    : `This is the introduction of ${project}'s cap on ${wearer}; the first cut to ${wearer} shows the cap. ${stay}`;
+    ? `This is the callback for ${project}'s ${garments} on ${wearer}: a natural second mention of the same sponsor, still disclosed in turn 1. ${stay}`
+    : `This is the introduction of ${project}'s ${garments} on ${wearer}; the first cut to ${wearer} ${shows}. ${stay}`;
 }
 
 /** What each planned turn has to do, bound to the speaker the plan gives it. */
@@ -203,11 +222,12 @@ function obligations(
     const wearer = plan.findIndex(
       (turn) => cast[turn.speaker].name === brief.wearingHost,
     );
+    const garments = garmentsOf(brief);
     if (wearer >= 0 && wearer < duties.length)
-      duties[wearer].push(`Mention the ${project} cap you are wearing.`);
+      duties[wearer].push(`Mention the ${project} ${garments} you are wearing.`);
     else if (brief.wearingHost)
       duties[0].push(
-        `Mention the ${project} cap ${brief.wearingHost} is wearing.`,
+        `Mention the ${project} ${garments} ${brief.wearingHost} is wearing.`,
       );
   }
   return duties.map((list) => list.join(' '));
@@ -237,6 +257,7 @@ export function sponsoredWriterRequest(
     tone: brief.tone,
     ...(brief.wearingHost ? { wearingHost: brief.wearingHost } : {}),
     ...(brief.mention ? { mention: brief.mention } : {}),
+    ...(brief.capOnly ? { capOnly: true } : {}),
   };
   const duties = obligations(brief, plan, budget);
   const turns = plan.map((turn, i) => {
@@ -667,9 +688,9 @@ export function judgePrompt(
       (line, i) =>
         `${i + 1}. ${cast[line.speaker]?.name ?? line.speaker}: ${JSON.stringify(line.text)}`,
     ),
-    'TASK 1. List only statements that assert, as fact, something about the sponsor, its product, its team, or any real company, token, project or person, that the advertiser text does not support: launches, products, features, materials, games, partners, users, numbers, dates, history, posts, news or rumours. Never list what a host says about himself (what he does, owns, wears or feels, including the cap he is wearing and how it feels), a question, a joke, an opinion, a maxim or verdict (such as "Discipline follows" or "This is the way"), praise or judgement of the sponsor by a host, including what he says it understands, knows, gets, respects or believes (such as "Frog Labs understands conviction"), a general remark about the world or about the habits of the hosts, a hypothetical, a paraphrase of the advertiser text, or the paid disclosure and thanks, even when it mentions the sponsor. When unsure, do not list it. Quote the exact words from the turn.',
+    'TASK 1. List only statements that assert, as fact, something about the sponsor, its product, its team, or any real company, token, project or person, that the advertiser text does not support: launches, products, features, materials, games, partners, users, numbers, dates, history, posts, news or rumours. Never list what a host says about himself (what he does, owns, wears or feels, including the tee and cap he is wearing and how they feel), a question, a joke, an opinion, a maxim or verdict (such as "Discipline follows" or "This is the way"), praise or judgement of the sponsor by a host, including what he says it understands, knows, gets, respects or believes (such as "Frog Labs understands conviction"), a general remark about the world or about the habits of the hosts, a hypothetical, a paraphrase of the advertiser text, or the paid disclosure and thanks, even when it mentions the sponsor. When unsure, do not list it. Quote the exact words from the turn.',
     project
-      ? `TASK 2. List a turn only if it has left ${JSON.stringify(project)} entirely: it talks about something with no connection to ${JSON.stringify(project)}, its product, its pitch or the cap. A turn that riffs on the pitch, reacts to it, or jokes about a host's own life in its terms is on topic. When unsure, do not list it.`
+      ? `TASK 2. List a turn only if it has left ${JSON.stringify(project)} entirely: it talks about something with no connection to ${JSON.stringify(project)}, its product, its pitch or the tee and cap. A turn that riffs on the pitch, reacts to it, or jokes about a host's own life in its terms is on topic. When unsure, do not list it.`
       : 'TASK 2. This is a message placement: return an empty offTopicTurns list.',
     'Return one JSON object shaped {"unsupported":[{"turn":<turn number>,"quote":"<exact words from that turn>"}],"offTopicTurns":[<turn numbers>]}. When nothing qualifies, return {"unsupported":[],"offTopicTurns":[]}.',
   ].join('\n');

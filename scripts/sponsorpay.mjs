@@ -5,11 +5,14 @@
 //   SITE=... STUDIO_TOKEN=... RPC_URL=... node scripts/sponsorpay.mjs
 //   SITE=... STUDIO_TOKEN=...            node scripts/sponsorpay.mjs --hold
 //
-// PRODUCT picks the placement (message, the default; spotlight; cap). A spotlight takes
+// PRODUCT picks the placement (spotlight, the default; cap). A spotlight takes
 // PROJECT and STYLE (intro, debate or gentle-roast). A cap takes PROJECT, TARGET (host or
-// guest) and LOGO, a PNG, JPG or WebP path the site qualifies against the cap template
-// before anything is quoted; ASSET_ID reuses a design that is already qualified.
-// MESSAGE overrides the buyer's text for any of them.
+// guest) and LOGO, a PNG, JPG or WebP path the site has the desk normalise before anything is
+// quoted; the tee and cap are tailored after payment. ASSET_ID reuses a logo already uploaded.
+// MESSAGE overrides the buyer's text for any of them. RECEIPT_OUT writes the receipt link to
+// that file for a browser to open. REPLACE_LOGO, a second image path, is
+// "Use a different logo" after payment: the paid cap order is pointed at the new logo and the
+// script waits for the replacement look.
 //
 // --hold sends the studio heartbeat every twenty seconds and nothing else, so a person can
 // buy from a real browser wallet on the devnet site without running the whole show.
@@ -21,7 +24,7 @@ import {
   createSolanaRpcSubscriptions,
   sendAndConfirmTransactionFactory,
 } from '@solana/kit';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import {
   holdAir,
@@ -35,25 +38,22 @@ const SITE = process.env.SITE;
 const STUDIO_TOKEN = process.env.STUDIO_TOKEN;
 const RPC_URL = process.env.RPC_URL;
 const HOLD = process.argv.includes('--hold');
-const PRODUCT = process.env.PRODUCT || 'message';
-if (!['message', 'spotlight', 'cap'].includes(PRODUCT))
-  throw Error(`PRODUCT must be message, spotlight or cap, not ${PRODUCT}.`);
+const PRODUCT = process.env.PRODUCT || 'spotlight';
+if (!['spotlight', 'cap'].includes(PRODUCT))
+  throw Error(`PRODUCT must be spotlight or cap, not ${PRODUCT}.`);
 if (PRODUCT === 'cap' && !process.env.LOGO && !process.env.ASSET_ID && !HOLD)
-  throw Error(
-    'A cap needs LOGO (an image path) or ASSET_ID (a qualified design).',
-  );
+  throw Error('A cap needs LOGO (an image path) or ASSET_ID (a logo already uploaded).');
 // The stand-in studio offers what a real one would: a cap only when one is being bought, and
-// then with the template version the media service qualifies against. The site refuses to
-// quote a placement the producer has not said it can deliver, and checks the design against
-// that version.
+// then with the wardrobe version the desk tailors on. The site refuses to quote a placement
+// the producer has not said it can deliver, and checks the logo against that version.
 const capabilities = { message: true, spotlight: true, cap: PRODUCT === 'cap' };
 if (PRODUCT === 'cap') {
   const health = await fetch(`${SITE}/api/sponsorship/assets`)
     .then((r) => r.json())
     .catch(() => ({}));
-  if (!health.capQualified)
+  if (health.ready !== true || health.tailor !== true)
     throw Error(
-      `${SITE} cannot sell a cap right now: ${JSON.stringify(health)}`,
+      `${SITE} cannot tailor a look right now: ${JSON.stringify(health)}`,
     );
   capabilities.capTemplateVersion = health.templateVersion;
 }
@@ -106,11 +106,11 @@ if (HOLD) {
   await new Promise(() => {});
 }
 
-// ---- a cap's design is qualified against the template before it can be sold. Qualifying takes
-// up to forty seconds, so it starts now, before the stand-in studio claims its thirty-second
-// producer window, and is awaited only when the draft needs it.
+// ---- a cap's logo is normalised by the desk before it can be sold; the look comes after
+// payment. The upload takes a few seconds, so it starts now, before the stand-in studio claims
+// its thirty-second producer window, and is awaited only when the draft needs it.
 const TARGET = process.env.TARGET === 'guest' ? 'guest' : 'host';
-async function qualifyLogo(path) {
+async function uploadLogo(path) {
   const type = {
     '.png': 'image/png',
     '.jpg': 'image/jpeg',
@@ -129,17 +129,17 @@ async function qualifyLogo(path) {
   });
   const uploaded = await r.json().catch(() => ({}));
   check(
-    'the cap design is qualified',
-    r.ok && uploaded.status === 'qualified',
+    'the logo is accepted',
+    r.ok && ['logo', 'qualified'].includes(uploaded.status),
     r.ok
       ? `asset ${uploaded.id} (${uploaded.status}) in ${Date.now() - started} ms`
       : `${r.status} ${JSON.stringify(uploaded)}`,
   );
   return uploaded.id;
 }
-const qualified =
+const uploaded =
   PRODUCT === 'cap' && !process.env.ASSET_ID
-    ? qualifyLogo(process.env.LOGO)
+    ? uploadLogo(process.env.LOGO)
     : Promise.resolve(process.env.ASSET_ID);
 
 const rpc = createSolanaRpc(RPC_URL);
@@ -189,7 +189,6 @@ check(
 // ---- the happy path: draft, quote, sign, submit, confirm
 const PROJECT = process.env.PROJECT || 'Frog Labs';
 const pitch = {
-  message: 'Chad, does a devnet dollar still count as conviction?',
   spotlight: `${PROJECT} is a web3 marketplace for indie games.`,
   cap: `${PROJECT} makes caps for frogs who touch grass.`,
 };
@@ -199,9 +198,9 @@ const drafted = await api({
     product: PRODUCT,
     name: '',
     message: process.env.MESSAGE || pitch[PRODUCT],
-    ...(PRODUCT !== 'message' && { projectName: PROJECT }),
+    projectName: PROJECT,
     ...(PRODUCT === 'spotlight' && { style: process.env.STYLE || 'intro' }),
-    ...(PRODUCT === 'cap' && { target: TARGET, assetId: await qualified }),
+    ...(PRODUCT === 'cap' && { target: TARGET, assetId: await uploaded }),
   },
 });
 check(
@@ -212,6 +211,10 @@ check(
     : JSON.stringify(drafted.body),
 );
 const token = drafted.body.receipt?.token;
+// RECEIPT_OUT writes the receipt link to a file (never to the console), so a person can open
+// the real receipt in a browser after the script has paid.
+if (process.env.RECEIPT_OUT && token)
+  await writeFile(process.env.RECEIPT_OUT, `${SITE}/?receipt=${encodeURIComponent(token)}\n`);
 
 const quoted = token
   ? await api({ action: 'quote', token, asset: 'SOL', wallet: viewer.address })
@@ -267,6 +270,58 @@ check(
     ? `${paid.status}, paid by ${paid.payer}, signature ${paid.attempts.find((a) => a.verifiedSignature)?.verifiedSignature ?? '?'}`
     : 'timed out',
 );
+// ---- a cap's look is tailored after payment: usually one to two minutes, three fits at most
+// inside the desk's 210 s job, and a second round from the reconciler four minutes on.
+if (PRODUCT === 'cap' && paid) {
+  const started = Date.now();
+  const look = await until(
+    async () => {
+      const r = await api({ action: 'confirm', token });
+      const l = r.body.receipt?.look;
+      return l && l.status !== 'tailoring' ? l : null;
+    },
+    { tries: 90, everyMs: 5000 },
+  );
+  check(
+    'the tee and cap are tailored',
+    look?.status === 'ready',
+    look
+      ? `${look.status}${look.fallback ? ` (${look.fallback} fallback)` : ''} after ${Math.round((Date.now() - started) / 1000)} s — ${look.url ?? look.reason ?? ''}`
+      : 'no look after 7.5 minutes',
+  );
+  // ---- "Use a different logo": the paid order keeps its place, only its logo changes. The new
+  // logo goes through the same desk check, then tailoring starts again from that logo.
+  if (process.env.REPLACE_LOGO && look) {
+    const replacement = await uploadLogo(process.env.REPLACE_LOGO);
+    const swapped = await api({
+      action: 'replaceLogo',
+      orderId: drafted.body.receipt.id,
+      token,
+      assetId: replacement,
+    });
+    check(
+      'the paid order takes a different logo',
+      swapped.status === 200 && swapped.body.receipt?.draft?.assetId === replacement,
+      `${swapped.status} ${JSON.stringify(swapped.body.receipt?.look ?? swapped.body.error ?? swapped.body)}`,
+    );
+    const again = Date.now();
+    const relook = await until(
+      async () => {
+        const r = await api({ action: 'confirm', token });
+        const l = r.body.receipt?.look;
+        return l && l.status !== 'tailoring' ? l : null;
+      },
+      { tries: 90, everyMs: 5000 },
+    );
+    check(
+      'the replacement look is tailored',
+      relook?.status === 'ready' && !relook.fallback,
+      relook
+        ? `${relook.status}${relook.fallback ? ` (${relook.fallback} fallback)` : ''} after ${Math.round((Date.now() - again) / 1000)} s — ${relook.url ?? relook.reason ?? ''}`
+        : 'no look after 7.5 minutes',
+    );
+  }
+}
 
 // ---- what must keep failing
 const stranger = await api({

@@ -11,7 +11,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
@@ -19,14 +19,25 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import http from 'node:http';
 import {
+  BASE_STILLS,
   createMediaService,
+  deltaE76,
+  falClient,
+  garmentPlan,
   handleMediaRequest,
+  judgePasses,
+  judgePrompt,
   MAX_LOGO,
   MEDIA_DEFAULTS,
+  NEUTRALS,
   qualifiedTemplates,
   renderKey,
+  sendLook,
   SHUTDOWN_MS,
   startMediaServer,
+  tailorKey,
+  tailorPrompt,
+  WEARERS,
 } from '../broadcast/sponsor-media.mjs';
 // The desk only fetches takes from fal.media. These tests serve takes from loopback instead,
 // a door the service opens only under NODE_ENV=test.
@@ -116,7 +127,7 @@ void test('qualification requires matching trial proof and a working runtime, no
     const unavailable = missing.health();
     await missing.close();
     assert.equal(unavailable.ready, false);
-    assert.equal(unavailable.capQualified, false);
+    assert.equal(unavailable.tailor, false);
     assert.equal(unavailable.decoder, null);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -189,6 +200,118 @@ function take(bytes = Buffer.from(`take-${++takes}-${Date.now()}`)) {
   return `${FAL}${path}`;
 }
 
+// A stand-in for the site: it serves the normalized logo the desk fetches, and it receives the
+// look. `siteAnswers` are the statuses the next PUTs get, in order; then 200.
+const logos = new Map();
+const looks = [];
+let siteAnswers = [];
+const site = http.createServer((req, res) => {
+  const url = new URL(req.url, 'http://site');
+  const id = url.pathname.split('/').pop();
+  if (req.method === 'GET' && url.searchParams.get('part') === 'logo') {
+    const body = logos.get(url.pathname);
+    if (!body) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'image/png', 'content-length': body.length });
+    res.end(body);
+    return;
+  }
+  if (req.method === 'PUT' && url.searchParams.get('part') === 'look') {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      looks.push({ id, url: req.url, headers: req.headers, body: Buffer.concat(chunks) });
+      const status = siteAnswers.shift() ?? 200;
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ status: status === 200 ? 'qualified' : 'refused' }));
+    });
+    return;
+  }
+  res.writeHead(404);
+  res.end();
+});
+await new Promise((ready) => site.listen(0, '127.0.0.1', ready));
+const SITE = `http://127.0.0.1:${site.address().port}`;
+after(() => new Promise((done) => site.close(done)));
+
+// A stand-in for queue.fal.run: submit, status, response and cancel, for the edit and for the
+// vision judge. Each edit answers with a fresh picture on the fal.media stand-in above.
+const PASS_JUDGE = {
+  shirtLogo: true,
+  logoFidelity: 9,
+  legibility: 8,
+  capPresent: true,
+  capColourMatchesPlan: true,
+  capExtraText: false,
+  identityUnchanged: true,
+  sceneUnchanged: true,
+  extraText: false,
+};
+const falPlan = { hang: false, fail: false, foreign: false, head: 200, judgeAnswers: [] };
+const submissions = [];
+let statusPolls = 0,
+  cancels = 0;
+const falQueue = http.createServer((req, res) => {
+  const url = new URL(req.url, 'http://fal');
+  const json = (value, status = 200) => {
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(value));
+  };
+  if (req.method === 'HEAD') {
+    res.writeHead(falPlan.head);
+    res.end();
+    return;
+  }
+  if (req.method === 'POST') {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      const id = `req-${submissions.push({ endpoint: url.pathname.slice(1), input, authorization: req.headers.authorization, url: req.url })}`;
+      const origin = falPlan.foreign ? 'http://127.0.0.1:1' : FALQ;
+      json({
+        request_id: id,
+        status_url: `${origin}/requests/${id}/status`,
+        response_url: `${FALQ}/requests/${id}`,
+        cancel_url: `${FALQ}/requests/${id}/cancel`,
+      });
+    });
+    return;
+  }
+  const found = /^\/requests\/(req-\d+)(\/status|\/cancel)?$/.exec(url.pathname);
+  if (!found) {
+    res.writeHead(404);
+    res.end();
+    return;
+  }
+  const { endpoint, input } = submissions[Number(found[1].slice(4)) - 1];
+  if (found[2] === '/cancel') {
+    cancels++;
+    json({});
+    return;
+  }
+  if (found[2] === '/status') {
+    statusPolls++;
+    json({ status: falPlan.hang ? 'IN_QUEUE' : falPlan.fail ? 'FAILED' : 'COMPLETED' });
+    return;
+  }
+  if (endpoint === 'openrouter/router/vision') {
+    const answer = falPlan.judgeAnswers.shift() ?? PASS_JUDGE;
+    json({ output: `\`\`\`json\n${JSON.stringify(answer)}\n\`\`\``, usage: {} });
+    return;
+  }
+  const bytes = Buffer.concat([PNG_HEADER, Buffer.from(`fit:${input.seed}:${submissions.length}`)]);
+  const path = `/files/fit-${submissions.length}.png`;
+  files.set(path, bytes);
+  json({ images: [{ url: `${FAL}${path}`, width: 1376, height: 768, content_type: 'image/png' }], description: '' });
+});
+await new Promise((ready) => falQueue.listen(0, '127.0.0.1', ready));
+const FALQ = `http://127.0.0.1:${falQueue.address().port}`;
+after(() => new Promise((done) => falQueue.close(done)));
+
 // Stands in for scripts/wearable-render.py: waits, then writes an output and a report the way
 // the real one does for each of its three modes, or hangs holding a child of its own, or
 // crashes, or reports a code. The code (plan.codeFile) and the size of a normalized mark
@@ -250,6 +373,67 @@ const TOOLS = {
   ffmpeg: '7.1',
   ffprobe: '7.1',
 };
+const PNG_HEADER = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+// Stands in for both Python scripts when a desk is driven without OpenCV. scripts/wardrobe.py
+// answers on stdout; scripts/wearable-render.py through its report file. What the judge says
+// about each fit is read from plan.judgeFile at run time (comma-separated: pass | DRIFT | INK |
+// GEOMETRY, one per call, the last one repeating), a refusal for normalize from plan.codeFile.
+async function fakeWardrobe(name, plan = {}) {
+  const path = join(scratch, `${name}.cjs`);
+  const source = `#!/usr/bin/env node
+const fs = require('node:fs');
+const { createHash } = require('node:crypto');
+const plan = ${JSON.stringify(plan)};
+const argv = process.argv.slice(2);
+const mode = argv[1];
+const arg = (name) => argv[argv.indexOf(name) + 1];
+const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const told = (file) => (file && fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim() : '');
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const PALETTE = { clusters: [{ hex: '#1B2A6B', share: 0.8 }, { hex: '#F5F5F5', share: 0.2 }], primary: '#1B2A6B', secondary: '#F5F5F5', accent: '#1B2A6B', monochrome: false };
+const say = (value) => { process.stdout.write(JSON.stringify(value) + '\\n'); process.exit(0); };
+// The desk's boot probe (\`python -c PROBE\`) must see the tools it expects, or \`ready\` is false.
+if (argv[0] === '-c') say({ python: '3.12', cv2: '5.0.0', numpy: '2.5.3' });
+if (argv[0] === 'scripts/wardrobe.py') {
+  if (mode === 'zones') say({ ok: true, zones: {}, wearers: {}, pad: 24 });
+  if (mode === 'normalize') {
+    const code = told(plan.codeFile);
+    if (code) say({ ok: false, code, message: 'refused by the stand-in' });
+    const bytes = fs.readFileSync(arg('--input'));
+    fs.writeFileSync(arg('--output'), bytes);
+    say({ ok: true, sha256: sha(bytes), width: 512, height: 512, palette: PALETTE });
+  }
+  if (mode === 'judge') {
+    const verdicts = told(plan.judgeFile).split(',').filter(Boolean);
+    const n = Number(told(plan.countFile) || 0);
+    if (plan.countFile) fs.writeFileSync(plan.countFile, String(n + 1));
+    const verdict = verdicts[n] || verdicts[verdicts.length - 1] || 'pass';
+    if (verdict === 'GEOMETRY') say({ ok: false, code: 'GEOMETRY', message: 'The fit is 1024x576, not 1376x768.' });
+    const bytes = Buffer.concat([PNG, Buffer.from('look:'), fs.readFileSync(arg('--candidate'))]);
+    fs.writeFileSync(arg('--output'), bytes);
+    if (verdict !== 'pass') say({ ok: false, code: verdict, message: verdict, pixelAgreement: 0.5, meanDrift: 20, inkPresent: verdict !== 'INK', sha256: sha(bytes) });
+    say({ ok: true, pixelAgreement: 0.97, meanDrift: 2.1, inkPresent: true, sha256: sha(bytes), width: 1344, height: 768 });
+  }
+  process.exit(3);
+}
+if (argv[0] !== 'scripts/wearable-render.py') process.exit(3);
+const report = (value) => fs.writeFileSync(arg('--report'), JSON.stringify(value));
+function preview() {
+  if (plan.fallback === 'refuse') { report({ accepted: false, code: 'LOGO_TOO_THIN', error: 'This artwork is too thin to read on the cap.' }); process.exit(2); }
+  if (plan.fallback === 'crash') process.exit(1);
+  const bytes = Buffer.concat([PNG, Buffer.from('cap:'), fs.readFileSync(arg('--asset'))]);
+  fs.writeFileSync(arg('--output'), bytes);
+  report({ accepted: true, sha256: sha(bytes), templateId: 'pepe-cap-v1' });
+  process.exit(0);
+}
+if (mode === 'preview') setTimeout(preview, plan.previewDelayMs || 0);
+else process.exit(3);
+`;
+  await writeFile(path, source);
+  await chmod(path, 0o755);
+  return path;
+}
 
 async function desk(t, options = {}) {
   const workdir = await mkdtemp(join(scratch, 'desk-'));
@@ -379,8 +563,8 @@ void test('the desk listens on the port Railway injects and says it is not ready
   const state = await response.json();
   assert.equal(response.status, 503);
   assert.equal(state.ready, false);
-  assert.equal(state.capQualified, false);
-  assert.equal(state.templateVersion, 'caps-v1');
+  assert.equal(state.tailor, false);
+  assert.equal(state.templateVersion, 'looks-v1');
   assert.equal(state.tools.node, process.versions.node);
   assert.match(state.version, /^[a-f0-9]{12}$/);
   assert.ok(await waitFor('request'));
@@ -497,7 +681,7 @@ void test('a desk is not ready until it decodes the way caps were qualified, and
   // Railway's healthcheck reads this 503 and keeps the deployment it has.
   assert.equal(broken.status, 503);
   assert.equal(state.ready, false);
-  assert.equal(state.capQualified, false);
+  assert.equal(state.tailor, false);
   assert.equal(state.decoder, null);
   assert.equal(state.tools.cv2, TOOLS.cv2);
   const refused = await post(media, order(take()));
@@ -521,7 +705,7 @@ void test('a desk is not ready until it decodes the way caps were qualified, and
   );
   const healed = await (await fetch(`${media.url}/health`)).json();
   assert.equal(healed.ready, true);
-  assert.equal(healed.capQualified, true);
+  assert.equal(healed.templateVersion, 'looks-v1');
   assert.equal(healed.decoder, 'direct');
   // A measurement that passed is not taken again.
   await pause(300);
@@ -539,7 +723,8 @@ void test(
     const state = await response.json();
     assert.equal(response.status, 200);
     assert.equal(state.ready, true);
-    assert.equal(state.capQualified, true);
+    assert.equal(state.tailor, false, 'no FAL_KEY on this desk');
+    assert.equal('capQualified' in state, false);
     for (const tool of ['python', 'cv2', 'numpy', 'ffmpeg', 'node'])
       assert.match(state.tools[tool], /^\S+$/, `${tool} version missing`);
     // Either OpenCV decodes like the qualification run, or ffmpeg can be made to.
@@ -550,11 +735,121 @@ void test(
     const closedState = await refused.json();
     assert.equal(refused.status, 503);
     assert.equal(closedState.ready, false);
-    assert.equal(closedState.capQualified, false);
+    assert.equal(closedState.tailor, false);
     const short = await desk(t, { token: 'too-short' });
     assert.equal((await fetch(`${short.url}/health`)).status, 503);
   },
 );
+
+void test(
+  '/logo normalizes an upload and answers with the print, its hash, its size and its palette',
+  { skip: needsRuntime },
+  async (t) => {
+    const media = await desk(t);
+    const r = await post(media, LOGO, { path: '/logo?target=host', type: 'image/png' });
+    assert.equal(r.status, 200, r.bytes.toString().slice(0, 200));
+    const data = r.json();
+    const logo = Buffer.from(data.logo, 'base64');
+    assert.ok(logo.subarray(0, 8).equals(PNG_HEADER), 'the print is a PNG');
+    assert.equal(data.logoSha256, sha(logo));
+    assert.ok(data.width > 0 && data.width <= 1024 && data.height > 0 && data.height <= 1024);
+    assert.ok(Array.isArray(data.palette.clusters) && data.palette.clusters.length >= 1);
+    for (const c of data.palette.clusters) {
+      assert.match(c.hex, /^#[0-9A-F]{6}$/);
+      assert.ok(c.share >= 0 && c.share <= 1);
+    }
+    for (const name of ['primary', 'secondary', 'accent'])
+      assert.match(data.palette[name], /^#[0-9A-F]{6}$/);
+    assert.equal(typeof data.palette.monochrome, 'boolean');
+    assert.equal(data.target, 'host');
+    assert.ok(media.spawns.some((s) => s.mode === 'wardrobe-normalize'));
+    const bad = await post(media, 'bad PNG', { path: '/logo?target=host', type: 'image/png' });
+    assert.equal(bad.status, 422);
+    assert.equal(bad.json().code, 'INVALID_IMAGE');
+    const crowd = await post(media, LOGO, { path: '/logo?target=crowd', type: 'image/png' });
+    assert.equal(crowd.status, 400);
+    assert.equal(crowd.json().code, 'TARGET');
+    const anon = await post(media, LOGO, { path: '/logo?target=host', type: 'image/png', token: 'wrong' });
+    assert.equal(anon.status, 401);
+    const before = media.spawns.length;
+    const huge = await post(media, Buffer.concat([PNG_HEADER, Buffer.alloc(4 * 1024 * 1024)]), { path: '/logo?target=host', type: 'image/png' });
+    assert.equal(huge.status, 413);
+    assert.equal(huge.json().code, 'TOO_LARGE');
+    assert.equal(media.spawns.length, before, 'an oversized upload reached the decoder');
+  },
+);
+
+void test('/logo relays the script’s refusal as 422 and hides a machine fault as 503', async (t) => {
+  const codeFile = join(scratch, 'logo-code.txt');
+  const python = await fakeWardrobe('logo-codes', { codeFile });
+  const media = await desk(t, { python });
+  await writeFile(codeFile, 'LOGO_TOO_THIN');
+  const thin = await post(media, LOGO, { path: '/logo?target=guest', type: 'image/png' });
+  assert.equal(thin.status, 422);
+  assert.equal(thin.json().code, 'LOGO_TOO_THIN');
+  assert.match(thin.json().error, /stand-in/);
+  await writeFile(codeFile, 'SOMETHING_ELSE');
+  const odd = await post(media, LOGO, { path: '/logo?target=guest', type: 'image/png' });
+  assert.equal(odd.status, 503);
+  assert.equal(odd.json().code, 'RENDERER');
+  await writeFile(codeFile, '');
+  const ok = await post(media, LOGO, { path: '/logo?target=guest', type: 'image/png' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.json().logoSha256, sha(LOGO));
+  assert.equal(ok.json().palette.primary, '#1B2A6B');
+  assert.equal(ok.json().target, 'guest');
+});
+
+// The tailor tests below run the desk with a stand-in wardrobe script, but a desk is ready only
+// when the real vision runtime answered its boot probe, so on a stock CI runner they skip like
+// the render tests above; the media workflow, which installs cv2, runs them.
+void test('/health says whether this desk can tailor, and which look version it makes', { skip: needsRuntime }, async (t) => {
+  const python = await fakeWardrobe('health-tailor');
+  const bare = await desk(t, { python });
+  const state = await (await fetch(`${bare.url}/health`)).json();
+  assert.equal(state.templateVersion, 'looks-v1');
+  assert.equal(state.tailor, false, 'no FAL_KEY, no tailor');
+  assert.equal('capQualified' in state, false);
+  // The site compares this literal in leaseOrders and the asset gate: the two must never drift.
+  const sponsorship = await readFile('lib/sponsorship.ts', 'utf8');
+  assert.equal(
+    /export const LOOK_VERSION = '([\w-]+)' as const;/.exec(sponsorship)?.[1],
+    state.templateVersion,
+    'lib/sponsorship.ts LOOK_VERSION and the desk disagree',
+  );
+  const dressed = await desk(t, { python, siteOrigin: SITE, falKey: 'fal-test-key', falOriginForTests: FALQ });
+  const ready = await (await fetch(`${dressed.url}/health`)).json();
+  assert.equal(ready.ready, true);
+  assert.equal(ready.tailor, true);
+  const keyOnly = await desk(t, { python, falKey: 'fal-test-key', falOriginForTests: FALQ });
+  assert.equal(keyOnly.service.health().tailor, false, 'nowhere to call back, no tailor');
+  const unreachable = await desk(t, { python, siteOrigin: SITE, falKey: 'fal-test-key', falOriginForTests: 'http://127.0.0.1:1' });
+  assert.equal(unreachable.service.health().tailor, false, 'fal never answered');
+  assert.ok(unreachable.logs.some((l) => l.event === 'fal-probe' && l.level === 'warn'));
+  assert.ok(!JSON.stringify(unreachable.logs).includes('fal-test-key'), 'the key was logged');
+  // A wrong or revoked key is an answer from fal, and still no tailor: the cap stays off sale.
+  falPlan.head = 401;
+  try {
+    const refused = await desk(t, { python, siteOrigin: SITE, falKey: 'fal-test-key', falOriginForTests: FALQ });
+    assert.equal(refused.service.health().tailor, false, 'fal refused the key');
+    assert.ok(refused.logs.some((l) => l.event === 'fal-probe' && l.status === 401));
+    assert.ok(!JSON.stringify(refused.logs).includes('fal-test-key'), 'the key was logged');
+  } finally {
+    falPlan.head = 200;
+  }
+});
+
+void test('the base stills the tailor shows fal are the uncropped originals fal already holds', async () => {
+  const assets = JSON.parse(await readFile('character-assets.json', 'utf8'));
+  assert.equal(BASE_STILLS.host.url, assets.sources['pepe-cartoon']);
+  assert.equal(BASE_STILLS.guest.url, assets.sources['gigachad-cartoon']);
+  const frames = await readFile('lib/video-frames.ts', 'utf8');
+  for (const [target, still] of Object.entries(BASE_STILLS)) {
+    assert.equal(still.path, `public/${target === 'host' ? 'pepe' : 'gigachad'}-cartoon.png`);
+    const pinned = new RegExp(`${target}: \\{[\\s\\S]*?originalSha256:\\s*'([a-f0-9]{64})'`).exec(frames)?.[1];
+    assert.equal(sha(await readFile(still.path)), pinned, `${still.path} is not the still lib/video-frames.ts hashes`);
+  }
+});
 
 void test('scratch left behind by a desk that died mid-take is swept at boot', async () => {
   const workdir = await mkdtemp(join(scratch, 'sweep-'));
@@ -1043,7 +1338,7 @@ void test('a desk that cannot decode the way caps were qualified refuses to rend
   assert.equal(r.json().code, 'NOT_QUALIFIED');
   const state = await (await fetch(`${media.url}/health`)).json();
   assert.equal(state.decoder, null);
-  assert.equal(state.capQualified, false);
+  assert.equal(state.templateVersion, 'looks-v1');
   assert.equal(media.spawns.length, 0);
 });
 
@@ -1398,29 +1693,32 @@ void test(
   },
 );
 
-// These numbers live in three places: this desk, the site (lib/sponsor-media.ts) and Railway's
-// settings. Each promise below is one the docs make, and one broke when a side moved.
+// These numbers live in three places: this desk, the site (lib/sponsor-db.ts) and Railway's
+// settings. Each promise below is one the spec makes, and one broke when a side moved.
 void test('the desk’s clock agrees with the site’s retry and with Railway’s shutdown window', async () => {
-  const site = await readFile('lib/sponsor-media.ts', 'utf8');
-  const constant = (name) =>
-    Number(site.match(new RegExp(`const ${name} = (\\d+);`))?.[1]);
-  const budget = constant('RENDER_BUDGET_MS'),
-    floor = constant('RETRY_FLOOR_MS');
-  assert.ok(budget > 0 && floor > 0, 'the site’s budget and retry floor moved');
-  // Before its one retry the site waits what the desk asked, 1 s at least and 5 s at most, plus
-  // up to half a second of jitter, and it retries only while `floor` of its budget remains.
-  const shortestWait = 1_000,
-    longestWait = 5_500;
-  const { deadlineMs, minRunMs, drainMs } = MEDIA_DEFAULTS;
-  // Every answer, DEADLINE included, reaches the site before its own timeout does.
-  assert.ok(deadlineMs + 5_000 <= budget);
-  // A take turned away on arrival, because the queue is full or the desk is draining, is retried.
-  assert.ok(budget - longestWait >= floor);
-  // A take that waited in the queue until it could no longer finish hears BUSY with at most
-  // budget - (deadlineMs - minRunMs) of the site's clock left, under its floor even after the
-  // shortest wait. So the site does not retry it, as the docs and minRunMs's comment say. If this
-  // fails, the site now does: say so there.
-  assert.ok(budget - (deadlineMs - minRunMs) - shortestWait < floor);
+  const site = await readFile('lib/sponsor-db.ts', 'utf8');
+  const retry = Number(
+    site.match(/export const TAILOR_RETRY_MS = (\d+);/)?.[1],
+  );
+  assert.ok(retry > 0, 'the site’s tailor retry moved');
+  const {
+    tailorDeadlineMs,
+    tailorFitMs,
+    tailorSubmitMs,
+    judgeMs,
+    tailorTailMs,
+    callbackMs,
+    deadlineMs,
+    drainMs,
+  } = MEDIA_DEFAULTS;
+  // Three fits and the tail (the logo, the fallback print, the callback) make the deadline,
+  // so a job settles inside it by construction.
+  assert.equal(3 * tailorFitMs + tailorTailMs, tailorDeadlineMs);
+  // One fit is one edit and one verdict, each on its own clock, inside the fit's slot.
+  assert.ok(tailorSubmitMs + judgeMs <= tailorFitMs);
+  // The site asks for the next round only after the desk has settled and had a whole callback
+  // attempt to say so, so the reconciler never relies on in-flight dedupe.
+  assert.ok(tailorDeadlineMs + callbackMs <= retry);
   // A drain lasts until the last running take meets its deadline. The process then stops itself
   // well inside the window Railway gives a replaced deployment.
   const railway = JSON.parse(
@@ -1429,4 +1727,631 @@ void test('the desk’s clock agrees with the site’s retry and with Railway’
   assert.ok(drainMs >= deadlineMs);
   assert.ok(SHUTDOWN_MS > drainMs);
   assert.ok(SHUTDOWN_MS <= railway.deploy.drainingSeconds * 1000 - 10_000);
+  // A tailor cannot finish inside that window: a deploy aborts it at the drain and tells the
+  // site `shutdown`, which asks again after `retry`; nothing waits on a dead process.
+  assert.ok(drainMs < tailorDeadlineMs);
+  assert.ok(railway.deploy.drainingSeconds * 1000 < tailorDeadlineMs);
+});
+
+const PALETTES = {
+  black: { clusters: [{ hex: '#111111', share: 1 }], primary: '#111111', secondary: '#111111', accent: '#111111', monochrome: true },
+  white: { clusters: [{ hex: '#FFFFFF', share: 1 }], primary: '#FFFFFF', secondary: '#FFFFFF', accent: '#FFFFFF', monochrome: true },
+  colourful: { clusters: [{ hex: '#E03030', share: 0.55 }, { hex: '#2050C0', share: 0.35 }, { hex: '#FFD700', share: 0.1 }], primary: '#E03030', secondary: '#2050C0', accent: '#FFD700', monochrome: false },
+  pepeGreen: { clusters: [{ hex: '#537631', share: 1 }], primary: '#537631', secondary: '#537631', accent: '#537631', monochrome: false },
+  chadSkin: { clusters: [{ hex: '#C18C5F', share: 0.7 }, { hex: '#141510', share: 0.3 }], primary: '#C18C5F', secondary: '#141510', accent: '#C18C5F', monochrome: false },
+  navyWhite: { clusters: [{ hex: '#1B2A6B', share: 0.8 }, { hex: '#F5F5F5', share: 0.2 }], primary: '#1B2A6B', secondary: '#F5F5F5', accent: '#1B2A6B', monochrome: false },
+  everyNeutral: { clusters: [{ hex: '#F2EFE8', share: 0.3 }, { hex: '#23262B', share: 0.3 }, { hex: '#8B8F96', share: 0.2 }, { hex: '#595959', share: 0.2 }], primary: '#F2EFE8', secondary: '#23262B', accent: '#8B8F96', monochrome: true },
+};
+
+void test('the garment plan keeps the print readable and the cap visible on the wearer, and never refuses', () => {
+  const table = [
+    // name, target, tee, cap, brim, why
+    ['black', 'host', '#595959', '#F2EFE8', '#23262B', 'dark grey tee under black ink; an off-white cap with a dark brim'],
+    ['white', 'host', '#23262B', '#8B8F96', '#8B8F96', 'charcoal tee under white ink; the off-white cap would hide the tee’s contrast, heather wins'],
+    ['colourful', 'guest', '#4E5492', '#F2EFE8', '#23262B', 'a muted secondary tee; the off-white cap clears every ink'],
+    ['pepeGreen', 'host', '#F2EFE8', '#8B8F96', '#8B8F96', 'wearer camouflage: his own green fails, charcoal hides in his headphones, heather stands out'],
+    ['chadSkin', 'guest', '#595A57', '#F2EFE8', '#23262B', 'skin-toned ink: a muted dark tee, an off-white cap clear of his skin and hair'],
+    ['navyWhite', 'host', '#57567D', '#8B8F96', '#8B8F96', 'the test palette every /tailor test sends'],
+  ];
+  for (const [name, target, tee, cap, brim, why] of table) {
+    const plan = garmentPlan(PALETTES[name], target);
+    assert.equal(plan.shirt.hex, tee, `${name}/${target} tee: ${why}`);
+    assert.equal(plan.cap.hex, cap, `${name}/${target} cap: ${why}`);
+    assert.equal(plan.cap.brim, brim, `${name}/${target} brim`);
+    assert.equal(plan.shirt.forced, false);
+    assert.equal(plan.cap.forced, false);
+    assert.ok(plan.shirt.inkDeltaE >= 25, `${name} tee clears the ink`);
+    assert.ok(plan.cap.inkDeltaE >= 25 && plan.cap.wearerDeltaE >= 20 && plan.cap.shirtDeltaE >= 15, `${name} cap clears ink, wearer and tee`);
+    for (const wearer of Object.values(WEARERS[target]))
+      assert.ok(deltaE76(plan.cap.hex, wearer) >= 20, `${name} cap vanishes into the ${target}`);
+  }
+  // Every candidate is in the ink: the plan still answers, marked forced, with the widest margin left.
+  const forced = garmentPlan(PALETTES.everyNeutral, 'host');
+  assert.equal(forced.shirt.forced, true);
+  assert.equal(forced.cap.forced, true);
+  assert.equal(forced.shirt.hex, '#C2C1BD');
+  assert.equal(forced.cap.hex, '#F2EFE8');
+  assert.deepEqual(NEUTRALS, { offWhite: '#F2EFE8', charcoal: '#23262B', heather: '#8B8F96' });
+  assert.equal(Math.round(deltaE76('#FFFFFF', '#000000')), 100);
+  assert.equal(deltaE76('#537631', '#537631'), 0);
+});
+
+void test('the tailor’s prompt is a fixed template with only the garment colours filled in', () => {
+  const plan = garmentPlan(PALETTES.black, 'host');
+  assert.equal(
+    tailorPrompt(plan),
+    'Edit this 2D animated podcast frame. The scene, camera angle, framing, lighting, colours, line weight, pose, expression, hands, headphones, microphone, desk and background stay exactly as in the first image. ' +
+      "Replace the character's T-shirt with a plain #595959 crew-neck T-shirt and print the second image large and centred on its chest, reproduced exactly: the same shapes, the same colours and the same proportions, nothing added and nothing left out, sitting on the fabric like a real screen print. " +
+      "Add a #F2EFE8 baseball cap with a #23262B brim on the character's head, worn under the headphones so the headphone band still crosses over it, with a small simplified version of the same mark centred on the cap's front panel. " +
+      'No other lettering, logos, patches or accessories anywhere in the picture. Nothing else changes.',
+  );
+  const plain = tailorPrompt(garmentPlan(PALETTES.white, 'guest'));
+  assert.match(plain, /Add a #8B8F96 baseball cap on the character's head/);
+  assert.doesNotMatch(plain, /brim/);
+});
+
+void test(
+  'the desk and scripts/wardrobe.py agree on the wearer colours',
+  { skip: needsRuntime },
+  async () => {
+    const { stdout } = await run(config.python, ['scripts/wardrobe.py', 'zones']);
+    const zones = JSON.parse(stdout.trim().split('\n').pop());
+    assert.deepEqual(zones.wearers, WEARERS);
+    assert.deepEqual(Object.keys(zones.zones), ['host', 'guest']);
+  },
+);
+
+void test('the fal client makes three hops, stops polling the moment it is abandoned, and cancels the job', async () => {
+  const client = falClient({ origin: FALQ, key: 'fal-test-key', pollMs: 50 });
+  const before = submissions.length;
+  const done = await client.run(
+    'fal-ai/nano-banana-pro/edit',
+    { prompt: 'x', seed: 1, image_urls: [] },
+    { signal: new AbortController().signal, budgetMs: 5_000 },
+  );
+  assert.equal(done.output.images[0].width, 1376);
+  assert.match(done.requestId, /^req-\d+$/);
+  assert.equal(submissions.length, before + 1);
+  assert.equal(submissions.at(-1).authorization, 'Key fal-test-key');
+  assert.equal(submissions.at(-1).url.includes('fal-test-key'), false, 'the key was in a URL');
+
+  // Abandoned mid-poll: no more polls, the job is cancelled.
+  falPlan.hang = true;
+  const controller = new AbortController();
+  const polled = statusPolls,
+    cancelled = cancels;
+  const running = client.run(
+    'fal-ai/nano-banana-pro/edit',
+    { prompt: 'x', seed: 2, image_urls: [] },
+    { signal: controller.signal, budgetMs: 5_000 },
+  );
+  assert.ok(await until(() => statusPolls >= polled + 2));
+  controller.abort('deadline');
+  await assert.rejects(running, (e) => e.code === 'FAL');
+  const seen = statusPolls;
+  await pause(200);
+  assert.equal(statusPolls, seen, 'kept polling after it was abandoned');
+  assert.ok(await until(() => cancels === cancelled + 1), 'the job was not cancelled');
+
+  // Out of budget: the same, in its own words.
+  await assert.rejects(
+    client.run('fal-ai/nano-banana-pro/edit', { prompt: 'x', seed: 3, image_urls: [] }, { signal: new AbortController().signal, budgetMs: 300 }),
+    (e) => e.code === 'FAL_TIMEOUT' || e.code === 'FAL',
+  );
+  falPlan.hang = false;
+
+  // fal's own answers are checked: a status URL off fal's origin is never followed.
+  falPlan.foreign = true;
+  await assert.rejects(
+    client.run('fal-ai/nano-banana-pro/edit', { prompt: 'x', seed: 4, image_urls: [] }, { signal: new AbortController().signal, budgetMs: 5_000 }),
+    /foreign/,
+  );
+  falPlan.foreign = false;
+  falPlan.fail = true;
+  await assert.rejects(
+    client.run('fal-ai/nano-banana-pro/edit', { prompt: 'x', seed: 5, image_urls: [] }, { signal: new AbortController().signal, budgetMs: 5_000 }),
+    /failed/,
+  );
+  falPlan.fail = false;
+});
+
+void test('a look callback is retried through outages, accepted once, and never retried after the site’s verdict', async () => {
+  const id = sha('callback-asset');
+  const url = `${SITE}/api/sponsorship/assets/${id}?part=look`;
+  const body = Buffer.concat([PNG_HEADER, Buffer.from('look-bytes')]);
+  const headers = {
+    authorization: `Bearer ${TOKEN}`,
+    'content-type': 'image/png',
+    'x-look-round': '1',
+    'x-look-outcome': 'look',
+    'x-look-sha256': sha(body),
+  };
+  const before = looks.length;
+  siteAnswers = [503, 503];
+  assert.equal(await sendLook(url, { headers, body }, { retryMs: 20, timeoutMs: 2_000 }), 200);
+  const mine = looks.slice(before).filter((l) => l.id === id);
+  assert.equal(mine.length, 3, 'two outages, then the answer');
+  assert.ok(mine[2].body.equals(body));
+  assert.equal(mine[2].headers['x-look-sha256'], sha(body));
+  assert.equal(mine[2].headers.authorization, `Bearer ${TOKEN}`);
+  assert.equal(mine[2].url, `/api/sponsorship/assets/${id}?part=look`);
+  siteAnswers = [401];
+  assert.equal(await sendLook(url, { headers, body }, { retryMs: 20, timeoutMs: 2_000 }), 401);
+  assert.equal(looks.slice(before).filter((l) => l.id === id).length, 4, 'a 4xx was retried');
+  siteAnswers = [];
+  const started = Date.now();
+  assert.equal(await sendLook('http://127.0.0.1:1/api/sponsorship/assets/x?part=look', { headers, body }, { retryMs: 20, timeoutMs: 500 }), 0);
+  assert.ok(Date.now() - started < 3_000, 'a dead site held the desk');
+});
+
+// The palette every /tailor test sends (its plan: a #57567D tee and a #8B8F96 cap, see desk-6).
+const PALETTE = {
+  clusters: [{ hex: '#1B2A6B', share: 0.8 }, { hex: '#F5F5F5', share: 0.2 }],
+  primary: '#1B2A6B',
+  secondary: '#F5F5F5',
+  accent: '#1B2A6B',
+  monochrome: false,
+};
+/** A desk with a tailor: a stand-in interpreter steered by `plan`, the site and fal stand-ins. */
+async function tailorDesk(t, plan = {}, options = {}) {
+  const countFile = join(scratch, `judge-count-${randomBytes(4).toString('hex')}.txt`);
+  const judgeFile = join(scratch, `judge-${randomBytes(4).toString('hex')}.txt`);
+  await writeFile(judgeFile, plan.judge ?? 'pass');
+  const python = await fakeWardrobe(`tailor-${randomBytes(4).toString('hex')}`, { ...plan, judgeFile, countFile });
+  const media = await desk(t, {
+    python,
+    siteOrigin: SITE,
+    falKey: 'fal-test-key',
+    falOriginForTests: FALQ,
+    falPollMs: 20,
+    callbackRetryMs: 20,
+    ...options,
+  });
+  return { ...media, python, judgeFile, countFile };
+}
+let orders = 0;
+/** A tailor request for a fresh logo, served by the site stand-in. */
+function tailorOrder(extra = {}) {
+  const logo = Buffer.concat([LOGO, Buffer.from(`order-${++orders}`)]);
+  const logoSha256 = sha(logo);
+  const assetId = sha(`asset-${logoSha256}`);
+  logos.set(`/api/sponsorship/assets/${assetId}`, logo);
+  return {
+    assetId,
+    round: 1,
+    target: 'host',
+    logoUrl: `${SITE}/api/sponsorship/assets/${assetId}?part=logo`,
+    logoSha256,
+    palette: PALETTE,
+    projectName: 'Canvas',
+    ...extra,
+  };
+}
+const landed = (assetId, count = 1) =>
+  until(() => looks.filter((l) => l.id === assetId).length >= count, 15_000);
+const verdictOf = (look) => JSON.parse(Buffer.from(look.headers['x-look-verdict'], 'base64').toString('utf8'));
+
+void test('/tailor refuses what it cannot tailor before queueing anything', async (t) => {
+  const media = await tailorDesk(t);
+  const before = submissions.length;
+  const cases = [
+    [{ assetId: 'nope' }, 400, 'ASSET_ID'],
+    [{ round: 4 }, 400, 'ROUND'],
+    [{ round: '1' }, 400, 'ROUND'],
+    [{ target: 'crowd' }, 400, 'TARGET'],
+    [{ logoSha256: 'abc' }, 400, 'LOGO_HASH'],
+    [{ logoUrl: 'https://attacker.example/api/sponsorship/assets/x?part=logo' }, 400, 'HOST'],
+    [{ logoUrl: `${SITE}/somewhere/else` }, 400, 'HOST'],
+    [{ palette: { clusters: 'no' } }, 400, 'PALETTE'],
+    [{ palette: { ...PALETTE, primary: 'blue' } }, 400, 'PALETTE'],
+  ];
+  for (const [patch, status, code] of cases) {
+    const r = await post(media, tailorOrder(patch), { path: '/tailor' });
+    assert.equal(r.status, status, `${JSON.stringify(code)}: ${r.bytes.toString()}`);
+    assert.equal(r.json().code, code);
+  }
+  assert.equal((await post(media, 'not json', { path: '/tailor' })).status, 400);
+  assert.equal((await post(media, tailorOrder(), { path: '/tailor', token: 'wrong' })).status, 401);
+  assert.equal(submissions.length, before, 'a refused request reached fal');
+  assert.equal(media.spawns.length, 0);
+  const noSite = await tailorDesk(t, {}, { siteOrigin: undefined });
+  const unavailable = await post(noSite, tailorOrder(), { path: '/tailor' });
+  assert.equal(unavailable.status, 503);
+  assert.equal(unavailable.json().code, 'TAILOR_UNAVAILABLE');
+  const noKey = await tailorDesk(t, {}, { falKey: undefined });
+  assert.equal((await post(noKey, tailorOrder(), { path: '/tailor' })).json().code, 'TAILOR_UNAVAILABLE');
+});
+
+void test('a tailor job fits, judges by pixels and by eye, and puts the look on the site with its verdict', async (t) => {
+  const media = await tailorDesk(t);
+  const order = tailorOrder();
+  const before = submissions.length;
+  const r = await post(media, order, { path: '/tailor' });
+  assert.equal(r.status, 202, r.bytes.toString());
+  const key = tailorKey(order.logoSha256, 'host', 1);
+  assert.deepEqual(r.json(), { key, queued: true });
+  assert.equal(key, sha(`${order.logoSha256}|host|looks-v1|1`));
+  assert.ok(await landed(order.assetId), 'no look reached the site');
+  const look = looks.find((l) => l.id === order.assetId);
+  assert.equal(look.url, `/api/sponsorship/assets/${order.assetId}?part=look`);
+  assert.equal(look.headers.authorization, `Bearer ${TOKEN}`);
+  assert.equal(look.headers['x-look-outcome'], 'look');
+  assert.equal(look.headers['x-look-round'], '1');
+  assert.equal(look.headers['content-type'], 'image/png');
+  assert.equal(look.headers['x-look-sha256'], sha(look.body));
+  assert.ok(look.body.subarray(0, 8).equals(PNG_HEADER));
+  const verdict = verdictOf(look);
+  assert.equal(verdict.model, 'fal-ai/nano-banana-pro/edit');
+  assert.equal(verdict.fit, 1);
+  assert.equal(verdict.round, 1);
+  assert.equal(verdict.plan.shirt.hex, '#57567D');
+  assert.equal(verdict.plan.cap.hex, '#8B8F96');
+  assert.deepEqual(verdict.palette, PALETTE);
+  assert.equal(verdict.judge.shirtLogo, true);
+  assert.equal(verdict.pixels.pixelAgreement, 0.97);
+  assert.ok(verdict.candidateUrl.startsWith(`${FAL}/files/`));
+  assert.equal(verdict.fallback, undefined);
+  assert.equal(typeof verdict.seed, 'number');
+  // The two fal calls: the edit with the still and the logo, the judge with all three pictures.
+  const mine = submissions.slice(before);
+  const edit = mine.find((s) => s.endpoint === 'fal-ai/nano-banana-pro/edit');
+  assert.deepEqual(edit.input.image_urls, [BASE_STILLS.host.url, order.logoUrl]);
+  assert.equal(edit.input.aspect_ratio, '16:9');
+  assert.equal(edit.input.resolution, '1K');
+  assert.equal(edit.input.output_format, 'png');
+  assert.equal(edit.input.seed, verdict.seed);
+  assert.match(edit.input.prompt, /#57567D crew-neck T-shirt/);
+  assert.match(edit.input.prompt, /#8B8F96 baseball cap/);
+  assert.equal(edit.authorization, 'Key fal-test-key');
+  const judge = mine.find((s) => s.endpoint === 'openrouter/router/vision');
+  assert.equal(judge.input.model, 'google/gemini-2.5-flash');
+  assert.equal(judge.input.temperature, 0);
+  assert.deepEqual(judge.input.image_urls, [BASE_STILLS.host.url, order.logoUrl, verdict.candidateUrl]);
+  assert.match(judge.input.prompt, /97\.0% of pixels unchanged/);
+  assert.match(judge.input.prompt, /"logoFidelity"/);
+  assert.ok(media.spawns.some((s) => s.mode === 'wardrobe-judge'));
+  const line = await until(() => media.logs.find((l) => l.event === 'tailor' && l.outcome === 'look'));
+  assert.ok(line, 'no tailor line was logged');
+  assert.equal(media.logs.find((l) => l.event === 'tailor').callback, 200);
+  assert.ok(!JSON.stringify(media.logs).includes('fal-test-key'));
+  assert.equal(media.service.status().tailoring, 0);
+});
+
+void test('the same key in flight is joined, and a settled key is re-told from the cache without a new fit', async (t) => {
+  const media = await tailorDesk(t);
+  const order = tailorOrder();
+  const before = submissions.length;
+  const [a, b] = await Promise.all([
+    post(media, order, { path: '/tailor' }),
+    post(media, order, { path: '/tailor' }),
+  ]);
+  assert.equal(a.status, 202);
+  assert.equal(b.status, 202);
+  assert.equal(a.json().key, b.json().key);
+  assert.ok(await landed(order.assetId));
+  await pause(300);
+  assert.equal(looks.filter((l) => l.id === order.assetId).length, 1, 'one job, one callback');
+  assert.equal(submissions.slice(before).filter((s) => s.endpoint === 'fal-ai/nano-banana-pro/edit').length, 1);
+  const again = await post(media, order, { path: '/tailor' });
+  assert.equal(again.status, 200);
+  assert.deepEqual(again.json(), { key: a.json().key, cached: true });
+  assert.ok(await landed(order.assetId, 2), 'the cached look was not re-sent');
+  const [first, second] = looks.filter((l) => l.id === order.assetId);
+  assert.equal(second.headers['x-look-sha256'], first.headers['x-look-sha256']);
+  assert.equal(submissions.slice(before).filter((s) => s.endpoint === 'fal-ai/nano-banana-pro/edit').length, 1, 'a cached key bought a fit');
+  // A second round is a different key with different seeds.
+  const round2 = await post(media, { ...order, round: 2 }, { path: '/tailor' });
+  assert.equal(round2.status, 202);
+  assert.notEqual(round2.json().key, a.json().key);
+  assert.ok(await landed(order.assetId, 3));
+  assert.notEqual(verdictOf(looks.filter((l) => l.id === order.assetId)[2]).seed, verdictOf(first).seed);
+});
+
+void test('a fit the pixels refuse, or the eye refuses, is followed by another seed inside the same job', async (t) => {
+  const media = await tailorDesk(t, { judge: 'DRIFT,pass' });
+  const order = tailorOrder();
+  const before = submissions.length;
+  assert.equal((await post(media, order, { path: '/tailor' })).status, 202);
+  assert.ok(await landed(order.assetId));
+  const verdict = verdictOf(looks.find((l) => l.id === order.assetId));
+  assert.equal(verdict.fit, 2);
+  assert.equal(verdict.fits.length, 2);
+  assert.equal(verdict.fits[0].reason, 'DRIFT');
+  assert.equal(verdict.fits[1].pass, true);
+  const edits = submissions.slice(before).filter((s) => s.endpoint === 'fal-ai/nano-banana-pro/edit');
+  assert.equal(edits.length, 2);
+  assert.notEqual(edits[0].input.seed, edits[1].input.seed);
+  assert.equal(submissions.slice(before).filter((s) => s.endpoint === 'openrouter/router/vision').length, 1, 'the eye was asked about a fit the pixels had refused');
+
+  // The eye: the cap's letters fail a fit; a garbled cap mark alone does not.
+  falPlan.judgeAnswers = [{ ...PASS_JUDGE, capExtraText: true }, { ...PASS_JUDGE, capColourMatchesPlan: false }];
+  const byEye = await tailorDesk(t);
+  const second = tailorOrder();
+  assert.equal((await post(byEye, second, { path: '/tailor' })).status, 202);
+  assert.ok(await landed(second.assetId));
+  const eyed = verdictOf(looks.find((l) => l.id === second.assetId));
+  assert.equal(eyed.fit, 2);
+  assert.equal(eyed.fits[0].reason, 'JUDGE');
+  assert.equal(eyed.fits[0].judge.capExtraText, true);
+  assert.equal(eyed.judge.capColourMatchesPlan, false);
+  falPlan.judgeAnswers = [];
+});
+
+void test('the vision judge’s thresholds: chest print and scene decide, the cap mark never refuses', () => {
+  assert.equal(judgePasses(PASS_JUDGE), true);
+  assert.equal(judgePasses({ ...PASS_JUDGE, capColourMatchesPlan: false, logoFidelity: 7, legibility: 7 }), true, 'a garbled cap mark passes');
+  assert.equal(judgePasses({ ...PASS_JUDGE, capExtraText: true }), false, 'letters on the cap fail');
+  assert.equal(judgePasses({ ...PASS_JUDGE, sceneUnchanged: false }), false, 'a changed scene fails');
+  assert.equal(judgePasses({ ...PASS_JUDGE, identityUnchanged: false }), false);
+  assert.equal(judgePasses({ ...PASS_JUDGE, logoFidelity: 6 }), false);
+  assert.equal(judgePasses({ ...PASS_JUDGE, legibility: 6 }), false);
+  assert.equal(judgePasses({ ...PASS_JUDGE, capPresent: false }), false);
+  assert.equal(judgePasses({ ...PASS_JUDGE, shirtLogo: false }), false);
+  assert.equal(judgePasses({ ...PASS_JUDGE, extraText: true }), false);
+  assert.equal(judgePasses(null), false);
+  const prompt = judgePrompt({ plan: garmentPlan(PALETTE, 'host'), pixels: { pixelAgreement: 0.923, meanDrift: 4.25 } });
+  assert.match(prompt, /92\.3% of pixels unchanged \(mean drift 4\.3\/255\)/);
+  assert.match(prompt, /#57567D T-shirt/);
+  assert.match(prompt, /#8B8F96 baseball cap/);
+});
+
+void test('the tailor has its own lane: BUSY when it is full, /render untouched, and a clock that adds up', { skip: needsRuntime }, async (t) => {
+  falPlan.hang = true;
+  const media = await tailorDesk(t, {}, { tailorConcurrency: 1, tailorQueue: 0, tailorDeadlineMs: 1_500, tailorFitMs: 400, tailorTailMs: 100, tailorSubmitMs: 300, judgeMs: 50 });
+  const first = tailorOrder();
+  assert.equal((await post(media, first, { path: '/tailor' })).status, 202);
+  const second = await post(media, tailorOrder(), { path: '/tailor' });
+  assert.equal(second.status, 409, second.bytes.toString());
+  assert.equal(second.json().code, 'BUSY');
+  assert.ok(second.json().retryAfterMs >= 1000);
+  assert.ok(Number(second.headers.get('retry-after')) >= 1);
+  const state = media.service.status();
+  assert.equal(state.tailoring, 1);
+  assert.equal(state.running, 0, 'the render lane was touched');
+  assert.equal((await fetch(`${media.url}/health`)).status, 200, 'a busy tailor is not an unready desk');
+  assert.ok(await landed(first.assetId), 'the hung job never settled');
+  falPlan.hang = false;
+  assert.equal((await post(media, tailorOrder(), { path: '/tailor' })).status, 202, 'the lane never freed');
+
+  const { tailorDeadlineMs, tailorFitMs, tailorSubmitMs, judgeMs, tailorTailMs, logoFetchMs, drainMs } = MEDIA_DEFAULTS;
+  assert.equal(3 * tailorFitMs + tailorTailMs, tailorDeadlineMs, 'three fits and the tail make the deadline');
+  assert.ok(tailorSubmitMs + judgeMs <= tailorFitMs, 'a fit holds its two hops');
+  assert.ok(logoFetchMs <= tailorTailMs);
+  assert.ok(tailorDeadlineMs < 4 * 60_000, 'the site’s four-minute probe must outlast a job');
+  assert.ok(drainMs < tailorDeadlineMs, 'a deploy cuts a running tailor; the shutdown callback is the recovery signal');
+  assert.ok(SHUTDOWN_MS >= drainMs + 3_000, 'the callback wait at close fits before the hard stop');
+});
+
+void test('three failed fits fall back to the cap print, so the paid order still airs dressed', { skip: needsRuntime }, async (t) => {
+  const media = await tailorDesk(t, { judge: 'DRIFT,INK,GEOMETRY' });
+  const order = tailorOrder();
+  const before = submissions.length;
+  assert.equal((await post(media, order, { path: '/tailor' })).status, 202);
+  assert.ok(await landed(order.assetId));
+  const look = looks.find((l) => l.id === order.assetId);
+  assert.equal(look.headers['x-look-outcome'], 'look');
+  assert.equal(look.headers['x-look-sha256'], sha(look.body));
+  assert.equal(look.body.subarray(8, 12).toString(), 'cap:', 'the fallback is the cap print');
+  const verdict = verdictOf(look);
+  assert.equal(verdict.fallback, 'cap-v1');
+  assert.equal(verdict.model, 'cap-v1');
+  assert.equal(verdict.fit, 0);
+  assert.equal(verdict.judge, null);
+  assert.deepEqual(verdict.fits.map((f) => f.reason), ['DRIFT', 'INK', 'GEOMETRY']);
+  assert.equal(submissions.slice(before).filter((s) => s.endpoint === 'fal-ai/nano-banana-pro/edit').length, 3);
+  assert.equal(submissions.slice(before).filter((s) => s.endpoint === 'openrouter/router/vision').length, 0, 'the eye was asked about a fit the pixels refused');
+  const preview = media.spawns.find((s) => s.mode === 'preview');
+  assert.ok(preview, 'the cap renderer was never called');
+  const line = media.logs.find((l) => l.event === 'tailor' && l.outcome === 'look');
+  assert.equal(line.fallback, 'cap-v1');
+  assert.equal(line.fits, 3);
+});
+
+void test('a logo the fallback cannot print is refused; a broken renderer is an error the site asks about again', { skip: needsRuntime }, async (t) => {
+  const refusing = await tailorDesk(t, { judge: 'DRIFT', fallback: 'refuse' });
+  const order = tailorOrder();
+  assert.equal((await post(refusing, order, { path: '/tailor' })).status, 202);
+  assert.ok(await landed(order.assetId));
+  const refused = looks.find((l) => l.id === order.assetId);
+  assert.equal(refused.headers['x-look-outcome'], 'refused');
+  assert.equal(refused.headers['x-look-round'], '1');
+  assert.match(refused.headers['x-look-reason'], /LOGO_TOO_THIN/);
+  // The reason is stored bare; the site appends "Use a different logo." once, where it is shown.
+  assert.doesNotMatch(refused.headers['x-look-reason'], /different logo/);
+  assert.equal(refused.body.length, 0);
+  assert.equal('x-look-sha256' in refused.headers, false);
+  // Remembered: the same key is re-told without a fit.
+  const before = submissions.length;
+  const again = await post(refusing, order, { path: '/tailor' });
+  assert.deepEqual(again.json(), { key: tailorKey(order.logoSha256, 'host', 1), cached: true });
+  assert.ok(await landed(order.assetId, 2));
+  assert.equal(looks.filter((l) => l.id === order.assetId)[1].headers['x-look-outcome'], 'refused');
+  assert.equal(submissions.length, before);
+
+  const broken = await tailorDesk(t, { judge: 'DRIFT', fallback: 'crash' });
+  const other = tailorOrder();
+  assert.equal((await post(broken, other, { path: '/tailor' })).status, 202);
+  assert.ok(await landed(other.assetId));
+  const errored = looks.find((l) => l.id === other.assetId);
+  assert.equal(errored.headers['x-look-outcome'], 'error');
+  assert.ok(errored.headers['x-look-reason'].length > 0);
+  assert.ok(broken.logs.some((l) => l.event === 'renderer' && l.level === 'error'));
+});
+
+void test('a job that runs out of time says deadline, starts no fit it cannot finish, and kills what it was running', async (t) => {
+  // Every fit is judged and refused at once, so the fallback print starts with the deadline near.
+  const media = await tailorDesk(t, { judge: 'DRIFT,DRIFT,DRIFT', previewDelayMs: 10_000 }, { tailorDeadlineMs: 1_200, tailorFitMs: 300, tailorTailMs: 100, tailorSubmitMs: 250, judgeMs: 50 });
+  const order = tailorOrder();
+  const started = Date.now();
+  assert.equal((await post(media, order, { path: '/tailor' })).status, 202);
+  assert.ok(await landed(order.assetId));
+  const look = looks.find((l) => l.id === order.assetId);
+  assert.equal(look.headers['x-look-outcome'], 'deadline');
+  assert.match(look.headers['x-look-reason'], /out of time/);
+  assert.ok(Date.now() - started < 4_000, 'the deadline did not cut the fallback');
+  const preview = media.spawns.find((s) => s.mode === 'preview');
+  assert.ok(preview, 'the fallback never started');
+  assert.ok(await until(() => !alive(preview.pid)), 'the renderer outlived the job');
+  assert.equal(media.logs.find((l) => l.event === 'tailor' && l.stage !== 'fits').outcome, 'deadline');
+  // No scratch left behind.
+  assert.ok(await until(async () => !(await readdir(media.workdir)).some((n) => n.startsWith('job-') && !n.startsWith('job-probe-'))));
+});
+
+// The fallback print is for a logo the judge refused. A job the queue starved, or that fal never
+// answered, has not judged the logo at all: it reports its own outcome, keeps the asset at
+// `logo`, and the site asks again; a paid order is never settled for the print by an outage.
+void test('a job starved by the queue says deadline before its first fit, and never falls back', { skip: needsRuntime }, async (t) => {
+  const media = await tailorDesk(t, {}, { tailorDeadlineMs: 300, tailorFitMs: 300, tailorTailMs: 100 });
+  const order = tailorOrder();
+  const before = submissions.length;
+  assert.equal((await post(media, order, { path: '/tailor' })).status, 202);
+  assert.ok(await landed(order.assetId));
+  const look = looks.find((l) => l.id === order.assetId);
+  assert.equal(look.headers['x-look-outcome'], 'deadline');
+  assert.match(look.headers['x-look-reason'], /before its first fit/);
+  assert.equal(submissions.slice(before).filter((s) => s.endpoint === 'fal-ai/nano-banana-pro/edit').length, 0, 'a fit was started with no time to finish it');
+  assert.ok(!media.spawns.some((s) => s.mode === 'preview'), 'the fallback print was made for a logo nobody judged');
+});
+
+void test('fal failing every fit is an error the site asks about again, not the fallback', { skip: needsRuntime }, async (t) => {
+  falPlan.fail = true;
+  try {
+    const media = await tailorDesk(t);
+    const order = tailorOrder();
+    const before = submissions.length;
+    assert.equal((await post(media, order, { path: '/tailor' })).status, 202);
+    assert.ok(await landed(order.assetId));
+    const look = looks.find((l) => l.id === order.assetId);
+    assert.equal(look.headers['x-look-outcome'], 'error');
+    assert.match(look.headers['x-look-reason'], /no fit to judge/);
+    assert.equal(submissions.slice(before).filter((s) => s.endpoint === 'fal-ai/nano-banana-pro/edit').length, 3, 'every fit was tried');
+    assert.ok(!media.spawns.some((s) => s.mode === 'preview'), 'the fallback print was made for a logo nobody judged');
+    assert.ok(media.logs.some((l) => l.event === 'tailor' && l.stage === 'fits' && l.outcome === 'error'));
+  } finally {
+    falPlan.fail = false;
+  }
+});
+
+void test('a drain cuts a running tailor with a shutdown callback, hands a queued one back at once, and waits for the callbacks', async (t) => {
+  falPlan.hang = true;
+  const media = await tailorDesk(t, {}, { tailorConcurrency: 1, tailorQueue: 2, drainMs: 500 });
+  const running = tailorOrder(),
+    queued = tailorOrder();
+  assert.equal((await post(media, running, { path: '/tailor' })).status, 202);
+  assert.equal((await post(media, queued, { path: '/tailor' })).status, 202);
+  assert.deepEqual(
+    [media.service.status().tailoring, media.service.status().tailorQueued],
+    [1, 1],
+  );
+  const started = Date.now();
+  await media.close();
+  assert.ok(Date.now() - started < 4_000, 'close waited past the drain and the callback window');
+  for (const order of [running, queued]) {
+    const look = looks.find((l) => l.id === order.assetId);
+    assert.ok(look, `${order === running ? 'the running' : 'the queued'} job never called back`);
+    assert.equal(look.headers['x-look-outcome'], 'shutdown');
+    assert.match(look.headers['x-look-reason'], /restarting/);
+  }
+  assert.equal(media.service.status().callbacks, 0);
+  falPlan.hang = false;
+  // The server has stopped listening; the desk itself still answers a late request with BUSY.
+  const turnedAway = await media.service.handle(
+    new Request('http://desk/tailor', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify(tailorOrder()),
+    }),
+  );
+  assert.equal(turnedAway.status, 409);
+  assert.equal((await turnedAway.json()).code, 'BUSY');
+});
+
+void test('the callback lands only on SPONSOR_SITE_ORIGIN, survives a short outage, and every outcome is remembered', async (t) => {
+  const media = await tailorDesk(t);
+  // The request may name a callback; the desk ignores it and builds its own from the origin.
+  const order = tailorOrder({ callbackUrl: 'http://127.0.0.1:1/steal' });
+  siteAnswers = [503];
+  assert.equal((await post(media, order, { path: '/tailor' })).status, 202);
+  assert.ok(await landed(order.assetId, 2));
+  const [first, second] = looks.filter((l) => l.id === order.assetId);
+  assert.equal(first.url, `/api/sponsorship/assets/${order.assetId}?part=look`);
+  assert.equal(second.headers['x-look-sha256'], first.headers['x-look-sha256']);
+  assert.ok(await until(() => media.logs.some((l) => l.event === 'tailor' && l.callback === 200)));
+  // A logo the site serves under another id, or from another host, is not fetched.
+  const foreign = tailorOrder({ logoUrl: `${FAL}/files/logo.png` });
+  const r = await post(media, foreign, { path: '/tailor' });
+  assert.equal(r.status, 400);
+  assert.equal(r.json().code, 'HOST');
+  // A logo whose bytes are not the promised hash is an error, never a look.
+  const swapped = tailorOrder();
+  logos.set(`/api/sponsorship/assets/${swapped.assetId}`, Buffer.from('not the logo'));
+  assert.equal((await post(media, swapped, { path: '/tailor' })).status, 202);
+  assert.ok(await landed(swapped.assetId));
+  const wrong = looks.find((l) => l.id === swapped.assetId);
+  assert.equal(wrong.headers['x-look-outcome'], 'error');
+  assert.match(wrong.headers['x-look-reason'], /not the one this order bought/);
+  const before = submissions.length;
+  assert.deepEqual((await post(media, swapped, { path: '/tailor' })).json(), { key: tailorKey(swapped.logoSha256, 'host', 1), cached: true });
+  assert.ok(await landed(swapped.assetId, 2));
+  assert.equal(submissions.length, before, 'a remembered error bought a fit');
+  siteAnswers = [];
+});
+
+void test('the desk process tailors a look with every stdout line a JSON object, and never prints its key', { skip: needsRuntime }, async (t) => {
+  const port = await freePort();
+  const workdir = await mkdtemp(join(scratch, 'cli-tailor-'));
+  const judgeFile = join(scratch, 'cli-judge.txt');
+  await writeFile(judgeFile, 'pass');
+  const python = await fakeWardrobe('cli-wardrobe', { judgeFile });
+  const child = spawn(process.execPath, ['broadcast/sponsor-media.mjs'], {
+    env: {
+      PATH: process.env.PATH,
+      PORT: String(port),
+      SPONSOR_MEDIA_WORKDIR: workdir,
+      SPONSOR_MEDIA_TOKEN: TOKEN,
+      SPONSOR_SITE_ORIGIN: SITE,
+      FAL_KEY: 'fal-cli-key',
+      WEARABLE_PYTHON: python,
+      NODE_ENV: 'test',
+      SPONSOR_MEDIA_TEST_VIDEO_HOST: FAL,
+      SPONSOR_MEDIA_TEST_FAL_HOST: FALQ,
+      SPONSOR_MEDIA_TEST_DECODER: 'direct',
+    },
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  t.after(() => child.kill('SIGKILL'));
+  const raw = [],
+    lines = [];
+  createInterface({ input: child.stdout }).on('line', (line) => {
+    raw.push(line);
+    try {
+      lines.push(JSON.parse(line));
+    } catch {
+      lines.push({ event: 'NOT_JSON', line });
+    }
+  });
+  const exited = new Promise((done) => child.once('close', done));
+  assert.ok(await until(() => lines.some((l) => l.event === 'boot'), 20_000), 'the desk never booted');
+  const boot = lines.find((l) => l.event === 'boot');
+  assert.equal(boot.ready, true);
+  assert.equal(boot.tailor, true);
+  assert.equal(boot.templateVersion, 'looks-v1');
+  assert.equal('capQualified' in boot, false);
+  const media = { url: `http://127.0.0.1:${port}` };
+  const order = tailorOrder();
+  const r = await post(media, order, { path: '/tailor' });
+  assert.equal(r.status, 202, r.bytes.toString());
+  assert.ok(await landed(order.assetId), 'the process never called the site back');
+  assert.ok(await until(() => lines.some((l) => l.event === 'tailor' && l.outcome === 'look'), 10_000));
+  child.kill('SIGTERM');
+  assert.equal(await exited, 0);
+  assert.ok(lines.some((l) => l.event === 'stopped'));
+  assert.deepEqual(lines.filter((l) => l.event === 'NOT_JSON'), [], 'something wrote to stdout past log()');
+  for (const line of raw) {
+    assert.ok(!line.includes('fal-cli-key'), 'the key was printed');
+    assert.ok(!line.includes(TOKEN), 'the token was printed');
+  }
+  const request = lines.find((l) => l.event === 'request' && l.path === '/tailor');
+  assert.equal(request.status, 202);
+  assert.equal(request.key, tailorKey(order.logoSha256, 'host', 1).slice(0, 12));
 });

@@ -1,4 +1,10 @@
 /* The sponsorship desk: a warm broadcast pass, a steady checkout, one moving preview. */
+/* The FROGCLENCH tile wears a rainbow ring that turns; registering the angle lets it animate. */
+@property --frog-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
 .public-site .studio {
   grid-template-columns: minmax(0, 1fr) 380px;
 }
@@ -180,12 +186,19 @@ aside.sponsor-rail {
   text-align: right;
   font-size: 14px;
   font-variant-numeric: tabular-nums;
+  /* Wide enough for every price and caption, so switching currency never reflows the card. */
+  min-width: 44px;
 }
 .sponsor-product-price small {
   font: 8px/1.4 monospace;
   color: #adb5a2;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  white-space: nowrap;
+  transition: color var(--dur-press) var(--ease-cut);
+}
+.sponsor-product-price.discounted small {
+  color: #c0d69e;
 }
 .sponsor-radio {
   width: 12px;
@@ -636,28 +649,122 @@ aside.sponsor-rail {
 }
 .sponsor-assets > div {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr) minmax(0, 1fr);
+  /* The coin gets the room; USDC and SOL stay small pills so the row never changes size. */
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
   background: #121912;
   border: 1px solid #ffffff14;
-  border-radius: 6px;
-  padding: 4px;
-  gap: 3px;
+  border-radius: 8px;
+  padding: 5px;
+  gap: 5px;
+  position: relative;
+  /* The FROGCLENCH halo paints beneath the tiles but above this tray. */
+  isolation: isolate;
 }
 .sponsor-assets label {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
-  min-height: 37px;
+  min-height: 34px;
+  padding: 0 11px;
   cursor: pointer;
-  border-radius: 3px;
-  font-size: 11px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  font-size: 10px;
+  letter-spacing: 0.4px;
   color: #b6c0a8;
   position: relative;
+  white-space: nowrap;
+  transition:
+    background var(--dur-press) var(--ease-cut),
+    border-color var(--dur-press) var(--ease-cut),
+    color var(--dur-press) var(--ease-cut);
+}
+.sponsor-assets label.alt {
+  border-color: #ffffff10;
+}
+.sponsor-assets label:hover {
+  background: #ffffff08;
+}
+.sponsor-assets label:active {
+  background: #ffffff0d;
 }
 .sponsor-assets label.selected {
   background: #30382b;
+  border-color: #ffffff22;
   color: #efece4;
+}
+.sponsor-assets label.frog {
+  min-height: 50px;
+  padding: 0 14px;
+  gap: 7px;
+  border: 0;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: #dfe6d2;
+  background: #1c251b;
+}
+.sponsor-assets label.frog.selected {
+  background: #2a3526;
+  color: #f4f1e8;
+}
+/* Ring and halo share one rainbow; the angle turns on each pseudo-element, so the
+   gradient is written here rather than passed down through a custom property. */
+.sponsor-assets label.frog::before,
+.sponsor-assets label.frog::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  border-radius: inherit;
+  background: conic-gradient(
+    from var(--frog-angle),
+    #ff4d4d,
+    #ffb347,
+    #fff34d,
+    #5dff7a,
+    #4de3ff,
+    #6e7bff,
+    #d76bff,
+    #ff4d4d
+  );
+  transition: opacity var(--dur-list) var(--ease-cut);
+}
+/* The ring: the gradient masked down to a 3px band along the edge. Faint while another
+   coin is chosen, so the tile still reads as the special one. */
+.sponsor-assets label.frog::after {
+  inset: 0;
+  padding: 3px;
+  opacity: 0.3;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+/* The halo: the same rainbow, blurred, sitting behind the tile. */
+.sponsor-assets label.frog::before {
+  inset: -4px;
+  border-radius: 10px;
+  z-index: -1;
+  filter: blur(9px);
+  opacity: 0;
+}
+.sponsor-assets label.frog.selected::after {
+  opacity: 1;
+  animation: frog-ring-turn 2400ms linear infinite;
+}
+.sponsor-assets label.frog.selected::before {
+  opacity: 0.6;
+  animation:
+    frog-ring-turn 2400ms linear infinite,
+    frog-halo-in var(--dur-reveal) var(--ease-cut) both,
+    frog-halo-breathe var(--dur-breathe) var(--ease-breathe) var(--dur-reveal) infinite alternate;
 }
 .sponsor-assets small {
   font: 9px/1.3 monospace;
@@ -665,6 +772,13 @@ aside.sponsor-rail {
   background: #c0d69e12;
   border-radius: 2px;
   padding: 2px 3px;
+}
+.sponsor-assets label.frog small {
+  font-size: 10px;
+  padding: 3px 5px;
+  border-radius: 3px;
+  color: #cfe6a8;
+  background: #c0d69e1f;
 }
 .sponsor-total {
   display: flex;
@@ -1083,6 +1197,28 @@ aside.sponsor-rail {
     transform: translateY(0);
   }
 }
+/* A continuous turn is the one place linear timing belongs: the ring never starts or stops. */
+@keyframes frog-ring-turn {
+  to {
+    --frog-angle: 360deg;
+  }
+}
+@keyframes frog-halo-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0.8;
+  }
+}
+@keyframes frog-halo-breathe {
+  from {
+    opacity: 0.8;
+  }
+  to {
+    opacity: 0.45;
+  }
+}
 @media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
   .sponsor-preview:hover .sponsor-preview-light {
     opacity: 1;
@@ -1123,6 +1259,9 @@ aside.sponsor-rail {
   .sponsor-assets label {
     min-height: 44px;
   }
+  .sponsor-assets label.frog {
+    min-height: 54px;
+  }
   .sponsor-product {
     min-height: 64px;
   }
@@ -1139,6 +1278,13 @@ aside.sponsor-rail {
 @media (max-width: 370px) {
   .sponsor-panel {
     padding: 16px;
+  }
+  /* Too narrow for the coin and both pills in one row: the coin takes the top row alone. */
+  .sponsor-assets > div {
+    grid-template-columns: 1fr 1fr;
+  }
+  .sponsor-assets label.frog {
+    grid-column: 1 / -1;
   }
   .sponsor-panel h2 {
     font-size: 27px;
@@ -1175,6 +1321,13 @@ aside.sponsor-rail {
     animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;
+  }
+  /* Covered by the rule above; named so a narrowing of it cannot bring these back. The
+     look keeps its resting shadow and the still its desaturation, so the state still reads. */
+  .sponsor-host-art.look,
+  .sponsor-logo-swatch,
+  .sponsor-preview.tailoring .sponsor-preview-label svg {
+    animation: none !important;
   }
   .sponsor-preview-light {
     display: none;
@@ -1243,6 +1396,108 @@ aside.sponsor-rail {
 .sponsor-cap-ahead {
   font-size: 12px;
   color: #bdc7ae;
+}
+/* ---- The wardrobe card. Premium motion: one curve, cubic-bezier(0.4, 0, 0.2, 1), no
+   overshoot. The look and the swatch rise 12px over 400ms; the look's shadow lands 50ms
+   behind it; the label breathes for 1600ms cycles while the tailor works and stops the
+   moment the look is in. Reduced motion turns all three off in the block below. */
+.sponsor-look-frame {
+  position: relative;
+}
+/* Before payment the card shows a finished look from a real order, and says so. */
+.sponsor-example-tag {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 2;
+  padding: 5px 8px;
+  border: 1px solid #ffffff2e;
+  border-radius: 6px;
+  background: #0b0f0ecc;
+  color: #e8dcc2;
+  font:
+    9px/1.4 'Courier New',
+    monospace;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+}
+.sponsor-logo-swatch {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: 58px;
+  height: 58px;
+  padding: 7px;
+  object-fit: contain;
+  border: 1px solid #ffffff2e;
+  border-radius: 8px;
+  background: #f2efe8;
+  box-shadow: 0 6px 16px #0007;
+  z-index: 2;
+  animation: sponsor-swatch-in 400ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+/* Not yet dressed: the still sits back a little so the finished look reads as the event. */
+.sponsor-preview.tailoring .sponsor-host-art {
+  filter: saturate(0.72) brightness(0.94);
+}
+.sponsor-preview.tailoring .sponsor-preview-label svg {
+  color: #e2b98a;
+  animation: sponsor-tailoring var(--dur-breathe) var(--ease-breathe) infinite;
+}
+.sponsor-host-art.look {
+  position: relative;
+  z-index: 1;
+  box-shadow: 0 10px 24px #0007;
+  animation:
+    sponsor-look-in 400ms cubic-bezier(0.4, 0, 0.2, 1) both,
+    sponsor-look-shadow 400ms cubic-bezier(0.4, 0, 0.2, 1) 50ms both;
+}
+.sponsor-look-replace {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+.sponsor-look-replace p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #bdc7ae;
+}
+.sponsor-look-replace .sponsor-button {
+  margin-top: 0;
+}
+@keyframes sponsor-look-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes sponsor-look-shadow {
+  from {
+    box-shadow: 0 0 0 #0000;
+  }
+  to {
+    box-shadow: 0 10px 24px #0007;
+  }
+}
+@keyframes sponsor-swatch-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes sponsor-tailoring {
+  50% {
+    opacity: 0.3;
+  }
 }
 .sponsor-legacy-receipt {
   padding: 12px 0;

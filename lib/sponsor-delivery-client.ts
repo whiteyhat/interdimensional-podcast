@@ -104,7 +104,7 @@ export function createSponsorServices(): SponsorServices {
       );
   }
   let health: {
-    capQualified?: boolean;
+    tailor?: boolean;
     templateVersion?: string;
     ready?: boolean;
   } = {};
@@ -142,7 +142,7 @@ export function createSponsorServices(): SponsorServices {
         capabilities: {
           message: true,
           spotlight: true,
-          cap: health.ready === true && health.capQualified === true,
+          cap: health.ready === true && health.tailor === true,
           ...(health.templateVersion
             ? { capTemplateVersion: health.templateVersion }
             : {}),

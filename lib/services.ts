@@ -29,7 +29,6 @@ type Result = {
   code?: string;
 };
 class DialogueError extends Error {}
-class WearableError extends Error {}
 async function api(body: unknown, path = '/api/podcast', signal?: AbortSignal) {
   const response = await fetch(path, {
     method: 'POST',
@@ -42,7 +41,6 @@ async function api(body: unknown, path = '/api/podcast', signal?: AbortSignal) {
     if (data.code === 'INVALID_SPEECH') throw new SpeechError(data.error);
     if (data.code === 'INVALID_DIALOGUE') throw new DialogueError(data.error);
     if (data.code === 'STUDIO_BUSY') throw new StudioBusyError(data.error);
-    if (data.code === 'INVALID_WEARABLE') throw new WearableError(data.error);
     if (data.code && placementLostCodes.has(data.code))
       throw new PlacementLostError(
         data.error || 'The placement is no longer ours.',
@@ -84,8 +82,6 @@ async function topics(body: unknown, forceSource?: TopicSource) {
 export function createServices(): Services {
   const jobs = new Map<string, string>();
   const speechRetries = new Map<string, number>();
-  const wardrobeRetries = new Map<string, number>();
-  const media = new Map<string, string>();
   async function job(key: string, body: unknown) {
     let token = jobs.get(key);
     if (!token) {
@@ -134,9 +130,7 @@ export function createServices(): Services {
       const start = Date.now();
       const input = shotInput(line);
       const identity = JSON.stringify([input, line.wardrobe]);
-      const attempt =
-        (speechRetries.get(identity) ?? 0) +
-        (wardrobeRetries.get(identity) ?? 0);
+      const attempt = speechRetries.get(identity) ?? 0;
       const key = JSON.stringify([
         `${show.slug}-shot-v9`,
         input,
@@ -163,14 +157,10 @@ export function createServices(): Services {
         }
         throw error;
       };
-      // A cap shot is composited on the take as the model made it, the only frame the cap's
-      // qualification covers, and the media desk scales the verified composite to 1080 itself.
-      // Fal's scaler would hand the tracker a frame it was never proven on: twice the pixels,
-      // every tracking error grown by the scale, and real takes lost or out of time.
+      // A dressed take is scaled and audited like any other: the look is in the frames the
+      // model was conditioned on, so there is nothing to composite afterwards.
       const [result, speech] = await Promise.all([
-        line.wardrobe
-          ? ({ url: native.url } as Result)
-          : job(scaleKey, { action: 'scale', url: native.url }),
+        job(scaleKey, { action: 'scale', url: native.url }),
         job(speechKey, { action: 'speech', url: native.url, line }),
       ]).catch(rejectSpeech);
       if (
@@ -183,50 +173,9 @@ export function createServices(): Services {
           new SpeechError('No verified speech boundary returned'),
         );
       if (!result.url) throw Error('No scaled video returned');
-      let finalUrl = result.url;
-      if (line.wardrobe) {
-        const mediaKey = JSON.stringify([result.url, line.wardrobe]);
-        finalUrl = media.get(mediaKey) || '';
-        if (!finalUrl) {
-          try {
-            const composed = (await api(
-              {
-                orderId: line.wardrobe.orderId,
-                leaseToken: line.wardrobe.leaseToken,
-                videoUrl: result.url,
-              },
-              '/api/sponsorship/media',
-              AbortSignal.timeout(120000),
-            )) as Result & {
-              quality?: { accepted?: boolean; audioVerified?: boolean };
-            };
-            if (
-              !composed.url ||
-              composed.quality?.accepted !== true ||
-              composed.quality?.audioVerified !== true
-            )
-              throw new WearableError(
-                'The cap placement did not pass its visual and audio checks.',
-              );
-            finalUrl = composed.url;
-            media.set(mediaKey, finalUrl);
-          } catch (error) {
-            if (error instanceof WearableError) {
-              // Every refusal advances the counter, so the take is never sent back to the
-              // desk to be refused again: two more are tried here, and a retry the engine
-              // makes after that arrives with a fresh take of its own.
-              const refused = (wardrobeRetries.get(identity) ?? 0) + 1;
-              wardrobeRetries.set(identity, refused);
-              if (refused <= 2) return this.render(line);
-            }
-            throw error;
-          }
-        }
-      }
+      const finalUrl = result.url;
       const response = await fetch(
-        line.wardrobe
-          ? finalUrl
-          : `/api/media?url=${encodeURIComponent(finalUrl)}`,
+        `/api/media?url=${encodeURIComponent(finalUrl)}`,
       );
       if (!response.ok)
         throw Error('Video download failed. Retry will reuse this shot.');

@@ -4,6 +4,54 @@ export type SponsorProduct = 'message' | 'spotlight' | 'cap';
 export type SponsorAsset = 'FROGCLENCH' | 'USDC' | 'SOL';
 export type SponsorStyle = 'intro' | 'debate' | 'gentle-roast';
 export type SponsorTarget = 'host' | 'guest';
+/** The wardrobe revision every look, asset id and studio heartbeat is pinned to. */
+export const LOOK_VERSION = 'looks-v1' as const;
+export type LookPalette = {
+  clusters: { hex: string; share: number }[];
+  primary: string;
+  secondary: string;
+  accent: string;
+  monochrome: boolean;
+};
+export type LookTailorState = {
+  round: number;
+  requestedAt: number;
+  outcome?: 'look' | 'refused' | 'deadline' | 'shutdown' | 'error';
+  at?: number;
+  reasons?: string[];
+};
+/** `sponsor_assets.metadata` for a cap asset: one row per (normalised logo, character). */
+export type LookAssetMetadata = {
+  kind: 'cap';
+  target: SponsorTarget;
+  templateVersion: typeof LOOK_VERSION;
+  logoSha256: string;
+  logoUrl: string;
+  palette: LookPalette;
+  /** Present once qualified: the look URL and the look's sha256. */
+  sourceUrl?: string;
+  sha256?: string;
+  look?: {
+    sha256: string;
+    model: string;
+    fit: number;
+    round: number;
+    verdict: unknown;
+    fallback?: 'cap-v1';
+  };
+  tailor?: LookTailorState;
+  reason?: string;
+};
+/** Where a cap order's look stands, as the receipt tells the buyer. */
+export type SponsorLook = {
+  status: 'tailoring' | 'ready' | 'refused';
+  url?: string;
+  reason?: string;
+  fallback?: 'cap-v1';
+  round?: number;
+  /** When this logo's tailoring began: the payment, or the later swap for a different logo. */
+  since?: number;
+};
 export type SponsorDraft = {
   product: SponsorProduct;
   name: string;
@@ -68,6 +116,8 @@ export type SponsorReceipt = {
   queuePosition?: number | null;
   /** For a paid cap still waiting: how many earlier caps on the same host go on before it. */
   capAhead?: number | null;
+  /** For a cap order: tailoring, ready (fallback or not), or refused. */
+  look?: SponsorLook;
 };
 export type SponsorLease = {
   id: string;
@@ -112,9 +162,20 @@ export type SponsorCatalog = {
 export const sponsorProducts = [
   { id: 'message', title: 'Read a message', priceCents: 500 },
   { id: 'spotlight', title: 'Project spotlight', priceCents: 2500 },
-  { id: 'cap', title: 'Sponsor a cap', priceCents: 10000 },
+  { id: 'cap', title: 'Sponsor the podcast', priceCents: 10000 },
 ] as const;
-export const sponsorOffers = sponsorProducts;
+/**
+ * What the site sells. The five-dollar message came off sale because it read as a smaller
+ * spotlight; it stays in the ladder above only so an order already paid for one keeps its
+ * price and still airs.
+ */
+type SponsorOffer = Exclude<
+  (typeof sponsorProducts)[number],
+  { id: 'message' }
+>;
+export const sponsorOffers = sponsorProducts.filter(
+  (p): p is SponsorOffer => p.id !== 'message',
+);
 export const sponsorLimits = {
   quoteMs: 60000,
   heartbeatMs: 30000,
@@ -229,7 +290,7 @@ export function validateSponsorDraft(raw: unknown): SponsorDraft {
   if (!raw || typeof raw !== 'object')
     throw new SponsorError(400, 'Choose a sponsorship.');
   const d = raw as Record<string, unknown>;
-  if (!sponsorProducts.some((p) => p.id === d.product))
+  if (!sponsorOffers.some((p) => p.id === d.product))
     throw new SponsorError(400, 'Choose a sponsorship.');
   const name = checkName(d.name),
     message = checkMessage(d.message);
@@ -283,7 +344,7 @@ export function validateSponsorDraft(raw: unknown): SponsorDraft {
       throw new SponsorError(400, 'Choose a host for the cap.');
     result.target = d.target;
     if (typeof d.assetId !== 'string' || !d.assetId)
-      throw new SponsorError(400, 'Upload and qualify a cap asset first.');
+      throw new SponsorError(400, 'Add your logo first.');
   }
   if (d.assetId !== undefined) {
     if (

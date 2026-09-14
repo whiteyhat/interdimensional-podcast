@@ -1,16 +1,22 @@
-import type { SponsorVars } from './sponsor-server';
-import { sponsorDatabase, sponsorFailure } from './sponsor-server';
-import { SponsorError } from './sponsorship';
-import { allowSponsorRequest } from './sponsor-db';
+import {
+  sameSponsorToken,
+  sponsorDatabase,
+  sponsorFailure,
+  sponsorMediaConfig,
+  type SponsorMediaVars,
+} from './sponsor-server';
+export { sponsorMediaConfig, type SponsorMediaVars } from './sponsor-server';
+import {
+  LOOK_VERSION,
+  SponsorError,
+  type LookAssetMetadata,
+  type LookPalette,
+} from './sponsorship';
+import * as db from './sponsor-db';
 import { perMinuteCounter } from './throttle';
 const tooMany = perMinuteCounter();
-export type SponsorMediaVars = SponsorVars & {
-  SPONSOR_ASSETS?: R2Bucket;
-  SPONSOR_MEDIA_URL?: string;
-  SPONSOR_MEDIA_TOKEN?: string;
-  SITE_URL?: string;
-};
 const MAX_UPLOAD = 4 * 1024 * 1024;
+const HEX64 = /^[a-f0-9]{64}$/;
 const json = (body: unknown, status = 200) =>
   Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
 /** Hex SHA-256, the identity every stored artwork and take is filed and checked under. */
@@ -25,50 +31,13 @@ function decode(base64: string) {
     throw new SponsorError(502, 'Artwork response is too large.');
   return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
 }
-/**
- * Where the media service lives and the secret its /preview and /render calls carry. Those
- * two are all this side needs: the logo now travels inside each render request, so nothing
- * here depends on the service being able to reach this site.
- */
-export function sponsorMediaConfig(v: SponsorMediaVars) {
-  let url: URL | undefined;
-  try {
-    url = v.SPONSOR_MEDIA_URL ? new URL(v.SPONSOR_MEDIA_URL) : undefined;
-  } catch {
-    throw new SponsorError(
-      503,
-      'The wardrobe service URL is invalid.',
-      'MEDIA',
-    );
-  }
-  if (!url || !v.SPONSOR_MEDIA_TOKEN || v.SPONSOR_MEDIA_TOKEN.length < 24)
-    throw new SponsorError(
-      503,
-      'The wardrobe desk is not connected yet.',
-      'MEDIA',
-    );
-  if (
-    url.username ||
-    url.password ||
-    (url.protocol !== 'https:' &&
-      !(
-        url.protocol === 'http:' &&
-        ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
-      ))
-  )
-    throw new SponsorError(
-      503,
-      'The wardrobe service URL is invalid.',
-      'MEDIA',
-    );
-  return { url, token: v.SPONSOR_MEDIA_TOKEN };
-}
 type MediaHealth = {
   ready: boolean;
-  capQualified: boolean;
+  /** The desk has FAL_KEY and SPONSOR_SITE_ORIGIN and fal answered at boot: it can tailor a look. */
+  tailor: boolean;
   templateVersion?: string;
 };
-const notReady = (): MediaHealth => ({ ready: false, capQualified: false });
+const notReady = (): MediaHealth => ({ ready: false, tailor: false });
 // GET /api/sponsorship/assets is public. Without a memory here every hit on it would make
 // the media service run its readiness checks, so a crowd refreshing the page would be a
 // crowd of probes. An answer is reused by this isolate for 15 seconds, and callers who
@@ -131,7 +100,7 @@ function healthFrom(data: Record<string, unknown> | null): MediaHealth | null {
   if (!data || typeof data.ready !== 'boolean') return null;
   return {
     ready: data.ready,
-    capQualified: data.capQualified === true,
+    tailor: data.tailor === true,
     templateVersion:
       typeof data.templateVersion === 'string'
         ? data.templateVersion
@@ -316,6 +285,30 @@ async function boundedBody(request: Request, max: number) {
   if (!request.body) throw new SponsorError(400, 'Choose an image.');
   return readBounded(request.body, max, 'Use an image under 4 MB.');
 }
+/** The image the buyer chose, by its first bytes. The desk decodes it; the site only names it. */
+function imageType(bytes: Uint8Array) {
+  const ascii = (from: number, to: number) =>
+    String.fromCharCode(...bytes.subarray(from, to));
+  if (bytes.length > 8 && bytes[0] === 0x89 && ascii(1, 4) === 'PNG')
+    return 'image/png';
+  if (
+    bytes.length > 3 &&
+    bytes[0] === 0xff &&
+    bytes[1] === 0xd8 &&
+    bytes[2] === 0xff
+  )
+    return 'image/jpeg';
+  if (bytes.length > 12 && ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP')
+    return 'image/webp';
+  return null;
+}
+const DESK_DOWN = 'Artwork is not available right now; try again in a minute.';
+/**
+ * POST /api/sponsorship/assets: the buyer's logo, checked and normalised by the desk before
+ * any money moves. A cap logo is stored as an asset waiting for its look (tailored after
+ * payment); a spotlight logo is ready at once. The desk's verdict on the file is relayed
+ * as it is, and nothing is stored for a file it refuses.
+ */
 export async function uploadSponsorAsset(
   request: Request,
   v: SponsorMediaVars,
@@ -337,7 +330,7 @@ export async function uploadSponsorAsset(
         'ASSETS',
       );
     const d = await sponsorDatabase(v);
-    if (!(await allowSponsorRequest(d, `artwork:${ip}`, 6, Date.now())))
+    if (!(await db.allowSponsorRequest(d, `artwork:${ip}`, 6, Date.now())))
       throw new SponsorError(
         429,
         'Give the wardrobe desk a moment, then try again.',
@@ -358,88 +351,79 @@ export async function uploadSponsorAsset(
       !(image instanceof File) ||
       image.size > MAX_UPLOAD ||
       !['image/png', 'image/jpeg', 'image/webp'].includes(image.type) ||
-      !['logo', 'cap'].includes(String(kind)) ||
-      !['host', 'guest'].includes(String(target))
+      !['logo', 'cap'].includes(kind) ||
+      !['host', 'guest'].includes(target)
     )
       throw new SponsorError(
         400,
         'Choose a PNG, JPG, or WebP image and a supported placement.',
       );
-    const endpoint = new URL('/preview', url);
-    endpoint.searchParams.set('kind', String(kind));
-    endpoint.searchParams.set('target', String(target));
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': image.type },
-      body: image,
-      redirect: 'manual',
-      signal: AbortSignal.timeout(40000),
-    });
-    const result = (await response.json()) as {
-      error?: string;
-      preview?: string;
-      logo?: string;
-      sha256?: string;
-      logoSha256?: string;
-      templateId?: string;
-      templateVersion?: string;
-      qualificationVersion?: string | null;
-    };
-    if (!response.ok || !result.preview || !result.logo)
+    const raw = new Uint8Array(await image.arrayBuffer());
+    const type = imageType(raw);
+    if (!type)
       throw new SponsorError(
-        response.status === 422 ? 422 : 503,
-        result.error || 'Artwork could not be prepared.',
+        422,
+        'That file is not a PNG, JPG or WebP image.',
+        'INVALID_IMAGE',
       );
-    const preview = decode(result.preview),
-      logo = decode(result.logo);
-    const [previewHash, logoHash] = await Promise.all([
-      sha256Hex(preview),
-      sha256Hex(logo),
-    ]);
-    if (previewHash !== result.sha256 || logoHash !== result.logoSha256)
+    const endpoint = new URL('/logo', url);
+    endpoint.searchParams.set('target', target);
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': type },
+        body: raw,
+        redirect: 'manual',
+        signal: AbortSignal.timeout(10000),
+      });
+    } catch {
+      throw new SponsorError(503, DESK_DOWN, 'MEDIA');
+    }
+    const result = (await response.json().catch(() => null)) as {
+      logo?: string;
+      logoSha256?: string;
+      palette?: LookPalette;
+      error?: string;
+      code?: string;
+    } | null;
+    // The desk's verdict on the file is the buyer's to act on, before any money moves.
+    if (response.status === 422 && result?.error)
+      throw new SponsorError(422, result.error, result.code ?? 'INVALID_IMAGE');
+    if (
+      !response.ok ||
+      !result?.logo ||
+      typeof result.logoSha256 !== 'string' ||
+      !result.palette
+    )
+      throw new SponsorError(503, DESK_DOWN, 'MEDIA');
+    const logo = decode(result.logo);
+    if ((await sha256Hex(logo)) !== result.logoSha256)
       throw new SponsorError(502, 'Artwork integrity check failed.');
-    // Bind the canonical image, original normalized mark, target and qualification revision.
-    // A later upload or qualification must never rewrite an already purchased design.
+    // One asset per (normalised logo, character) on this wardrobe, shared by every order that
+    // buys that logo on that character. A spotlight logo is its own kind of asset.
     const id = await sha256Hex(
       new TextEncoder().encode(
-        JSON.stringify([
-          previewHash,
-          logoHash,
-          kind,
-          target,
-          result.templateId ?? null,
-          result.templateVersion ?? null,
-          result.qualificationVersion ?? null,
-        ]),
+        JSON.stringify(
+          kind === 'cap'
+            ? [result.logoSha256, target, LOOK_VERSION]
+            : [result.logoSha256, 'logo', LOOK_VERSION],
+        ),
       ),
     );
     const publicOrigin = new URL(v.SITE_URL || request.url).origin;
-    const previewUrl = new URL(`/api/sponsorship/assets/${id}`, publicOrigin)
-        .href,
-      logoUrl = new URL(`/api/sponsorship/assets/${id}?part=logo`, publicOrigin)
-        .href;
-    await Promise.all([
-      v.SPONSOR_ASSETS.put(`${id}/preview.png`, preview, {
-        httpMetadata: { contentType: 'image/png' },
-      }),
-      v.SPONSOR_ASSETS.put(`${id}/logo.png`, logo, {
-        httpMetadata: { contentType: 'image/png' },
-      }),
-    ]);
-    const status =
-      kind === 'logo' || result.qualificationVersion ? 'qualified' : 'preview';
+    const logoUrl = new URL(`/api/sponsorship/assets/${id}?part=logo`, publicOrigin)
+      .href;
+    await v.SPONSOR_ASSETS.put(`${id}/logo.png`, logo, {
+      httpMetadata: { contentType: 'image/png' },
+    });
     const metadata = {
       kind,
       target,
-      sha256: previewHash,
-      logoSha256: logoHash,
+      logoSha256: result.logoSha256,
       logoUrl,
-      templateId: result.templateId,
-      templateVersion: result.templateVersion,
-      qualificationVersion: result.qualificationVersion,
-      sourceUrl: result.templateId
-        ? new URL(`/wearables/${result.templateId}.png`, publicOrigin).href
-        : null,
+      palette: result.palette,
+      templateVersion: LOOK_VERSION,
     };
     await d
       .prepare(
@@ -447,34 +431,74 @@ export async function uploadSponsorAsset(
       )
       .bind(
         id,
-        status,
-        previewUrl,
+        kind === 'cap' ? 'logo' : 'qualified',
+        logoUrl,
         'image/png',
         Date.now(),
         JSON.stringify(metadata),
       )
       .run();
-    return json({ id, url: previewUrl, logoUrl, status });
+    // The row that stands is answered: the same logo uploaded again may already have its look.
+    const row = await db.getAsset(d, id);
+    return json({ id, status: row?.status ?? 'logo', url: row?.url ?? logoUrl, logoUrl });
   } catch (e) {
     return sponsorFailure(e);
   }
 }
+/** The asset's standing for a bare GET: a redirect to whatever image stands for it now, or JSON on request. */
+async function assetStatus(request: Request, v: SponsorMediaVars, id: string) {
+  try {
+    const d = await sponsorDatabase(v);
+    const asset = await db.getAsset(d, id);
+    if (!asset) throw new SponsorError(404, 'Artwork not found.');
+    if (!/application\/json/.test(request.headers.get('accept') ?? ''))
+      return new Response(null, {
+        status: 302,
+        headers: { location: asset.url, 'cache-control': 'no-store' },
+      });
+    let meta: Partial<LookAssetMetadata> = {};
+    try {
+      meta = JSON.parse(asset.metadata);
+    } catch {}
+    return json({
+      status: asset.status,
+      url: asset.url,
+      ...(asset.status === 'qualified' ? { lookUrl: asset.url } : {}),
+      ...(meta.reason ? { reason: meta.reason } : {}),
+      ...(meta.tailor ? { tailor: meta.tailor } : {}),
+    });
+  } catch (e) {
+    return sponsorFailure(e);
+  }
+}
+/**
+ * GET /api/sponsorship/assets/{id}: `?part=logo` is the normalised logo, `?part=look&v=<sha>`
+ * one look; both are named by content, so they are cached for good and readable from any
+ * origin (fal fetches both). A bare address follows the asset to the image that stands for
+ * it now, and says where it stands to a caller that asks for JSON.
+ */
 export async function readSponsorAsset(
   request: Request,
   v: SponsorMediaVars,
   id: string,
 ) {
-  if (!/^[a-f0-9]{64}$/.test(id) || !v.SPONSOR_ASSETS)
+  if (!HEX64.test(id) || !v.SPONSOR_ASSETS)
     return new Response('Artwork not found', { status: 404 });
-  const part = new URL(request.url).searchParams.get('part');
+  const url = new URL(request.url),
+    part = url.searchParams.get('part');
+  if (part === null) return assetStatus(request, v, id);
+  const version = url.searchParams.get('v') ?? '';
   const key =
-    part === 'video'
-      ? `${id}/video.mp4`
-      : `${id}/${part === 'logo' ? 'logo' : 'preview'}.png`;
+    part === 'logo'
+      ? `${id}/logo.png`
+      : part === 'look' && HEX64.test(version)
+        ? `${id}/look-${version}.png`
+        : null;
+  if (!key) return new Response('Artwork not found', { status: 404 });
   const object = await v.SPONSOR_ASSETS.get(key, { range: request.headers });
   if (!object) return new Response('Artwork not found', { status: 404 });
   const headers: Record<string, string> = {
-    'content-type': part === 'video' ? 'video/mp4' : 'image/png',
+    'content-type': 'image/png',
     'cache-control': 'public,max-age=31536000,immutable',
     'x-content-type-options': 'nosniff',
     'content-security-policy': "default-src 'none'",
@@ -495,4 +519,123 @@ export async function readSponsorAsset(
     headers['content-length'] = String(object.range.length);
   } else headers['content-length'] = String(object.size);
   return new Response(object.body, { status, headers });
+}
+const LOOK_OUTCOMES = ['look', 'refused', 'deadline', 'shutdown', 'error'] as const;
+const MAX_LOOK = 8 * 1024 * 1024;
+/** The desk's verdict header: base64 JSON, kept whole for the audit; only model, fit and fallback are read here. */
+function verdictHeader(value: string | null): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const raw: unknown = JSON.parse(
+      new TextDecoder().decode(
+        Uint8Array.from(atob(value), (c) => c.charCodeAt(0)),
+      ),
+    );
+    return raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+/**
+ * PUT /api/sponsorship/assets/{id}?part=look: the desk reporting how a tailor round ended.
+ * Only the desk may call it (its bearer), and a look must hash to what the desk says it
+ * sent. A look is stored under its hash and then recorded; nothing is stored for a look
+ * that would not be recorded (a finished asset keeps its look, except the fallback →
+ * real-fit upgrade while no order wearing it is on air).
+ */
+export async function receiveLook(
+  request: Request,
+  v: SponsorMediaVars,
+  id: string,
+) {
+  try {
+    if (!HEX64.test(id)) throw new SponsorError(404, 'Artwork not found.');
+    const bearer = (request.headers.get('authorization') ?? '').replace(
+      /^Bearer\s+/i,
+      '',
+    );
+    if (!v.SPONSOR_MEDIA_TOKEN || !sameSponsorToken(bearer, v.SPONSOR_MEDIA_TOKEN))
+      throw new SponsorError(401, 'Wardrobe desk token rejected.');
+    if (!v.SPONSOR_ASSETS)
+      throw new SponsorError(
+        503,
+        'Artwork storage is not connected yet.',
+        'ASSETS',
+      );
+    const outcome = request.headers.get('x-look-outcome') ?? '';
+    const round = Number(request.headers.get('x-look-round'));
+    if (
+      !(LOOK_OUTCOMES as readonly string[]).includes(outcome) ||
+      !Number.isInteger(round) ||
+      round < 1 ||
+      round > 3
+    )
+      throw new SponsorError(400, 'A look callback names its round and outcome.');
+    const d = await sponsorDatabase(v);
+    if (outcome === 'refused') {
+      const reason =
+        (request.headers.get('x-look-reason') ?? '').trim().slice(0, 300) ||
+        'The tailor could not dress this logo.';
+      return json({
+        status: await db.applyLook(d, id, { kind: 'refused', reason, round }),
+      });
+    }
+    if (outcome !== 'look')
+      return json({
+        status: await db.applyLook(d, id, {
+          kind: 'deferred',
+          outcome: outcome as 'deadline' | 'shutdown' | 'error',
+          round,
+        }),
+      });
+    const declared = request.headers.get('x-look-sha256') ?? '';
+    if (!HEX64.test(declared) || !request.body)
+      throw new SponsorError(400, 'A look names its bytes by their hash.');
+    const bytes = await readBounded(request.body, MAX_LOOK, 'The look is too large.');
+    const sha256 = await sha256Hex(bytes);
+    if (sha256 !== declared)
+      throw new SponsorError(400, 'The look does not hash to what the desk says.');
+    const current = await db.getAsset(d, id);
+    if (!current) throw new SponsorError(404, 'Artwork not found.');
+    const verdict = verdictHeader(request.headers.get('x-look-verdict'));
+    const fallback = verdict.fallback === 'cap-v1' ? ('cap-v1' as const) : undefined;
+    let meta: Partial<LookAssetMetadata> = {};
+    try {
+      meta = JSON.parse(current.metadata);
+    } catch {}
+    if (
+      current.status === 'qualified' &&
+      (!meta.look?.fallback || fallback || (await db.assetOnAir(d, id)))
+    ) {
+      console.warn('[sponsorship] look-superseded', id, round);
+      return json({ status: 'qualified' });
+    }
+    const lookUrl = new URL(
+      `/api/sponsorship/assets/${id}?part=look&v=${sha256}`,
+      v.SITE_URL || request.url,
+    ).href;
+    await v.SPONSOR_ASSETS.put(`${id}/look-${sha256}.png`, bytes, {
+      httpMetadata: { contentType: 'image/png' },
+    });
+    const status = await db.applyLook(d, id, {
+      kind: 'look',
+      sha256,
+      url: lookUrl,
+      sourceUrl: lookUrl,
+      round,
+      look: {
+        sha256,
+        model: typeof verdict.model === 'string' ? verdict.model : 'unknown',
+        fit: typeof verdict.fit === 'number' ? verdict.fit : 0,
+        round,
+        verdict,
+        ...(fallback ? { fallback } : {}),
+      },
+    });
+    return json({ status });
+  } catch (e) {
+    return sponsorFailure(e);
+  }
 }

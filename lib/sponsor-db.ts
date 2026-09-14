@@ -9,6 +9,8 @@ import {
   type SponsorStatus,
   type SponsorFulfillment,
   type SponsorCapabilities,
+  type LookAssetMetadata,
+  type LookTailorState,
 } from './sponsorship';
 export const sponsorSchema = [
   `CREATE TABLE IF NOT EXISTS sponsor_orders (
@@ -177,6 +179,177 @@ export const getAsset = (d: D1Database, id: string) =>
     .prepare('SELECT * FROM sponsor_assets WHERE id=?')
     .bind(id)
     .first<AssetRow>();
+/** The tailor state on an asset, written whole: a new round starts clean and the caller passes on the audit of earlier refusals. */
+export async function markTailorRequested(
+  d: D1Database,
+  assetId: string,
+  tailor: LookTailorState,
+) {
+  await d
+    .prepare(
+      `UPDATE sponsor_assets SET metadata=json_set(metadata,'$.tailor',json(?)) WHERE id=?`,
+    )
+    .bind(JSON.stringify(tailor), assetId)
+    .run();
+}
+/** Whether an order wearing this asset is on air now: its look must not change under it. */
+export async function assetOnAir(
+  d: D1Database,
+  assetId: string,
+): Promise<boolean> {
+  const row = await d
+    .prepare(
+      `SELECT 1 AS n FROM sponsor_orders WHERE json_extract(draft,'$.assetId')=? AND status IN ('leased','prepared','playing') LIMIT 1`,
+    )
+    .bind(assetId)
+    .first();
+  return !!row;
+}
+export type LookOutcome =
+  | {
+      kind: 'look';
+      sha256: string;
+      url: string;
+      sourceUrl: string;
+      look: NonNullable<LookAssetMetadata['look']>;
+      round: number;
+    }
+  | { kind: 'refused'; reason: string; round: number }
+  | {
+      kind: 'deferred';
+      outcome: 'deadline' | 'shutdown' | 'error';
+      round: number;
+    };
+/**
+ * Record what a tailor round came to. Allowed: logo → qualified, logo → refused,
+ * refused → qualified, and a fallback look replaced by a real fit while nothing wears it. A
+ * qualified asset otherwise never changes, and a deadline, shutdown or error is not a verdict
+ * on the logo. Read, then one UPDATE guarded by what was read, so a callback racing the
+ * reconciler loses nothing and a repeat of the same outcome writes nothing.
+ */
+export async function applyLook(
+  d: D1Database,
+  id: string,
+  outcome: LookOutcome,
+): Promise<string> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const asset = await getAsset(d, id);
+    if (!asset) throw new SponsorError(404, 'Artwork not found.');
+    let meta: LookAssetMetadata;
+    try {
+      meta = JSON.parse(asset.metadata);
+    } catch {
+      throw new SponsorError(
+        409,
+        'Artwork qualification is unavailable.',
+        'ASSET',
+      );
+    }
+    const now = Date.now();
+    const prior: LookTailorState = meta.tailor ?? {
+      round: outcome.round,
+      requestedAt: now,
+    };
+    let status = asset.status,
+      url = asset.url,
+      next: LookAssetMetadata;
+    if (outcome.kind === 'look') {
+      const upgrade =
+        asset.status === 'qualified' &&
+        !!meta.look?.fallback &&
+        !outcome.look.fallback &&
+        !(await assetOnAir(d, id));
+      if (asset.status === 'qualified' && !upgrade) return 'qualified';
+      status = 'qualified';
+      url = outcome.url;
+      const kept = { ...meta };
+      delete kept.reason;
+      next = {
+        ...kept,
+        sourceUrl: outcome.sourceUrl,
+        sha256: outcome.sha256,
+        look: outcome.look,
+        tailor: { ...prior, round: outcome.round, outcome: 'look', at: now },
+      };
+    } else if (outcome.kind === 'refused') {
+      if (asset.status === 'qualified') return 'qualified';
+      if (prior.round === outcome.round && prior.outcome === 'refused')
+        return 'refused';
+      status = 'refused';
+      next = {
+        ...meta,
+        reason: outcome.reason,
+        tailor: {
+          ...prior,
+          round: outcome.round,
+          outcome: 'refused',
+          at: now,
+          reasons: [...(prior.reasons ?? []), outcome.reason],
+        },
+      };
+    } else {
+      if (asset.status !== 'logo') return asset.status;
+      if (prior.round === outcome.round && prior.outcome === outcome.outcome)
+        return 'logo';
+      next = {
+        ...meta,
+        tailor: {
+          ...prior,
+          round: outcome.round,
+          outcome: outcome.outcome,
+          at: now,
+        },
+      };
+    }
+    const r = await d
+      .prepare(
+        'UPDATE sponsor_assets SET status=?,url=?,metadata=? WHERE id=? AND status=? AND metadata=?',
+      )
+      .bind(status, url, JSON.stringify(next), id, asset.status, asset.metadata)
+      .run();
+    if (r.meta.changes === 1) return status;
+  }
+  throw new SponsorError(
+    409,
+    'The look changed while it was being recorded.',
+    'ASSET',
+  );
+}
+/** How long a tailor round may go unanswered before the reconciler asks again: past the desk's 210 s job deadline. */
+export const TAILOR_RETRY_MS = 240000;
+/** How long a first-round fallback look stands before one upgrade fit is tried. */
+export const LOOK_UPGRADE_MS = 600000;
+/**
+ * What the reconciler should ask the tailor for, reading only. A `logo` asset whose last
+ * activity (callback, request, or payment) is older than TAILOR_RETRY_MS gets its next round;
+ * past round 3 the caller refuses it. A `qualified` asset wearing a first-round fallback gets
+ * one upgrade after LOOK_UPGRADE_MS, while no order wearing it is on air. The order named is
+ * the earliest paid cap on the asset, whose project name the tailor prompt uses.
+ */
+export async function tailorProbe(
+  d: D1Database,
+  now: number,
+): Promise<
+  { orderId: string; assetId: string; nextRound: number; upgrade: boolean }[]
+> {
+  const rows = await d
+    .prepare(
+      `SELECT o.id AS order_id,a.id AS asset_id,a.status,COALESCE(json_extract(a.metadata,'$.tailor.round'),0) AS round FROM sponsor_assets a JOIN sponsor_orders o ON o.id=(SELECT c.id FROM sponsor_orders c WHERE c.product='cap' AND c.paid_attempt_id IS NOT NULL AND json_extract(c.draft,'$.assetId')=a.id ORDER BY c.paid_at,c.id LIMIT 1) WHERE (a.status='logo' AND COALESCE(json_extract(a.metadata,'$.tailor.at'),json_extract(a.metadata,'$.tailor.requestedAt'),MAX(o.paid_at,a.created_at),a.created_at)<?) OR (a.status='qualified' AND json_extract(a.metadata,'$.look.fallback') IS NOT NULL AND COALESCE(json_extract(a.metadata,'$.tailor.round'),0)<2 AND COALESCE(json_extract(a.metadata,'$.tailor.at'),0)<? AND EXISTS(SELECT 1 FROM sponsor_orders u WHERE json_extract(u.draft,'$.assetId')=a.id AND u.paid_attempt_id IS NOT NULL AND u.status IN ('paid','paused')) AND NOT EXISTS(SELECT 1 FROM sponsor_orders w WHERE json_extract(w.draft,'$.assetId')=a.id AND w.status IN ('leased','prepared','playing'))) ORDER BY o.paid_at,o.id LIMIT 5`,
+    )
+    .bind(now - TAILOR_RETRY_MS, now - LOOK_UPGRADE_MS)
+    .all<{
+      order_id: string;
+      asset_id: string;
+      status: string;
+      round: number;
+    }>();
+  return rows.results.map((r) => ({
+    orderId: r.order_id,
+    assetId: r.asset_id,
+    nextRound: r.round + 1,
+    upgrade: r.status === 'qualified',
+  }));
+}
 export async function createOrder(
   d: D1Database,
   v: { id: string; tokenHash: string; draft: SponsorDraft; now: number },
@@ -302,8 +475,8 @@ export async function settlePayment(
   attemptId: string,
   p: { signature: string; payer: string; blockTime: number },
   now: number,
-) {
-  await d.batch([
+): Promise<{ orderId: string; orderPaidNow: boolean }> {
+  const rows = await d.batch([
     d
       .prepare(
         `INSERT OR IGNORE INTO sponsor_payments(signature,attempt_id,order_id,payer,block_time,verified_at) SELECT ?,id,order_id,?,?,? FROM sponsor_payment_attempts WHERE id=?`,
@@ -337,6 +510,16 @@ export async function settlePayment(
     // and there are no refunds: it stays recorded in sponsor_payments with is_late=1, which is
     // the whole record of it.
   ]);
+  // The order UPDATE changes one row the first time a proof pays the order, and none for a
+  // replay or a late second transfer. That one moment is what starts the tailor.
+  const attempt = await d
+    .prepare('SELECT order_id FROM sponsor_payment_attempts WHERE id=?')
+    .bind(attemptId)
+    .first<{ order_id: string }>();
+  return {
+    orderId: attempt?.order_id ?? '',
+    orderPaidNow: rows[1]?.meta?.changes === 1,
+  };
 }
 export function fulfillment(row: OrderRow): SponsorFulfillment {
   return {

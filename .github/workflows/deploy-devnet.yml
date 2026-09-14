@@ -204,7 +204,10 @@ jobs:
             CENTS=$(curl -s "$SITE/api/sponsorship?action=catalog" \
               | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.parse(s).products.map(p=>p.priceCents).join(','))}catch{console.log('')}})" || true)
             echo "attempt $i: placement prices $CENTS"
-            [ "$CENTS" = "100,100,100" ] && echo "devnet pricing is live" && exit 0
+            # Every placement on sale costs a dollar, however many are on sale this week.
+            case "$CENTS" in
+              100|100,100|100,100,100) echo "devnet pricing is live"; exit 0 ;;
+            esac
             sleep 10
           done
           echo "::error::The devnet catalog did not report a dollar per placement."
