@@ -81,6 +81,39 @@ jobs:
             exit 1
           fi
 
+      # The site's half of the two sponsorship services (node scripts/media.mjs setup production
+      # prints the values). Only the addresses and the shared tokens: this never touches
+      # SPONSOR_ENABLED, which is Carlos's decision alone, and never a price. They are checked
+      # before the deploy and shipped with the code in the same version, so a bad value blocks
+      # the release instead of failing after it. A missing value leaves the cap off sale, which
+      # is where production is anyway, so it warns.
+      - name: Check the sponsorship service settings
+        env:
+          SPONSOR_MEDIA_URL: ${{ vars.SPONSOR_MEDIA_URL }}
+          SPONSOR_MEDIA_TOKEN: ${{ secrets.SPONSOR_MEDIA_TOKEN }}
+          SPONSOR_RECONCILE_TOKEN: ${{ secrets.SPONSOR_RECONCILE_TOKEN }}
+        run: |
+          FILE="$RUNNER_TEMP/sponsor-secrets.json"
+          umask 077
+          echo '{}' > "$FILE"
+          add() { jq --arg k "$1" --arg v "$2" '. + {($k): $v}' "$FILE" > "$FILE.next" && mv "$FILE.next" "$FILE"; }
+          # A rehearsal desk tailors against the rehearsal site with the rehearsal token.
+          case "$SPONSOR_MEDIA_URL" in
+            '') echo "::warning::SPONSOR_MEDIA_URL is not set; the cap stays off sale." ;;
+            https://*devnet*|https://*staging*) echo "::error::SPONSOR_MEDIA_URL names a rehearsal desk."; exit 1 ;;
+            https://*) add SPONSOR_MEDIA_URL "$SPONSOR_MEDIA_URL" ;;
+            *) echo "::error::SPONSOR_MEDIA_URL must be an https address."; exit 1 ;;
+          esac
+          # The minimum lengths are the worker's own (lib/sponsor-server.ts).
+          token() {
+            if [ -z "$2" ]; then echo "::warning::$1 is not set; $4"
+            elif [ "${#2}" -lt "$3" ]; then echo "::error::$1 is shorter than the $3 characters the worker requires."; exit 1
+            else add "$1" "$2"; fi
+          }
+          token SPONSOR_MEDIA_TOKEN "$SPONSOR_MEDIA_TOKEN" 24 "the cap stays off sale."
+          token SPONSOR_RECONCILE_TOKEN "$SPONSOR_RECONCILE_TOKEN" 16 "payment recovery is left to each buyer's receipt."
+          echo "SPONSOR_SECRETS=$FILE" >> "$GITHUB_ENV"
+
       - name: Deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -90,54 +123,13 @@ jobs:
             echo "::error::CLOUDFLARE_API_TOKEN is not set. Add it under Settings -> Secrets and variables -> Actions. The token needs Workers Scripts:Edit, Workers R2 Storage:Edit, D1:Edit and Workers KV:Edit."
             exit 1
           fi
-          npx wrangler deploy --config dist/server/wrangler.json
-
-      # The site's half of the two sponsorship services (node scripts/media.mjs setup production
-      # prints the values). Only the addresses and the shared tokens: this step never touches
-      # SPONSOR_ENABLED, which is Carlos's decision alone, and never a price. A missing value
-      # leaves the cap off sale, which is the state production is in anyway, so it warns; a
-      # value that is present but unusable is a mistake to fix, so it fails.
-      - name: Publish the sponsorship service settings
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          SPONSOR_MEDIA_URL: ${{ vars.SPONSOR_MEDIA_URL }}
-          SPONSOR_MEDIA_TOKEN: ${{ secrets.SPONSOR_MEDIA_TOKEN }}
-          SPONSOR_RECONCILE_TOKEN: ${{ secrets.SPONSOR_RECONCILE_TOKEN }}
-        run: |
-          put() { printf '%s' "$2" | npx wrangler secret put "$1" --config dist/server/wrangler.json; }
-          if [ -n "$SPONSOR_MEDIA_URL" ]; then
-            case "$SPONSOR_MEDIA_URL" in
-              https://*) ;;
-              *) echo "::error::SPONSOR_MEDIA_URL must be an https address."; exit 1 ;;
-            esac
-            # A rehearsal desk prices nothing, but it tailors against the rehearsal site and
-            # holds the rehearsal token: production must never be pointed at one.
-            case "$SPONSOR_MEDIA_URL" in
-              *devnet*|*staging*) echo "::error::SPONSOR_MEDIA_URL names a rehearsal desk."; exit 1 ;;
-            esac
-            put SPONSOR_MEDIA_URL "$SPONSOR_MEDIA_URL"
+          # Secrets left out of the file keep their current values.
+          if [ "$(jq length "$SPONSOR_SECRETS")" -gt 0 ]; then
+            npx wrangler deploy --config dist/server/wrangler.json --secrets-file "$SPONSOR_SECRETS"
           else
-            echo "::warning::SPONSOR_MEDIA_URL is not set; the cap stays off sale."
+            npx wrangler deploy --config dist/server/wrangler.json
           fi
-          if [ -n "$SPONSOR_MEDIA_TOKEN" ]; then
-            if [ "${#SPONSOR_MEDIA_TOKEN}" -lt 24 ]; then
-              echo "::error::SPONSOR_MEDIA_TOKEN is shorter than the 24 characters the worker requires."
-              exit 1
-            fi
-            put SPONSOR_MEDIA_TOKEN "$SPONSOR_MEDIA_TOKEN"
-          else
-            echo "::warning::SPONSOR_MEDIA_TOKEN is not set; the cap stays off sale."
-          fi
-          if [ -n "$SPONSOR_RECONCILE_TOKEN" ]; then
-            if [ "${#SPONSOR_RECONCILE_TOKEN}" -lt 16 ]; then
-              echo "::error::SPONSOR_RECONCILE_TOKEN is shorter than the 16 characters the worker requires."
-              exit 1
-            fi
-            put SPONSOR_RECONCILE_TOKEN "$SPONSOR_RECONCILE_TOKEN"
-          else
-            echo "::warning::SPONSOR_RECONCILE_TOKEN is not set; payment recovery is left to each buyer's receipt."
-          fi
+          rm -f "$SPONSOR_SECRETS"
 
       - name: Check the site answers
         run: |

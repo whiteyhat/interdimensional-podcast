@@ -52,6 +52,12 @@ export type SponsorVars = {
   SPONSOR_FLAT_PRICE_CENTS?: string;
   SPONSOR_SOL_USD?: string;
 };
+/** Checkout stays closed until SPONSOR_ENABLED is 'true'; every entry point refuses with these words. */
+export const CHECKOUT_CLOSED = 'Sponsorship checkout is not enabled.';
+export const checkoutOpen = (v: SponsorVars) => v.SPONSOR_ENABLED === 'true';
+export function assertCheckoutOpen(v: SponsorVars) {
+  if (!checkoutOpen(v)) throw new SponsorError(503, CHECKOUT_CLOSED);
+}
 /** The site's media-side bindings: the asset bucket, and where the wardrobe desk is and its secret. */
 export type SponsorMediaVars = SponsorVars & {
   SPONSOR_ASSETS?: R2Bucket;
@@ -338,13 +344,12 @@ export async function sponsorCatalog(
     producer(d, now),
     db.capQueue(d),
   ]);
-  const enabled = v.SPONSOR_ENABLED === 'true';
+  const enabled = checkoutOpen(v);
   const { flatCents } = devnetPricing(v);
   const assets = await Promise.all(
     (['FROGCLENCH', 'USDC', 'SOL'] as const).map(async (id) => {
       try {
-        if (!enabled)
-          throw new SponsorError(503, 'Sponsorship checkout is not enabled.');
+        if (!enabled) throw new SponsorError(503, CHECKOUT_CLOSED);
         const state = await assetState(d, v, id, now);
         return {
           id,
@@ -381,7 +386,7 @@ export async function sponsorCatalog(
         live.capabilities[p.id] &&
         assets.some((a) => a.available),
       reason: !enabled
-        ? 'Sponsorship checkout is not enabled.'
+        ? CHECKOUT_CLOSED
         : !live.studioOnline
           ? 'The studio is offline.'
           : !live.capabilities[p.id]
@@ -847,8 +852,7 @@ async function quote(
     );
   try {
     const now = Date.now();
-    if (v.SPONSOR_ENABLED !== 'true')
-      throw new SponsorError(503, 'Sponsorship checkout is not enabled.');
+    assertCheckoutOpen(v);
     const live = await producer(d, now);
     if (!live.studioOnline || !live.capabilities[o.product])
       throw new SponsorError(

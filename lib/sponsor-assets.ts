@@ -1,4 +1,5 @@
 import {
+  assertCheckoutOpen,
   sameSponsorToken,
   sponsorDatabase,
   sponsorFailure,
@@ -320,8 +321,7 @@ export async function uploadSponsorAsset(
     // A logo is artwork for a placement someone is buying. While checkout is off nothing can be
     // bought, so nothing is stored: no rate-limit row, no asset row, no object, no desk call.
     // The desk being armed must never turn the site into free image storage.
-    if (v.SPONSOR_ENABLED !== 'true')
-      throw new SponsorError(503, 'Sponsorship checkout is not enabled.');
+    assertCheckoutOpen(v);
     const ip = request.headers.get('cf-connecting-ip') || 'local';
     if (tooMany(`sponsor-art:${ip}`, 6, Date.now()))
       throw new SponsorError(

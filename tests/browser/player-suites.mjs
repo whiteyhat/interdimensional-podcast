@@ -1,39 +1,17 @@
 // Runs the real-Chrome Player suites (tests/browser/player-*.html) and prints their check
 // counts. Each page publishes `window.playerChecks`; a failed check or a page error fails the
-// run. Serves this repo through its own Vite instance (private cache dir, port 3316 up), so it
-// needs nothing running beforehand.
+// run. Serves this repo through its own Vite instance (tests/browser/chrome.mjs), so it needs
+// nothing running beforehand.
 //   node tests/browser/player-suites.mjs [page ...]      default: handoff handoff?fallback=1 audio recovery
 // Needs Google Chrome (Playwright channel 'chrome'; CHROME_PATH overrides the binary).
-import os from 'node:os';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import react from '@vitejs/plugin-react';
-import { chromium } from 'playwright-core';
-import { createServer } from 'vite';
+import { launchChrome, serveRepo } from './chrome.mjs';
 
 const pages = process.argv.slice(2).length
   ? process.argv.slice(2)
   : ['handoff', 'handoff?fallback=1', 'audio', 'recovery'];
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const server = await createServer({
-  configFile: false,
-  root,
-  resolve: { alias: { '@': root } },
-  plugins: [react()],
-  cacheDir: path.join(os.tmpdir(), 'player-suites-vite'),
-  server: { host: '127.0.0.1', port: 3316, strictPort: false, hmr: false },
-  css: { postcss: { plugins: [] } },
-  logLevel: 'error',
-});
-await server.listen();
-const origin = server.resolvedUrls.local[0].replace(/\/$/, '');
-const launch = {
-  headless: true,
-  args: ['--autoplay-policy=no-user-gesture-required'],
-};
-if (process.env.CHROME_PATH) launch.executablePath = process.env.CHROME_PATH;
-else launch.channel = 'chrome';
-const browser = await chromium.launch(launch);
+const server = await serveRepo({ name: 'player-suites', port: 3330 });
+const origin = server.origin;
+const browser = await launchChrome();
 let failed = false;
 try {
   for (const name of pages) {

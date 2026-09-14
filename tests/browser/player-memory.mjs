@@ -1,79 +1,56 @@
-// Repeatable memory check for the on-air Player. The broadcast box leaked 100-150 MB per
-// minute of show until its page was reloaded, so this runs the real Player and engine through
-// hundreds of clip changes in Chrome and samples, after a forced GC every `every` clips:
-// the JS heap, DOM node and listener counts, the number of live HTMLVideoElement /
-// MediaElementAudioSourceNode / Blob objects, outstanding blob URLs, and the RSS and OS thread
-// count of every Chrome process (renderer, GPU, browser, utilities). It prints the table and the
-// growth per clip, and exits 1 when live video elements, the renderer or the thread count keep
-// growing per clip. Threads are what killed the box: every retained decoder holds threads, and
-// after ~40 minutes the container could not create another one, so the studio worker died.
+// The on-air Player's regression check for the leak that killed the broadcast box (the story
+// is on assignLayers in lib/video-layers.ts). It runs the real Player and engine through
+// hundreds of clip changes in Chrome, samples the page and every Chrome process every `every`
+// clips, prints the table and the growth per clip, and exits 1 on any condition in `verdict`
+// at the bottom of this file. No video is generated.
 //
 //   node tests/browser/player-memory.mjs [--clips=200] [--every=25] [--pad=4] [--hold=300]
-//        [--fixture=bars.mp4] [--no-source] [--muted] [--headed] [--json=path]
+//        [--fixture=bars.mp4] [--no-source] [--headed] [--json=path]
 //
 // --pad appends N MB to every blob (an mp4 `free` box) so takes are production-sized.
 // --hold is milliseconds of real playback per take; 0 plays every take to its natural end.
-// --no-source stubs createMediaElementSource, which isolates the audio bus from the picture.
-// Needs Google Chrome (Playwright channel 'chrome'; CHROME_PATH overrides the binary), this
-// repo's node_modules, and a free port from 3315 up. Video decoding is forced into the
-// renderer process, as it is on the box, which has no GPU. Run from the repo root.
+// --fixture may be an absolute path to a real take; --no-source stubs createMediaElementSource,
+// which isolates the audio bus from the picture (the measurement that found the leak).
+// Video decoding is forced into the renderer process, as on the box, which has no GPU.
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import react from '@vitejs/plugin-react';
-import { chromium } from 'playwright-core';
-import { createServer } from 'vite';
+import { parseArgs } from 'node:util';
+import { launchChrome, serveRepo } from './chrome.mjs';
 
-const options = Object.fromEntries(
-  process.argv.slice(2).map((arg) => {
-    const [key, value] = arg.replace(/^--/, '').split('=');
-    return [key, value ?? true];
-  }),
-);
-const clips = Number(options.clips ?? 200);
-const every = Number(options.every ?? 25);
-const query = new URLSearchParams({
-  fixture: String(options.fixture ?? 'bars.mp4'),
-  pad: String(options.pad ?? 4),
-  hold: String(options.hold ?? 300),
-  ...(options['no-source'] ? { noSource: '1' } : {}),
-  ...(options.muted ? { muted: '1' } : {}),
-});
-
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const server = await createServer({
-  configFile: false,
-  root,
-  resolve: { alias: { '@': root } },
-  plugins: [react()],
-  // Never the shared node_modules/.vite: a second Vite root there breaks the dev server.
-  cacheDir: path.join(os.tmpdir(), 'player-memory-vite'),
-  server: {
-    host: '127.0.0.1',
-    port: 3315,
-    strictPort: false,
-    hmr: false,
-    // --fixture may be an absolute path (a production-sized take kept outside the repo).
-    fs: { allow: [root, ...(String(options.fixture ?? '').startsWith('/') ? [path.dirname(String(options.fixture))] : [])] },
+const { values: options } = parseArgs({
+  strict: true,
+  options: {
+    clips: { type: 'string', default: '200' },
+    every: { type: 'string', default: '25' },
+    pad: { type: 'string', default: '4' },
+    hold: { type: 'string', default: '300' },
+    fixture: { type: 'string', default: 'bars.mp4' },
+    'no-source': { type: 'boolean', default: false },
+    headed: { type: 'boolean', default: false },
+    json: { type: 'string' },
   },
-  css: { postcss: { plugins: [] } },
-  logLevel: 'error',
 });
-await server.listen();
-const origin = server.resolvedUrls.local[0].replace(/\/$/, '');
+const clips = Number(options.clips);
+const every = Number(options.every);
+if (!(clips > 0 && every > 0)) throw Error('--clips and --every must be positive numbers.');
+const query = new URLSearchParams({
+  fixture: options.fixture,
+  pad: options.pad,
+  hold: options.hold,
+  ...(options['no-source'] ? { noSource: '1' } : {}),
+});
 
-const launch = {
+const server = await serveRepo({
+  name: 'player-memory',
+  port: 3340,
+  allow: options.fixture.startsWith('/') ? [path.dirname(options.fixture)] : [],
+});
+const origin = server.origin;
+const browser = await launchChrome({
+  args: ['--disable-accelerated-video-decode'],
   headless: !options.headed,
-  args: [
-    '--autoplay-policy=no-user-gesture-required',
-    '--disable-accelerated-video-decode',
-  ],
-};
-if (process.env.CHROME_PATH) launch.executablePath = process.env.CHROME_PATH;
-else launch.channel = 'chrome';
-const browser = await chromium.launch(launch);
+});
 const page = await browser.newPage();
 page.on('pageerror', (error) => console.error('page error:', error.message));
 page.on('console', (message) => {
@@ -90,42 +67,49 @@ await page.goto(`${origin}/tests/browser/player-memory.html?${query}`);
 await page.waitForFunction(() => !!window.memoryHarness, null, { timeout: 60000 });
 
 const system = await browser.newBrowserCDPSession();
-/** OS threads of one process: `nlwp` on Linux (the box), one line per thread from `ps -M` on macOS. */
-function threadsOf(pid) {
-  try {
-    const n = Number(execFileSync('ps', ['-o', 'nlwp=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
-    if (Number.isFinite(n) && n > 0) return n;
-  } catch {}
-  try {
-    return execFileSync('ps', ['-M', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().split('\n').length - 1;
-  } catch {
-    return 0;
+/**
+ * Resident size and OS thread count of every Chrome process (Chrome's own list), in one `ps`:
+ * `nlwp` on Linux (the box), one row per thread from `ps -M` on macOS.
+ */
+function usage(pids) {
+  const run = (args) => {
+    try {
+      return execFileSync('ps', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch {
+      return '';
+    }
+  };
+  const byPid = new Map();
+  if (process.platform === 'darwin') {
+    for (const line of run(['-o', 'pid=,rss=', '-p', pids.join(',')]).split('\n').filter(Boolean)) {
+      const [pid, rss] = line.trim().split(/\s+/).map(Number);
+      byPid.set(pid, { rssMB: rss / 1024, threads: 0 });
+    }
+    // `ps -M` prints each thread on its own row; the pid column is blank on continuation rows.
+    let owner;
+    for (const line of run(['-M', '-p', pids.join(',')]).split('\n').slice(1).filter(Boolean)) {
+      const pid = Number(line.trim().split(/\s+/)[1]);
+      if (pids.includes(pid)) owner = pid;
+      const entry = byPid.get(owner);
+      if (entry) entry.threads++;
+    }
+  } else {
+    for (const line of run(['-o', 'pid=,rss=,nlwp=', '-p', pids.join(',')]).split('\n').filter(Boolean)) {
+      const [pid, rss, threads] = line.trim().split(/\s+/).map(Number);
+      byPid.set(pid, { rssMB: rss / 1024, threads });
+    }
   }
+  return byPid;
 }
-/** Every Chrome process by pid and type (Chrome's own list), with its resident size from ps. */
+/** Every Chrome process by pid and type, with its resident size and threads. */
 async function processes() {
   const { processInfo } = await system.send('SystemInfo.getProcessInfo');
-  let listing = '';
-  try {
-    listing = execFileSync(
-      'ps',
-      ['-o', 'pid=,rss=', '-p', processInfo.map((p) => p.id).join(',')],
-      { encoding: 'utf8' },
-    );
-  } catch {
-    listing = '';
-  }
-  const rss = new Map(
-    listing
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => line.trim().split(/\s+/).map(Number)),
-  );
+  const measured = usage(processInfo.map((p) => p.id));
   return processInfo.map((p) => ({
     pid: p.id,
     type: p.type === 'GPU' ? 'gpu-process' : p.type,
-    rssMB: (rss.get(p.id) ?? 0) / 1024,
-    threads: threadsOf(p.id),
+    rssMB: measured.get(p.id)?.rssMB ?? 0,
+    threads: measured.get(p.id)?.threads ?? 0,
   }));
 }
 async function liveCount(prototype) {
@@ -146,15 +130,14 @@ async function liveCount(prototype) {
   return length.value;
 }
 async function sample(aired) {
-  await cdp.send('HeapProfiler.collectGarbage');
-  await cdp.send('HeapProfiler.collectGarbage');
+  // Each queryObjects runs a full garbage collection first, so the heap read after them is clean.
+  const videos = await liveCount('HTMLVideoElement.prototype');
+  const sources = await liveCount('MediaElementAudioSourceNode.prototype');
+  const blobs = await liveCount('Blob.prototype');
   const metrics = Object.fromEntries(
     (await cdp.send('Performance.getMetrics')).metrics.map((m) => [m.name, m.value]),
   );
   const dom = await cdp.send('Memory.getDOMCounters');
-  const videos = await liveCount('HTMLVideoElement.prototype');
-  const sources = await liveCount('MediaElementAudioSourceNode.prototype');
-  const blobs = await liveCount('Blob.prototype');
   const stats = await page.evaluate(() => window.memoryHarness.stats());
   const procs = await processes();
   const renderers = procs.filter((p) => p.type === 'renderer');
@@ -164,7 +147,6 @@ async function sample(aired) {
     heapMB: metrics.JSHeapUsedSize / 1048576,
     nodes: dom.nodes,
     listeners: dom.jsEventListeners,
-    documents: dom.documents,
     videos,
     sources,
     blobs,
@@ -237,9 +219,7 @@ try {
     query: query.toString(),
     seconds,
     perClip: Object.fromEntries(
-      ['heapMB', 'nodes', 'videos', 'sources', 'blobs', 'urls', 'rendererMB', 'rendererThreads', 'threads', 'gpuMB', 'browserMB', 'totalMB'].map(
-        (key) => [key, slope(samples, key)],
-      ),
+      columns.slice(1).map(([key]) => [key, slope(samples, key)]),
     ),
     samples,
   };
@@ -247,22 +227,35 @@ try {
   console.log(`\n${samples.length} samples over ${seconds.toFixed(0)} s (${(clips / seconds).toFixed(1)} clips/s)`);
   console.log(`growth per clip: JS heap ${report.perClip.heapMB.toFixed(3)} MB, renderer RSS ${report.perClip.rendererMB.toFixed(2)} MB (${perMinute(report.perClip.rendererMB)}), all Chrome processes ${report.perClip.totalMB.toFixed(2)} MB (${perMinute(report.perClip.totalMB)})`);
   console.log(`per clip: live <video> ${report.perClip.videos.toFixed(2)}, source nodes ${report.perClip.sources.toFixed(2)}, blobs ${report.perClip.blobs.toFixed(2)}, blob URLs ${report.perClip.urls.toFixed(2)}, DOM nodes ${report.perClip.nodes.toFixed(1)}, Chrome threads ${report.perClip.threads.toFixed(2)} (renderer ${report.perClip.rendererThreads.toFixed(2)})`);
-  if (options.json) writeFileSync(String(options.json), JSON.stringify(report, null, 2));
+  if (options.json) writeFileSync(options.json, JSON.stringify(report, null, 2));
   await browser.close();
   await server.close();
-  // A retained element per clip, a renderer that grows by a megabyte per clip, or threads that
-  // keep accumulating (a quarter of a thread per clip is ~450 extra threads in a 30-minute show)
-  // is the leak.
-  const leaking =
-    report.perClip.videos > 0.5 ||
-    report.perClip.sources > 0.5 ||
-    report.perClip.rendererMB > 1 ||
-    report.perClip.threads > 0.25;
+  const problems = verdict(report, samples);
+  for (const problem of problems) console.log(`FAILED: ${problem}`);
+  console.log(problems.length ? 'LEAK or failure: see above.' : 'OK: memory is flat across clips.');
+  process.exit(problems.length || process.exitCode ? 1 : 0);
+}
+
+/** Every reason the run fails. Exact limits first: they catch the leak within a few dozen clips. */
+function verdict(report, samples) {
+  const problems = [];
+  const last = samples.at(-1);
+  // The pool holds one layer per clip the show held at once, and the audio bus routes only those
+  // layers; anything above that is an element per clip coming back.
+  const held = Math.max(0, ...samples.map((s) => s.stats.maxHeld));
+  const worst = (key) => Math.max(0, ...samples.map((s) => s[key]));
+  if (worst('sources') > held) problems.push(`${worst('sources')} audio source nodes for at most ${held} clips held at once`);
+  const layers = Math.max(0, ...samples.map((s) => s.stats.domVideos));
+  if (layers > held) problems.push(`${layers} <video> layers for at most ${held} clips held at once`);
+  // Then growth: live elements, threads that keep accumulating (a quarter of a thread per clip is
+  // ~450 extra threads in a 30-minute show) and, on long runs only, a renderer that gains a
+  // megabyte per clip: resident memory steps up once while caches warm, which would read as
+  // growth over a short run.
+  if (report.perClip.videos > 0.5) problems.push(`live <video> grows ${report.perClip.videos.toFixed(2)} per clip`);
+  if (clips >= 400 && report.perClip.rendererMB > 1) problems.push(`renderer grows ${report.perClip.rendererMB.toFixed(2)} MB per clip`);
+  if (report.perClip.threads > 0.25) problems.push(`Chrome threads grow ${report.perClip.threads.toFixed(2)} per clip`);
   // A pooled layer is reused for the next clip: a stall, a decode error or a blocked audio start
-  // on any take, a stale event from the layer's previous clip included, is reported by the
-  // Player as a playback failure, and one is enough to fail the run.
-  const failures = samples.at(-1)?.stats.failures ?? 0;
-  if (failures) console.log(`FAILED: the Player reported ${failures} playback failure(s).`);
-  console.log(leaking ? 'LEAK: memory grows with every clip.' : 'OK: memory is flat across clips.');
-  process.exit(leaking || failures || process.exitCode ? 1 : 0);
+  // on any take, a stale event from the layer's previous clip included, fails the run.
+  if (last?.stats.failures) problems.push(`the Player reported ${last.stats.failures} playback failure(s)`);
+  return problems;
 }

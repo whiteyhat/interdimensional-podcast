@@ -1,14 +1,8 @@
 // The memory harness page: the real Player and the real streaming engine, fed short local
 // clips as fresh blob URLs the way lib/services.ts render() makes them, released the way the
 // engine releases them. player-memory.mjs drives it and samples the browser between clips.
-// Query parameters:
-//   fixture=bars.mp4   the clip every take is cut from (2 s, 1344x768 h264 + aac)
-//   pad=4              megabytes appended to every blob as an mp4 `free` box the demuxer skips,
-//                      so each take is production-sized without a production-sized fixture
-//   hold=300           milliseconds of real playback before the harness ends a take;
-//                      0 lets every take run to its natural `ended`
-//   noSource=1         stub AudioContext.createMediaElementSource (isolates the audio bus)
-//   muted=1            air muted, as an OBS browser source would
+// Query parameters (player-memory.mjs documents them and always sends them):
+//   fixture, pad, hold, and noSource=1 to stub AudioContext.createMediaElementSource.
 import React, { useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Player } from '../../components/player';
@@ -16,9 +10,8 @@ import { Podcast } from '../../lib/engine';
 
 const params = new URLSearchParams(location.search);
 const fixture = params.get('fixture') ?? 'bars.mp4';
-const padMB = Number(params.get('pad') ?? 0);
+const padMB = Number(params.get('pad') ?? 4);
 const hold = Number(params.get('hold') ?? 300);
-const muted = params.get('muted') === '1';
 if (params.get('noSource') === '1') {
   AudioContext.prototype.createMediaElementSource = function () {
     return this.createGain();
@@ -131,7 +124,7 @@ function Harness() {
   return (
     <Player
       state={state}
-      muted={muted}
+      muted={false}
       onEnded={(id) => engine.clipEnded(id)}
       onShown={(id) => engine.shown(id)}
       onPlaybackFailure={(id, url, reason) => {
@@ -155,8 +148,20 @@ const visible = (url) =>
   [...document.querySelectorAll('video')].some(
     (v) => v.getAttribute('src') === url && v.style.opacity === '1',
   );
+// The most clips the show held at once (previous, current and ready slots): the pool's bound.
+let maxHeld = 0;
+const held = () => {
+  const snapshot = engine.getSnapshot();
+  return new Set(
+    [snapshot.previous, snapshot.current, ...snapshot.slots.map((s) => s.clip)]
+      .filter(Boolean)
+      .map((clip) => clip.url),
+  ).size;
+};
+engine.subscribe(() => {
+  maxHeld = Math.max(maxHeld, held());
+});
 window.memoryHarness = {
-  engine,
   start() {
     engine.start();
   },
@@ -186,6 +191,7 @@ window.memoryHarness = {
       revoked,
       outstanding: outstanding.size,
       domVideos: document.querySelectorAll('video').length,
+      maxHeld,
       audio: [...contexts].map((c) => c.state).join(','),
       failures: failures.length,
     };
